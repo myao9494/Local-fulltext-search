@@ -1,0 +1,197 @@
+import { useEffect, useState } from "react";
+
+import { fetchIndexStatus, pickFolder, search } from "./api/client";
+import { ResultsList } from "./components/ResultsList";
+import { SearchBar } from "./components/SearchBar";
+import type { IndexStatus, SearchResult } from "./types";
+
+const SUPPORTED_EXTENSIONS = [".md", ".json", ".txt"] as const;
+
+function App() {
+  const [query, setQuery] = useState("");
+  const [fullPath, setFullPath] = useState("");
+  const [indexDepth, setIndexDepth] = useState("0");
+  const [refreshWindowMinutes, setRefreshWindowMinutes] = useState(() => localStorage.getItem("refresh_window_minutes") ?? "60");
+  const [selectedExtensions, setSelectedExtensions] = useState<string[]>(() => {
+    const stored = localStorage.getItem("selected_extensions");
+    if (!stored) {
+      return [...SUPPORTED_EXTENSIONS];
+    }
+    const parsed = stored.split(",").filter((item) => SUPPORTED_EXTENSIONS.includes(item as (typeof SUPPORTED_EXTENSIONS)[number]));
+    return parsed.length > 0 ? parsed : [...SUPPORTED_EXTENSIONS];
+  });
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isExtensionMenuOpen, setIsExtensionMenuOpen] = useState(false);
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  async function loadInitialData(): Promise<void> {
+    try {
+      setIndexStatus(await fetchIndexStatus());
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "初期データ取得に失敗しました。");
+    }
+  }
+
+  useEffect(() => {
+    void loadInitialData();
+  }, []);
+
+  async function handleSearch(): Promise<void> {
+    if (!query.trim()) {
+      setErrorMessage("検索語を入力してください。");
+      return;
+    }
+    if (!fullPath.trim()) {
+      setErrorMessage("検索対象フォルダのフルパスを入力してください。");
+      return;
+    }
+    if (!indexDepth.trim()) {
+      setErrorMessage("階層数を入力してください。");
+      return;
+    }
+    const parsedDepth = Number(indexDepth);
+    const parsedWindow = Number(refreshWindowMinutes);
+    if (Number.isNaN(parsedDepth) || parsedDepth < 0) {
+      setErrorMessage("階層数は 0 以上で入力してください。");
+      return;
+    }
+    if (Number.isNaN(parsedWindow) || parsedWindow < 0) {
+      setErrorMessage("更新間隔は 0 以上の分で入力してください。");
+      return;
+    }
+    if (selectedExtensions.length === 0) {
+      setErrorMessage("対象拡張子を 1 つ以上選択してください。");
+      return;
+    }
+    try {
+      const response = await search({
+        q: query,
+        full_path: fullPath,
+        index_depth: parsedDepth,
+        refresh_window_minutes: parsedWindow,
+        types: selectedExtensions.join(","),
+      });
+      setResults(response.items);
+      setIndexStatus(await fetchIndexStatus());
+      localStorage.setItem("refresh_window_minutes", String(parsedWindow));
+      localStorage.setItem("selected_extensions", selectedExtensions.join(","));
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "検索に失敗しました。");
+    }
+  }
+
+  async function handlePickFolder(): Promise<void> {
+    try {
+      const payload = await pickFolder();
+      setFullPath(payload.full_path ?? "");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "フォルダ選択に失敗しました。");
+    }
+  }
+
+  function toggleExtension(extension: string): void {
+    setSelectedExtensions((current) =>
+      current.includes(extension) ? current.filter((item) => item !== extension) : [...current, extension],
+    );
+  }
+
+  function setAllExtensions(): void {
+    setSelectedExtensions([...SUPPORTED_EXTENSIONS]);
+  }
+
+  return (
+    <div className="page-shell">
+      <header className="hero">
+        <p className="brand">Local Fulltext Search</p>
+        <h1>Google 風のローカル全文検索</h1>
+        <SearchBar
+          query={query}
+          fullPath={fullPath}
+          indexDepth={indexDepth}
+          onQueryChange={setQuery}
+          onFullPathChange={setFullPath}
+          onIndexDepthChange={setIndexDepth}
+          onPickFolder={() => void handlePickFolder()}
+          onSubmit={() => void handleSearch()}
+          onToggleMenu={() => setIsMenuOpen((value) => !value)}
+        />
+      </header>
+
+      {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
+
+      <main className="content-grid">
+        <section>
+          <div className="section-header">
+            <h2>Results</h2>
+            <span>{results.length}件</span>
+          </div>
+          <ResultsList items={results} />
+        </section>
+        <aside className={`settings-drawer ${isMenuOpen ? "open" : ""}`} aria-hidden={!isMenuOpen}>
+          <div className="settings-panel">
+            <div className="settings-header">
+              <h2>設定</h2>
+              <button className="secondary-button" onClick={() => setIsMenuOpen(false)} type="button">
+                閉じる
+              </button>
+            </div>
+            <div className="folder-form">
+              <label className="form-help" htmlFor="refresh-window">
+                インデックス更新間隔(分)
+              </label>
+              <input
+                id="refresh-window"
+                value={refreshWindowMinutes}
+                onChange={(event) => setRefreshWindowMinutes(event.target.value)}
+                type="number"
+                min={0}
+              />
+              <div className="form-help">
+                同じフルパスと階層数の組み合わせで、この分数以内に更新済みなら再走査しません。既定は 60 分です。
+              </div>
+              <div className="extension-panel">
+                <button
+                  className="secondary-button"
+                  onClick={() => setIsExtensionMenuOpen((value) => !value)}
+                  type="button"
+                >
+                  対象拡張子
+                </button>
+                {isExtensionMenuOpen ? (
+                  <div className="extension-menu">
+                    <button className="secondary-button" onClick={setAllExtensions} type="button">
+                      すべて選択
+                    </button>
+                    {SUPPORTED_EXTENSIONS.map((extension) => (
+                      <label className="extension-option" key={extension}>
+                        <input
+                          checked={selectedExtensions.includes(extension)}
+                          onChange={() => toggleExtension(extension)}
+                          type="checkbox"
+                        />
+                        <span>{extension}</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="form-help">現在: {selectedExtensions.join(", ") || "未選択"}</div>
+              </div>
+              <div className="status-card">
+                <div>最終完了: {indexStatus?.last_finished_at ? new Date(indexStatus.last_finished_at).toLocaleString() : "-"}</div>
+                <div>総ファイル数: {indexStatus?.total_files ?? 0}</div>
+                <div>エラー件数: {indexStatus?.error_count ?? 0}</div>
+                <div>実行中: {indexStatus?.is_running ? "Yes" : "No"}</div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </main>
+    </div>
+  );
+}
+
+export default App;

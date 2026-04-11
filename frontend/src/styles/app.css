@@ -1,0 +1,264 @@
+:root {
+  font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+  color: #182026;
+  background:
+    radial-gradient(circle at top, rgba(255, 212, 102, 0.45), transparent 34%),
+    linear-gradient(180deg, #f6f2e8 0%, #efe7d8 100%);
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.page-shell {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 48px 24px 80px;
+}
+
+.hero {
+  text-align: center;
+  padding: 72px 24px 40px;
+}
+
+.brand {
+  margin: 0 0 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #8a5b12;
+}
+
+.hero h1 {
+  margin: 0 0 24px;
+  font-size: clamp(2.4rem, 6vw, 4.6rem);
+}
+
+.search-bar {
+  display: flex;
+  gap: 12px;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.search-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.toolbar-row {
+  display: flex;
+  justify-content: flex-end;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.menu-button {
+  border: none;
+  background: rgba(255, 255, 255, 0.88);
+  border-radius: 16px;
+  padding: 10px 14px;
+  box-shadow: 0 14px 40px rgba(54, 39, 16, 0.08);
+  cursor: pointer;
+}
+
+.search-input,
+.folder-form input,
+.filters input,
+.filters select {
+  width: 100%;
+  border: 1px solid rgba(24, 32, 38, 0.14);
+  border-radius: 999px;
+  padding: 16px 18px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 14px 40px rgba(54, 39, 16, 0.08);
+}
+
+.primary-button,
+.secondary-button {
+  border: none;
+  border-radius: 999px;
+  padding: 14px 20px;
+  cursor: pointer;
+}
+
+.primary-button {
+  background: #1c6b53;
+  color: #fff;
+}
+
+.secondary-button {
+  background: #e7dcc8;
+  color: #2e241b;
+}
+
+.secondary-button.danger {
+  background: #efd0ca;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  gap: 12px;
+  max-width: 760px;
+  margin: 18px auto 0;
+}
+
+.content-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.section-header,
+.settings-header,
+.folder-card,
+.result-meta,
+.folder-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.results-list,
+.settings-panel,
+.empty-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.result-card,
+.status-card,
+.folder-card,
+.settings-panel,
+.empty-panel {
+  border: 1px solid rgba(24, 32, 38, 0.08);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 20px 50px rgba(59, 42, 13, 0.08);
+}
+
+.result-card,
+.status-card,
+.folder-card,
+.empty-panel {
+  padding: 18px 20px;
+}
+
+.settings-panel {
+  padding: 24px;
+}
+
+.result-meta,
+.result-path {
+  color: #655741;
+  font-size: 0.92rem;
+}
+
+.result-snippet mark {
+  background: #ffe082;
+}
+
+.folder-form {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-drawer {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  width: min(360px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(24px);
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+  z-index: 20;
+}
+
+.settings-drawer.open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+.path-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.form-help {
+  color: #655741;
+  font-size: 0.92rem;
+}
+
+.extension-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.extension-menu {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(24, 32, 38, 0.08);
+  border-radius: 18px;
+  background: rgba(247, 241, 231, 0.9);
+}
+
+.extension-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #2e241b;
+}
+
+.extension-option input {
+  width: 18px;
+  height: 18px;
+}
+
+.error-banner {
+  margin: 0 auto 20px;
+  max-width: 760px;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: rgba(165, 36, 20, 0.12);
+  color: #7d2418;
+}
+
+@media (max-width: 960px) {
+  .content-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .filters {
+    grid-template-columns: 1fr;
+  }
+
+  .search-bar {
+    flex-direction: column;
+  }
+
+  .path-picker-row {
+    grid-template-columns: 1fr;
+  }
+}
