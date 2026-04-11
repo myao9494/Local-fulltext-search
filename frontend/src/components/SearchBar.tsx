@@ -23,12 +23,36 @@ export function SearchBar({
 }: SearchBarProps) {
   return (
     <div className="search-panel">
-      <div className="toolbar-row">
-        <button className="menu-button" onClick={onToggleMenu} type="button" aria-label="設定">
-          ☰
-        </button>
+      <div className="top-filters">
+        <div className="filter-group path-group">
+          <label className="filter-label">フォルダ:</label>
+          <div className="path-picker-row top-path-picker">
+            <input
+              className="small-input path-input"
+              value={fullPath}
+              onChange={(event) => onFullPathChange(event.target.value)}
+              placeholder="フルパス"
+            />
+            <button className="secondary-button small-btn" onClick={onPickFolder} type="button">
+              選択
+            </button>
+          </div>
+        </div>
+
+        <div className="filter-group depth-group">
+          <label className="filter-label">階層:</label>
+          <input
+            className="small-input depth-input"
+            value={indexDepth}
+            onChange={(event) => onIndexDepthChange(event.target.value)}
+            placeholder="0"
+            type="number"
+            min={0}
+          />
+        </div>
       </div>
-      <div className="search-bar">
+
+      <div className="search-nav">
         <input
           className="search-input"
           value={query}
@@ -38,30 +62,17 @@ export function SearchBar({
               onSubmit();
             }
           }}
-          placeholder="検索語を入力"
+          placeholder="検索語を入力してください..."
+          autoFocus
         />
         <button className="primary-button" onClick={onSubmit} type="button">
           Search
         </button>
-      </div>
-      <div className="filters">
-        <div className="path-picker-row">
-          <input
-            value={fullPath}
-            onChange={(event) => onFullPathChange(event.target.value)}
-            placeholder="検索対象フォルダのフルパス"
-          />
-          <button className="secondary-button" onClick={onPickFolder} type="button">
-            フォルダ選択
-          </button>
-        </div>
-        <input
-          value={indexDepth}
-          onChange={(event) => onIndexDepthChange(event.target.value)}
-          placeholder="階層数"
-          type="number"
-          min={0}
-        />
+        <button className="menu-button" onClick={onToggleMenu} type="button" aria-label="設定">
+          <svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24">
+             <path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path>
+          </svg>
+        </button>
       </div>
     </div>
   );

@@ -27,8 +27,10 @@ def _pick_folder_macos() -> str:
         text=True,
     )
     if result.returncode != 0:
-        stderr = result.stderr.strip().lower()
-        if "cancel" in stderr:
+        stderr = result.stderr.strip()
+        stderr_lower = stderr.lower()
+        # AppleScript uses error code -128 when the user cancels the dialog.
+        if "cancel" in stderr_lower or "キャンセル" in stderr or "(-128)" in stderr:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Folder selection was cancelled.")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="macOS folder dialog failed to open.")
     selected = result.stdout.strip()

@@ -44,7 +44,7 @@ function App() {
       return;
     }
     if (!fullPath.trim()) {
-      setErrorMessage("検索対象フォルダのフルパスを入力してください。");
+      setErrorMessage("検索対象フォルダのフルパスを入力してください。（※上の検索バーで設定可能です）");
       return;
     }
     if (!indexDepth.trim()) {
@@ -59,10 +59,12 @@ function App() {
     }
     if (Number.isNaN(parsedWindow) || parsedWindow < 0) {
       setErrorMessage("更新間隔は 0 以上の分で入力してください。");
+      setIsMenuOpen(true);
       return;
     }
     if (selectedExtensions.length === 0) {
       setErrorMessage("対象拡張子を 1 つ以上選択してください。");
+      setIsMenuOpen(true);
       return;
     }
     try {
@@ -105,9 +107,7 @@ function App() {
 
   return (
     <div className="page-shell">
-      <header className="hero">
-        <p className="brand">Local Fulltext Search</p>
-        <h1>Google 風のローカル全文検索</h1>
+      <header className="top-nav">
         <SearchBar
           query={query}
           fullPath={fullPath}
@@ -126,11 +126,12 @@ function App() {
       <main className="content-grid">
         <section>
           <div className="section-header">
-            <h2>Results</h2>
+            <h2>Search Results</h2>
             <span>{results.length}件</span>
           </div>
           <ResultsList items={results} />
         </section>
+
         <aside className={`settings-drawer ${isMenuOpen ? "open" : ""}`} aria-hidden={!isMenuOpen}>
           <div className="settings-panel">
             <div className="settings-header">
@@ -139,6 +140,7 @@ function App() {
                 閉じる
               </button>
             </div>
+            
             <div className="folder-form">
               <label className="form-help" htmlFor="refresh-window">
                 インデックス更新間隔(分)
@@ -153,6 +155,7 @@ function App() {
               <div className="form-help">
                 同じフルパスと階層数の組み合わせで、この分数以内に更新済みなら再走査しません。既定は 60 分です。
               </div>
+
               <div className="extension-panel">
                 <button
                   className="secondary-button"
@@ -180,6 +183,9 @@ function App() {
                 ) : null}
                 <div className="form-help">現在: {selectedExtensions.join(", ") || "未選択"}</div>
               </div>
+
+              <hr className="divider" />
+
               <div className="status-card">
                 <div>最終完了: {indexStatus?.last_finished_at ? new Date(indexStatus.last_finished_at).toLocaleString() : "-"}</div>
                 <div>総ファイル数: {indexStatus?.total_files ?? 0}</div>
