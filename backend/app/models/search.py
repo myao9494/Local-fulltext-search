@@ -5,7 +5,6 @@ from pydantic import BaseModel, Field
 
 class SearchResultItem(BaseModel):
     file_id: int
-    target_id: int
     target_path: str
     file_name: str
     full_path: str

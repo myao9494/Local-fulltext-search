@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from app.db.connection import get_connection
 from app.extractors.text_extractor import extract_text, supports_extension
 from app.models.indexing import IndexStatusResponse
-from app.services.path_service import get_depth, get_relative_path, normalize_path
+from app.services.path_service import normalize_path
 
 
 class IndexService:
@@ -18,7 +18,6 @@ class IndexService:
         self,
         *,
         full_path: str,
-        index_depth: int,
         refresh_window_minutes: int,
     ) -> None:
         if self._is_running():
@@ -30,14 +29,14 @@ class IndexService:
         total_files = 0
         error_count = 0
         try:
-            target = self._ensure_target(full_path=full_path, index_depth=index_depth)
+            target = self._ensure_target(full_path=full_path)
             if self._needs_refresh(target, refresh_window_minutes):
                 stats = self._index_target(target)
                 total_files = stats["file_count"]
                 error_count = stats["error_count"]
                 self._mark_target_indexed(int(target["id"]))
             else:
-                total_files = self._count_target_files(int(target["id"]))
+                total_files = self._count_target_files(str(target["full_path"]))
         except Exception as error:
             self._update_status(
                 is_running=False,
@@ -72,18 +71,18 @@ class IndexService:
         row = self.connection.execute("SELECT is_running FROM index_runs WHERE id = 1").fetchone()
         return bool(row["is_running"]) if row else False
 
-    def _ensure_target(self, *, full_path: str, index_depth: int) -> dict[str, object]:
+    def _ensure_target(self, *, full_path: str) -> dict[str, object]:
         normalized_path = normalize_path(full_path)
         if not normalized_path.exists() or not normalized_path.is_dir():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Folder path must be an existing directory.")
 
         row = self.connection.execute(
             """
-            SELECT id, full_path, index_depth, last_indexed_at, created_at, updated_at
+            SELECT id, full_path, last_indexed_at, created_at, updated_at
             FROM targets
-            WHERE full_path = ? AND index_depth = ?
+            WHERE full_path = ?
             """,
-            (normalized_path.as_posix(), index_depth),
+            (normalized_path.as_posix(),),
         ).fetchone()
         if row is not None:
             return dict(row)
@@ -91,15 +90,15 @@ class IndexService:
         now = datetime.now(UTC).isoformat()
         cursor = self.connection.execute(
             """
-            INSERT INTO targets(full_path, index_depth, last_indexed_at, created_at, updated_at)
-            VALUES (?, ?, NULL, ?, ?)
+            INSERT INTO targets(full_path, last_indexed_at, created_at, updated_at)
+            VALUES (?, NULL, ?, ?)
             """,
-            (normalized_path.as_posix(), index_depth, now, now),
+            (normalized_path.as_posix(), now, now),
         )
         self.connection.commit()
         created = self.connection.execute(
             """
-            SELECT id, full_path, index_depth, last_indexed_at, created_at, updated_at
+            SELECT id, full_path, last_indexed_at, created_at, updated_at
             FROM targets
             WHERE id = ?
             """,
@@ -117,7 +116,6 @@ class IndexService:
 
     def _index_target(self, target: dict[str, object]) -> dict[str, object]:
         folder_path = normalize_path(str(target["full_path"]))
-        target_depth = int(target["index_depth"])
         normalized_paths: set[str] = set()
         file_count = 0
         error_count = 0
@@ -125,23 +123,19 @@ class IndexService:
         for path in folder_path.rglob("*"):
             if not path.is_file() or not supports_extension(path):
                 continue
-            relative_path = get_relative_path(folder_path, path)
-            depth = get_depth(relative_path)
-            if depth != target_depth:
-                continue
             normalized_path = path.resolve().as_posix()
             normalized_paths.add(normalized_path)
             try:
-                self._upsert_file(target_id=int(target["id"]), path=path, depth=depth)
+                self._upsert_file(path=path)
                 file_count += 1
             except Exception as error:
                 error_count += 1
-                self._record_file_error(int(target["id"]), path, error)
+                self._record_file_error(path, error)
 
-        self._remove_deleted_files(normalized_paths, target_id=int(target["id"]))
+        self._remove_deleted_files(normalized_paths, root_path=folder_path.as_posix())
         return {"file_count": file_count, "error_count": error_count}
 
-    def _upsert_file(self, *, target_id: int, path: Path, depth: int) -> None:
+    def _upsert_file(self, *, path: Path) -> None:
         stat = path.stat()
         normalized_path = path.resolve().as_posix()
         existing = self.connection.execute(
@@ -160,14 +154,12 @@ class IndexService:
             self.connection.execute(
                 """
                 UPDATE files
-                SET target_id = ?, full_path = ?, depth = ?, file_name = ?, file_ext = ?,
+                SET full_path = ?, file_name = ?, file_ext = ?,
                     mtime = ?, size = ?, indexed_at = ?, last_error = NULL
                 WHERE id = ?
                 """,
                 (
-                    target_id,
                     normalized_path,
-                    depth,
                     path.name,
                     path.suffix.lower(),
                     stat.st_mtime,
@@ -181,15 +173,13 @@ class IndexService:
             cursor = self.connection.execute(
                 """
                 INSERT INTO files(
-                    target_id, full_path, normalized_path, depth,
+                    full_path, normalized_path,
                     file_name, file_ext, mtime, size, indexed_at, last_error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
                 """,
                 (
-                    target_id,
                     normalized_path,
                     normalized_path,
-                    depth,
                     path.name,
                     path.suffix.lower(),
                     stat.st_mtime,
@@ -208,7 +198,7 @@ class IndexService:
         )
         self.connection.commit()
 
-    def _record_file_error(self, target_id: int, path: Path, error: Exception) -> None:
+    def _record_file_error(self, path: Path, error: Exception) -> None:
         normalized_path = path.resolve().as_posix()
         row = self.connection.execute(
             "SELECT id FROM files WHERE normalized_path = ?",
@@ -217,15 +207,16 @@ class IndexService:
         if row is None:
             return
         self.connection.execute(
-            "UPDATE files SET last_error = ? WHERE id = ? AND target_id = ?",
-            (str(error), int(row["id"]), target_id),
+            "UPDATE files SET last_error = ? WHERE id = ?",
+            (str(error), int(row["id"])),
         )
         self.connection.commit()
 
-    def _remove_deleted_files(self, normalized_paths: set[str], *, target_id: int) -> None:
+    def _remove_deleted_files(self, normalized_paths: set[str], *, root_path: str) -> None:
+        prefix = f"{root_path}/%"
         rows = self.connection.execute(
-            "SELECT id, normalized_path FROM files WHERE target_id = ?",
-            (target_id,),
+            "SELECT id, normalized_path FROM files WHERE normalized_path LIKE ?",
+            (prefix,),
         ).fetchall()
         deleted_ids = [int(row["id"]) for row in rows if row["normalized_path"] not in normalized_paths]
         if not deleted_ids:
@@ -241,10 +232,10 @@ class IndexService:
         )
         self.connection.commit()
 
-    def _count_target_files(self, target_id: int) -> int:
+    def _count_target_files(self, root_path: str) -> int:
         row = self.connection.execute(
-            "SELECT COUNT(*) AS count FROM files WHERE target_id = ?",
-            (target_id,),
+            "SELECT COUNT(*) AS count FROM files WHERE normalized_path LIKE ?",
+            (f"{root_path}/%",),
         ).fetchone()
         return int(row["count"])
 

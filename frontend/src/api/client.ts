@@ -53,14 +53,12 @@ export async function search(params: {
   refresh_window_minutes: number;
   types?: string;
 }): Promise<SearchResponse> {
-  const query = new URLSearchParams();
-  query.set("q", params.q);
-  query.set("full_path", params.full_path);
-  query.set("index_depth", String(params.index_depth));
-  query.set("refresh_window_minutes", String(params.refresh_window_minutes));
-  query.set("limit", "20");
-  if (params.types) {
-    query.set("types", params.types);
-  }
-  return request<SearchResponse>(`/api/search?${query.toString()}`);
+  return request<SearchResponse>("/api/search", {
+    method: "POST",
+    body: JSON.stringify({
+      ...params,
+      limit: 20,
+      offset: 0,
+    }),
+  });
 }

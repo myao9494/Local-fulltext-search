@@ -6,27 +6,23 @@ SCHEMA_STATEMENTS: list[str] = [
     CREATE TABLE IF NOT EXISTS targets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         full_path TEXT NOT NULL,
-        index_depth INTEGER NOT NULL,
         last_indexed_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        UNIQUE(full_path, index_depth)
+        UNIQUE(full_path)
     );
     """,
     """
     CREATE TABLE IF NOT EXISTS files (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        target_id INTEGER NOT NULL,
         full_path TEXT NOT NULL,
         normalized_path TEXT NOT NULL UNIQUE,
-        depth INTEGER NOT NULL,
         file_name TEXT NOT NULL,
         file_ext TEXT NOT NULL,
         mtime REAL NOT NULL,
         size INTEGER NOT NULL,
         indexed_at TEXT NOT NULL,
-        last_error TEXT,
-        FOREIGN KEY(target_id) REFERENCES targets(id) ON DELETE CASCADE
+        last_error TEXT
     );
     """,
     """
@@ -103,13 +99,11 @@ def _needs_schema_reset(connection: Connection) -> bool:
     if not target_columns and not legacy_folder_columns and not file_columns:
         return False
 
-    expected_target_columns = {"id", "full_path", "index_depth", "last_indexed_at", "created_at", "updated_at"}
+    expected_target_columns = {"id", "full_path", "last_indexed_at", "created_at", "updated_at"}
     expected_file_columns = {
         "id",
-        "target_id",
         "full_path",
         "normalized_path",
-        "depth",
         "file_name",
         "file_ext",
         "mtime",

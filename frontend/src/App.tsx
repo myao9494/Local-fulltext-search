@@ -10,7 +10,7 @@ const SUPPORTED_EXTENSIONS = [".md", ".json", ".txt"] as const;
 function App() {
   const [query, setQuery] = useState("");
   const [fullPath, setFullPath] = useState("");
-  const [indexDepth, setIndexDepth] = useState("0");
+  const [indexDepth, setIndexDepth] = useState("5");
   const [refreshWindowMinutes, setRefreshWindowMinutes] = useState(() => localStorage.getItem("refresh_window_minutes") ?? "60");
   const [selectedExtensions, setSelectedExtensions] = useState<string[]>(() => {
     const stored = localStorage.getItem("selected_extensions");
@@ -25,6 +25,7 @@ function App() {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
 
   async function loadInitialData(): Promise<void> {
     try {
@@ -39,6 +40,9 @@ function App() {
   }, []);
 
   async function handleSearch(): Promise<void> {
+    if (isSearching) {
+      return;
+    }
     if (!query.trim()) {
       setErrorMessage("検索語を入力してください。");
       return;
@@ -68,6 +72,8 @@ function App() {
       return;
     }
     try {
+      setIsSearching(true);
+      setErrorMessage("");
       const response = await search({
         q: query,
         full_path: fullPath,
@@ -79,9 +85,10 @@ function App() {
       setIndexStatus(await fetchIndexStatus());
       localStorage.setItem("refresh_window_minutes", String(parsedWindow));
       localStorage.setItem("selected_extensions", selectedExtensions.join(","));
-      setErrorMessage("");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "検索に失敗しました。");
+    } finally {
+      setIsSearching(false);
     }
   }
 
@@ -112,6 +119,7 @@ function App() {
           query={query}
           fullPath={fullPath}
           indexDepth={indexDepth}
+          isSearching={isSearching}
           onQueryChange={setQuery}
           onFullPathChange={setFullPath}
           onIndexDepthChange={setIndexDepth}

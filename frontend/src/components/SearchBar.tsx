@@ -2,6 +2,7 @@ type SearchBarProps = {
   query: string;
   fullPath: string;
   indexDepth: string;
+  isSearching: boolean;
   onQueryChange: (value: string) => void;
   onFullPathChange: (value: string) => void;
   onIndexDepthChange: (value: string) => void;
@@ -14,6 +15,7 @@ export function SearchBar({
   query,
   fullPath,
   indexDepth,
+  isSearching,
   onQueryChange,
   onFullPathChange,
   onIndexDepthChange,
@@ -41,14 +43,17 @@ export function SearchBar({
 
         <div className="filter-group depth-group">
           <label className="filter-label">階層:</label>
-          <input
-            className="small-input depth-input"
-            value={indexDepth}
-            onChange={(event) => onIndexDepthChange(event.target.value)}
-            placeholder="0"
-            type="number"
-            min={0}
-          />
+          <div className="depth-field">
+            <input
+              className="small-input depth-input"
+              value={indexDepth}
+              onChange={(event) => onIndexDepthChange(event.target.value)}
+              placeholder="0"
+              type="number"
+              min={0}
+            />
+            <span className="filter-hint">0=直下のみ</span>
+          </div>
         </div>
       </div>
 
@@ -58,15 +63,15 @@ export function SearchBar({
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing && !isSearching) {
               onSubmit();
             }
           }}
           placeholder="検索語を入力してください..."
           autoFocus
         />
-        <button className="primary-button" onClick={onSubmit} type="button">
-          Search
+        <button className="primary-button" disabled={isSearching} onClick={onSubmit} type="button">
+          {isSearching ? "Searching..." : "Search"}
         </button>
         <button className="menu-button" onClick={onToggleMenu} type="button" aria-label="設定">
           <svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24">

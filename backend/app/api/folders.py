@@ -20,8 +20,17 @@ def pick_folder() -> dict[str, str]:
 
 
 def _pick_folder_macos() -> str:
+    # Avoid locale-sensitive AppleScript keywords by using JXA.
+    # `chooseFolder` (Standard Additions) is more stable than manual NSOpenPanel wiring.
+    script = (
+        "const app = Application.currentApplication(); "
+        "app.includeStandardAdditions = true; "
+        "app.activate(); "
+        "const selected = app.chooseFolder({ withPrompt: '検索対象フォルダを選択' }); "
+        "selected.toString();"
+    )
     result = subprocess.run(
-        ["/usr/bin/osascript", "-e", 'POSIX path of (choose folder with prompt "検索対象フォルダを選択")'],
+        ["/usr/bin/osascript", "-l", "JavaScript", "-e", script],
         check=False,
         capture_output=True,
         text=True,
@@ -29,10 +38,13 @@ def _pick_folder_macos() -> str:
     if result.returncode != 0:
         stderr = result.stderr.strip()
         stderr_lower = stderr.lower()
-        # AppleScript uses error code -128 when the user cancels the dialog.
+        # osascript uses error code -128 when the user cancels the dialog.
         if "cancel" in stderr_lower or "キャンセル" in stderr or "(-128)" in stderr:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Folder selection was cancelled.")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="macOS folder dialog failed to open.")
+        detail = "macOS folder dialog failed to open."
+        if stderr:
+            detail = f"{detail} ({stderr[:200]})"
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail)
     selected = result.stdout.strip()
     if not selected:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Folder selection was cancelled.")

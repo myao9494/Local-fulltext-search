@@ -1,6 +1,5 @@
 export type SearchResult = {
   file_id: number;
-  target_id: number;
   target_path: string;
   file_name: string;
   full_path: string;
