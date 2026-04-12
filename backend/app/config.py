@@ -10,6 +10,7 @@ class Settings(BaseModel):
     bind_port: int = int(os.getenv("SEARCH_APP_PORT", "8000"))
     data_dir: Path = Path(os.getenv("SEARCH_APP_DATA_DIR", "data"))
     database_name: str = os.getenv("SEARCH_APP_DB_NAME", "search.db")
+    frontend_dist_dir: Path = Path(os.getenv("SEARCH_APP_FRONTEND_DIST_DIR", Path(__file__).resolve().parents[2] / "frontend" / "dist"))
 
     @property
     def database_path(self) -> Path:

@@ -21,6 +21,7 @@
 
 - Backend: Python + FastAPI
 - Frontend: React + Vite
+- 配布形態: Vite でビルドした PWA フロントエンドを FastAPI から同一オリジン配信
 - Full-text search: SQLite FTS5
 
 ## 対応予定ファイル
@@ -114,21 +115,18 @@ cd /path/to/Local-fulltext-search
 このスクリプトの既定値:
 
 - Backend bind: `0.0.0.0:8081`
-- Frontend bind: `0.0.0.0:5173`
-- Frontend API base: `http://127.0.0.1:8081`
-- 起動前に `8081` と `5173` を使用中なら停止してから起動
+- Frontend build: `frontend/dist` を生成
+- App URL: `http://127.0.0.1:8081/` または `http://<host>:8081/`
+- 起動前に `8081` を使用中なら停止してから起動
 
 必要なら環境変数で上書きできます。
 
 ```bash
-FRONTEND_API_HOST=mac-mini BACKEND_HOST=0.0.0.0 FRONTEND_HOST=0.0.0.0 ./start_dev.sh
+BACKEND_HOST=0.0.0.0 BACKEND_PORT=8081 ./start_dev.sh
 ```
 
-別端末で動かす場合:
-
-- `FRONTEND_API_HOST` は、その端末からバックエンドに到達できるホスト名または IP に変更する
-- 同一端末でフロントとバックエンドを動かすなら `FRONTEND_API_HOST=127.0.0.1` が安全
-- `mac-mini` などホスト名を使う場合は、名前解決できるネットワークからアクセスする
+同一オリジン配信のため、フロントエンドはバックエンドと同じ URL から配布されます。  
+別端末で動かす場合は、その端末から到達できる `BACKEND_HOST` または実ホスト名 / IP でアクセスします。
 
 ### 1. バックエンド
 
@@ -169,31 +167,28 @@ $env:SEARCH_APP_PORT="8081"
 python run.py
 ```
 
-### 2. フロントエンド
+### 2. フロントエンドのビルド
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run build
 ```
 
 Windows でも同じです。
 
-デフォルトの表示先:
+生成物:
 
-- Frontend: `http://0.0.0.0:5173`
+- `frontend/dist/`
 
-API の接続先を変更する場合:
+通常はこの生成物を FastAPI がそのまま配布します。  
+開発中に API 接続先だけ変えたい場合は、ビルド時に次のように指定できます。
 
 ```bash
-VITE_API_BASE_URL=http://mac-mini:8081 npm run dev -- --host 0.0.0.0 --port 5173
+VITE_API_BASE_URL=http://mac-mini:8081 npm run build
 ```
 
-Vite は `mac-mini` を `allowedHosts` に追加済みです。  
-VPN 経由では通常、次のようにアクセスします。
-
-- Frontend: `http://mac-mini:5173/`
-- Backend API: `http://mac-mini:8081/`
+指定しない場合、フロントエンドは同一オリジンの `/api/...` を参照します。
 
 ### 3. 使い方
 
@@ -243,7 +238,7 @@ VPN 経由では通常、次のようにアクセスします。
 
 1. リポジトリを clone する
 2. `./start_dev.sh` を実行する
-3. 必要なら `FRONTEND_API_HOST` などをその端末向けに上書きする
+3. 必要なら `BACKEND_HOST` / `BACKEND_PORT` をその端末向けに上書きする
 4. 画面を開いて、検索対象フォルダのフルパスと階層数を入力して `Search` を 1 回実行する
 5. その検索時に DB が作成され、対象ファイルのインデックスが順次作られる
 
