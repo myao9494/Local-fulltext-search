@@ -24,6 +24,7 @@ class SearchQueryParams(BaseModel):
     index_depth: int = Field(ge=0, le=128)
     refresh_window_minutes: int = Field(default=60, ge=0, le=1440)
     types: str | None = None
+    exclude_keywords: str | None = None
     limit: int = Field(default=20, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
 

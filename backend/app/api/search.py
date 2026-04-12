@@ -17,6 +17,7 @@ def search(
     index_depth: int = Query(..., ge=0, le=128),
     refresh_window_minutes: int = Query(default=60, ge=0, le=1440),
     types: str | None = None,
+    exclude_keywords: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     service: SearchService = Depends(get_search_service),
@@ -27,6 +28,7 @@ def search(
         index_depth=index_depth,
         refresh_window_minutes=refresh_window_minutes,
         types=types,
+        exclude_keywords=exclude_keywords,
         limit=limit,
         offset=offset,
     )

@@ -7,6 +7,7 @@ SCHEMA_STATEMENTS: list[str] = [
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         full_path TEXT NOT NULL,
         last_indexed_at TEXT,
+        exclude_keywords TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE(full_path)
@@ -99,7 +100,7 @@ def _needs_schema_reset(connection: Connection) -> bool:
     if not target_columns and not legacy_folder_columns and not file_columns:
         return False
 
-    expected_target_columns = {"id", "full_path", "last_indexed_at", "created_at", "updated_at"}
+    expected_target_columns = {"id", "full_path", "last_indexed_at", "exclude_keywords", "created_at", "updated_at"}
     expected_file_columns = {
         "id",
         "full_path",

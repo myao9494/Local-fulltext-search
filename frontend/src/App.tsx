@@ -6,12 +6,35 @@ import { SearchBar } from "./components/SearchBar";
 import type { IndexStatus, SearchResult } from "./types";
 
 const SUPPORTED_EXTENSIONS = [".md", ".json", ".txt"] as const;
+const DEFAULT_EXCLUDE_KEYWORDS = [
+  "node_modules",
+  ".git",
+  "old",
+  "旧",
+  "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  ".tox",
+  ".venv",
+  "venv",
+  "env",
+  "dist",
+  "build",
+  "coverage",
+  ".next",
+  ".turbo",
+  ".parcel-cache",
+].join("\n");
 
 function App() {
   const [query, setQuery] = useState("");
   const [fullPath, setFullPath] = useState("");
   const [indexDepth, setIndexDepth] = useState("5");
   const [refreshWindowMinutes, setRefreshWindowMinutes] = useState(() => localStorage.getItem("refresh_window_minutes") ?? "60");
+  const [excludeKeywords, setExcludeKeywords] = useState(
+    () => localStorage.getItem("exclude_keywords") ?? DEFAULT_EXCLUDE_KEYWORDS,
+  );
   const [selectedExtensions, setSelectedExtensions] = useState<string[]>(() => {
     const stored = localStorage.getItem("selected_extensions");
     if (!stored) {
@@ -80,11 +103,13 @@ function App() {
         index_depth: parsedDepth,
         refresh_window_minutes: parsedWindow,
         types: selectedExtensions.join(","),
+        exclude_keywords: excludeKeywords,
       });
       setResults(response.items);
       setIndexStatus(await fetchIndexStatus());
       localStorage.setItem("refresh_window_minutes", String(parsedWindow));
       localStorage.setItem("selected_extensions", selectedExtensions.join(","));
+      localStorage.setItem("exclude_keywords", excludeKeywords);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "検索に失敗しました。");
     } finally {
@@ -190,6 +215,22 @@ function App() {
                   </div>
                 ) : null}
                 <div className="form-help">現在: {selectedExtensions.join(", ") || "未選択"}</div>
+              </div>
+
+              <label className="form-help" htmlFor="exclude-keywords">
+                除外キーワード
+              </label>
+              <textarea
+                id="exclude-keywords"
+                className="settings-textarea"
+                value={excludeKeywords}
+                onChange={(event) => setExcludeKeywords(event.target.value)}
+                placeholder=".git&#10;node_modules&#10;old"
+                rows={12}
+              />
+              <div className="form-help">
+                1行1キーワードで入力します。`.git` や `node_modules`、`old`、`旧`、Python / React 開発で不要になりやすい
+                キャッシュやビルド成果物を既定で除外します。
               </div>
 
               <hr className="divider" />

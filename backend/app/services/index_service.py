@@ -19,6 +19,7 @@ class IndexService:
         *,
         full_path: str,
         refresh_window_minutes: int,
+        exclude_keywords: str | None = None,
     ) -> None:
         if self._is_running():
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Indexing is already running.")
@@ -29,12 +30,13 @@ class IndexService:
         total_files = 0
         error_count = 0
         try:
-            target = self._ensure_target(full_path=full_path)
-            if self._needs_refresh(target, refresh_window_minutes):
-                stats = self._index_target(target)
+            normalized_keywords = self._normalize_exclude_keywords(exclude_keywords)
+            target = self._ensure_target(full_path=full_path, exclude_keywords=normalized_keywords)
+            if self._needs_refresh(target, refresh_window_minutes, normalized_keywords):
+                stats = self._index_target(target, normalized_keywords)
                 total_files = stats["file_count"]
                 error_count = stats["error_count"]
-                self._mark_target_indexed(int(target["id"]))
+                self._mark_target_indexed(int(target["id"]), normalized_keywords)
             else:
                 total_files = self._count_target_files(str(target["full_path"]))
         except Exception as error:
@@ -71,14 +73,14 @@ class IndexService:
         row = self.connection.execute("SELECT is_running FROM index_runs WHERE id = 1").fetchone()
         return bool(row["is_running"]) if row else False
 
-    def _ensure_target(self, *, full_path: str) -> dict[str, object]:
+    def _ensure_target(self, *, full_path: str, exclude_keywords: str) -> dict[str, object]:
         normalized_path = normalize_path(full_path)
         if not normalized_path.exists() or not normalized_path.is_dir():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Folder path must be an existing directory.")
 
         row = self.connection.execute(
             """
-            SELECT id, full_path, last_indexed_at, created_at, updated_at
+            SELECT id, full_path, last_indexed_at, exclude_keywords, created_at, updated_at
             FROM targets
             WHERE full_path = ?
             """,
@@ -90,15 +92,15 @@ class IndexService:
         now = datetime.now(UTC).isoformat()
         cursor = self.connection.execute(
             """
-            INSERT INTO targets(full_path, last_indexed_at, created_at, updated_at)
-            VALUES (?, NULL, ?, ?)
+            INSERT INTO targets(full_path, last_indexed_at, exclude_keywords, created_at, updated_at)
+            VALUES (?, NULL, ?, ?, ?)
             """,
-            (normalized_path.as_posix(), now, now),
+            (normalized_path.as_posix(), exclude_keywords, now, now),
         )
         self.connection.commit()
         created = self.connection.execute(
             """
-            SELECT id, full_path, last_indexed_at, created_at, updated_at
+            SELECT id, full_path, last_indexed_at, exclude_keywords, created_at, updated_at
             FROM targets
             WHERE id = ?
             """,
@@ -106,21 +108,26 @@ class IndexService:
         ).fetchone()
         return dict(created)
 
-    def _needs_refresh(self, target: dict[str, object], refresh_window_minutes: int) -> bool:
+    def _needs_refresh(self, target: dict[str, object], refresh_window_minutes: int, exclude_keywords: str) -> bool:
         last_indexed_at = target["last_indexed_at"]
         if last_indexed_at is None:
+            return True
+        if str(target.get("exclude_keywords") or "") != exclude_keywords:
             return True
         indexed_at = datetime.fromisoformat(str(last_indexed_at))
         elapsed_seconds = (datetime.now(UTC) - indexed_at).total_seconds()
         return elapsed_seconds > refresh_window_minutes * 60
 
-    def _index_target(self, target: dict[str, object]) -> dict[str, object]:
+    def _index_target(self, target: dict[str, object], exclude_keywords: str) -> dict[str, object]:
         folder_path = normalize_path(str(target["full_path"]))
         normalized_paths: set[str] = set()
         file_count = 0
         error_count = 0
+        keywords = self._parse_exclude_keywords(exclude_keywords)
 
         for path in folder_path.rglob("*"):
+            if self._should_exclude_path(path, keywords):
+                continue
             if not path.is_file() or not supports_extension(path):
                 continue
             normalized_path = path.resolve().as_posix()
@@ -224,11 +231,11 @@ class IndexService:
         self.connection.executemany("DELETE FROM files WHERE id = ?", [(file_id,) for file_id in deleted_ids])
         self.connection.commit()
 
-    def _mark_target_indexed(self, target_id: int) -> None:
+    def _mark_target_indexed(self, target_id: int, exclude_keywords: str) -> None:
         now = datetime.now(UTC).isoformat()
         self.connection.execute(
-            "UPDATE targets SET last_indexed_at = ?, updated_at = ? WHERE id = ?",
-            (now, now, target_id),
+            "UPDATE targets SET last_indexed_at = ?, exclude_keywords = ?, updated_at = ? WHERE id = ?",
+            (now, exclude_keywords, now, target_id),
         )
         self.connection.commit()
 
@@ -271,3 +278,48 @@ class IndexService:
             ),
         )
         self.connection.commit()
+
+    def _normalize_exclude_keywords(self, value: str | None) -> str:
+        return "\n".join(self._parse_exclude_keywords(value))
+
+    def _parse_exclude_keywords(self, value: str | None) -> list[str]:
+        seen: set[str] = set()
+        keywords: list[str] = []
+        for line in (value or "").splitlines():
+            keyword = line.strip().lower()
+            if not keyword or keyword in seen:
+                continue
+            seen.add(keyword)
+            keywords.append(keyword)
+        return keywords
+
+    def _should_exclude_path(self, path: Path, keywords: list[str]) -> bool:
+        if not keywords:
+            return False
+        return any(self._part_matches_keyword(part.lower(), keywords) for part in path.parts)
+
+    def _part_matches_keyword(self, part: str, keywords: list[str]) -> bool:
+        ascii_tokens = [token for token in self._split_ascii_tokens(part) if token]
+        stripped_part = part.lstrip(".")
+        for keyword in keywords:
+            if keyword == part or keyword == stripped_part:
+                return True
+            if any(ord(char) > 127 for char in keyword) and keyword in part:
+                return True
+            if keyword in ascii_tokens:
+                return True
+        return False
+
+    def _split_ascii_tokens(self, value: str) -> list[str]:
+        token: list[str] = []
+        tokens: list[str] = []
+        for char in value:
+            if char.isascii() and char.isalnum():
+                token.append(char)
+                continue
+            if token:
+                tokens.append("".join(token))
+                token.clear()
+        if token:
+            tokens.append("".join(token))
+        return tokens

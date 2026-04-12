@@ -52,6 +52,7 @@ export async function search(params: {
   index_depth: number;
   refresh_window_minutes: number;
   types?: string;
+  exclude_keywords?: string;
 }): Promise<SearchResponse> {
   return request<SearchResponse>("/api/search", {
     method: "POST",

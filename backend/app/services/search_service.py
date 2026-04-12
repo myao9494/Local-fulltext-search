@@ -5,7 +5,7 @@ from sqlite3 import Connection
 from app.db.connection import get_connection
 from app.models.search import SearchQueryParams, SearchResponse, SearchResultItem
 from app.services.index_service import IndexService
-from app.services.path_service import normalize_path_str
+from app.services.path_service import normalize_path, normalize_path_str
 
 
 class SearchService:
@@ -15,9 +15,11 @@ class SearchService:
 
     def search(self, params: SearchQueryParams) -> SearchResponse:
         normalized_target_path = normalize_path_str(params.full_path)
+        excluded_keywords = self.index_service._parse_exclude_keywords(params.exclude_keywords)
         self.index_service.ensure_fresh_target(
             full_path=normalized_target_path,
             refresh_window_minutes=params.refresh_window_minutes,
+            exclude_keywords=params.exclude_keywords,
         )
 
         path_prefix = f"{normalized_target_path}/%"
@@ -111,6 +113,7 @@ class SearchService:
                 snippet=self._resolve_snippet(snippet=row["snippet"], file_name=str(row["file_name"])),
             )
             for row in rows
+            if not self.index_service._should_exclude_path(normalize_path(str(row["normalized_path"])), excluded_keywords)
         ]
         return SearchResponse(total=int(total), items=items)
 

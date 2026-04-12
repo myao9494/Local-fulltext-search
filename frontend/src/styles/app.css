@@ -33,6 +33,7 @@ body {
 
 button,
 input,
+textarea,
 select {
   font: inherit;
   transition: all 0.2s ease;
@@ -108,6 +109,7 @@ h1, h2, h3 {
 }
 
 .folder-form input,
+.folder-form textarea,
 .filters input,
 .filters select {
   width: 100%;
@@ -119,8 +121,17 @@ h1, h2, h3 {
   backdrop-filter: blur(8px);
 }
 
+.folder-form textarea {
+  border-radius: 20px;
+  padding: 16px 18px;
+  resize: vertical;
+  min-height: 180px;
+  line-height: 1.5;
+}
+
 .search-input:focus,
 .folder-form input:focus,
+.folder-form textarea:focus,
 .filters input:focus,
 .small-input:focus {
   outline: none;
@@ -130,6 +141,7 @@ h1, h2, h3 {
 
 .search-input::placeholder,
 .folder-form input::placeholder,
+.folder-form textarea::placeholder,
 .small-input::placeholder {
   color: #475569;
 }
@@ -349,6 +361,10 @@ h1, h2, h3 {
 .extension-panel {
   display: grid;
   gap: 12px;
+}
+
+.settings-textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 .extension-menu {
