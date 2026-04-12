@@ -45,6 +45,7 @@
 
 - 全体仕様: `spec/product_spec.md`
 - 今回の実装範囲: `spec/phase1.md`
+- 配布・起動手順: `docs/runtime_and_distribution.md`
 
 ## 開発方針
 
@@ -105,6 +106,11 @@ spec/
 
 ## 起動手順
 
+起動方法は 2 通りあります。
+
+- 開発用の一括起動: `start_dev.sh`
+- 配布先向けの直接起動: `backend/run.py`
+
 最小の起動方法:
 
 ```bash
@@ -119,6 +125,9 @@ cd /path/to/Local-fulltext-search
 - App URL: `http://127.0.0.1:8081/` または `http://<host>:8081/`
 - 起動前に `8081` を使用中なら停止してから起動
 
+この方法は開発用です。  
+`start_dev.sh` は `npm install` / `npm run build` を使うため、Node.js / npm が必要です。
+
 必要なら環境変数で上書きできます。
 
 ```bash
@@ -127,6 +136,23 @@ BACKEND_HOST=0.0.0.0 BACKEND_PORT=8081 ./start_dev.sh
 
 同一オリジン配信のため、フロントエンドはバックエンドと同じ URL から配布されます。  
 別端末で動かす場合は、その端末から到達できる `BACKEND_HOST` または実ホスト名 / IP でアクセスします。
+
+## 配布運用
+
+会社PCなどでフロントエンドのビルド環境を用意できない運用を想定し、`frontend/dist/` はリポジトリに含めて配布します。  
+そのため、配布先で Node.js / npm がなくても、Python 環境があればバックエンド起動だけで画面を開けます。
+
+配布先で必要な前提:
+
+- Python 3 が入っていること
+- `pip install -r backend/requirements.txt` が 1 回実行できること
+- `frontend/dist/` が clone / pull した内容に含まれていること
+
+配布先で不要なもの:
+
+- Node.js
+- npm
+- フロントエンドの再ビルド
 
 ### 1. バックエンド
 
@@ -148,9 +174,9 @@ pip install -r requirements.txt
 python run.py
 ```
 
-デフォルトの起動先:
+`python run.py` の既定値:
 
-- API: `http://0.0.0.0:8081`
+- API: `http://127.0.0.1:8081`
 - Health check: `http://127.0.0.1:8081/api/health`
 
 バインドアドレスを変更する場合:
@@ -167,6 +193,41 @@ $env:SEARCH_APP_PORT="8081"
 python run.py
 ```
 
+### 1-1. 配布先での最短起動手順
+
+フロントエンドのビルド環境がない端末では、`frontend/dist/` をそのまま使って FastAPI から配信します。
+
+初回のみ:
+
+```powershell
+cd backend
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+起動コマンド:
+
+```powershell
+cd backend
+$env:SEARCH_APP_HOST="127.0.0.1"
+$env:SEARCH_APP_PORT="8081"
+.venv\Scripts\python.exe run.py
+```
+
+別PCから同一ネットワーク経由で開きたい場合:
+
+```powershell
+cd backend
+$env:SEARCH_APP_HOST="0.0.0.0"
+$env:SEARCH_APP_PORT="8081"
+.venv\Scripts\python.exe run.py
+```
+
+起動後のアクセス先:
+
+- ローカルPCで使う場合: `http://127.0.0.1:8081/`
+- 別端末から使う場合: `http://<このPCのIPアドレス>:8081/`
+
 ### 2. フロントエンドのビルド
 
 ```bash
@@ -182,6 +243,7 @@ Windows でも同じです。
 - `frontend/dist/`
 
 通常はこの生成物を FastAPI がそのまま配布します。  
+配布先で Node.js / npm がない場合は、この手順は不要です。  
 開発中に API 接続先だけ変えたい場合は、ビルド時に次のように指定できます。
 
 ```bash
@@ -189,6 +251,12 @@ VITE_API_BASE_URL=http://mac-mini:8081 npm run build
 ```
 
 指定しない場合、フロントエンドは同一オリジンの `/api/...` を参照します。
+
+注意:
+
+- `start_dev.sh` の既定 bind は `0.0.0.0:8081`
+- `python run.py` の既定 bind は `127.0.0.1:8081`
+- どちらも既定ポートは `8081`
 
 ### 3. 使い方
 
@@ -230,17 +298,20 @@ VITE_API_BASE_URL=http://mac-mini:8081 npm run build
 
 復旧時の前提:
 
-- Python 3 と Node.js / npm が入っていること
+- Python 3 が入っていること
 - 検索対象のフォルダに、その端末から実際にアクセスできること
-- 初回起動時はネットワーク越しに Python / npm の依存取得ができること
+- 初回起動時はネットワーク越しに Python 依存取得ができること
+- `frontend/dist/` がリポジトリに含まれていること
 
 復旧手順:
 
 1. リポジトリを clone する
-2. `./start_dev.sh` を実行する
-3. 必要なら `BACKEND_HOST` / `BACKEND_PORT` をその端末向けに上書きする
-4. 画面を開いて、検索対象フォルダのフルパスと階層数を入力して `Search` を 1 回実行する
-5. その検索時に DB が作成され、対象ファイルのインデックスが順次作られる
+2. `cd backend` に移動する
+3. `python -m venv .venv` を実行する
+4. `.venv` の Python で `pip install -r requirements.txt` を実行する
+5. 必要なら `SEARCH_APP_HOST` / `SEARCH_APP_PORT` を設定して `.venv\Scripts\python.exe run.py` で起動する
+6. 画面を開いて、検索対象フォルダのフルパスと階層数を入力して `Search` を 1 回実行する
+7. その検索時に DB が作成され、対象ファイルのインデックスが順次作られる
 
 DB について:
 
