@@ -52,6 +52,7 @@ class SearchService:
     ) -> SearchResponse:
         """
         通常モードでは既存の FTS5 ベース全文検索を利用する。
+        CTE を1回だけ評価し、COUNT と結果を同時に取得する。
         """
         where_clause, values = self._build_common_filters(
             normalized_target_path=normalized_target_path,
@@ -62,7 +63,9 @@ class SearchService:
         normalized_query = params.q.strip()
         escaped_query = self._escape_like_pattern(normalized_query.lower())
         fts_query = self._build_fts_match_query(normalized_query)
-        common_search_sql = f"""
+        query_values = [*values, fts_query, *values, f"%{escaped_query}%", params.limit, params.offset]
+        rows = self.connection.execute(
+            f"""
             WITH matched_files AS (
                 SELECT
                     files.id AS file_id,
@@ -92,39 +95,45 @@ class SearchService:
                     snippet,
                     ROW_NUMBER() OVER (PARTITION BY file_id ORDER BY match_rank, score, file_id) AS rn
                 FROM matched_files
+            ),
+            filtered AS (
+                SELECT * FROM ranked_matches WHERE rn = 1
+            ),
+            total_count AS (
+                SELECT COUNT(*) AS total
+                FROM filtered
+            ),
+            paged_matches AS (
+                SELECT
+                    files.id AS file_id,
+                    files.file_name,
+                    files.normalized_path,
+                    files.file_ext,
+                    files.mtime,
+                    filtered.snippet,
+                    filtered.match_rank,
+                    filtered.score
+                FROM filtered
+                JOIN files ON files.id = filtered.file_id
+                ORDER BY filtered.match_rank, filtered.score, files.mtime DESC
+                LIMIT ? OFFSET ?
             )
-        """
-        match_values = [*values, fts_query, *values, f"%{escaped_query}%"]
-        total = self.connection.execute(
-            f"""
-            {common_search_sql}
-            SELECT COUNT(*) AS total
-            FROM ranked_matches
-            WHERE rn = 1
-            """,
-            tuple(match_values),
-        ).fetchone()["total"]
-
-        query_values = [*match_values, params.limit, params.offset]
-        rows = self.connection.execute(
-            f"""
-            {common_search_sql}
             SELECT
-                files.id AS file_id,
-                files.file_name,
-                files.normalized_path,
-                files.file_ext,
-                files.mtime,
-                ranked_matches.snippet
-            FROM ranked_matches
-            JOIN files ON files.id = ranked_matches.file_id
-            WHERE ranked_matches.rn = 1
-            ORDER BY ranked_matches.match_rank, ranked_matches.score, files.mtime DESC
-            LIMIT ? OFFSET ?
+                paged_matches.file_id,
+                paged_matches.file_name,
+                paged_matches.normalized_path,
+                paged_matches.file_ext,
+                paged_matches.mtime,
+                paged_matches.snippet,
+                total_count.total
+            FROM total_count
+            LEFT JOIN paged_matches ON 1 = 1
+            ORDER BY paged_matches.match_rank, paged_matches.score, paged_matches.mtime DESC
             """,
             tuple(query_values),
         ).fetchall()
 
+        total = int(rows[0]["total"]) if rows else 0
         items = [
             SearchResultItem(
                 file_id=int(row["file_id"]),
@@ -136,9 +145,10 @@ class SearchService:
                 snippet=self._resolve_snippet(snippet=row["snippet"], file_name=str(row["file_name"])),
             )
             for row in rows
-            if not self.index_service._should_exclude_path(normalize_path(str(row["normalized_path"])), excluded_keywords)
+            if row["file_id"] is not None
+            and not self.index_service._should_exclude_path(normalize_path(str(row["normalized_path"])), excluded_keywords)
         ]
-        return SearchResponse(total=int(total), items=items)
+        return SearchResponse(total=total, items=items)
 
     def _search_with_regex(
         self,
@@ -149,6 +159,7 @@ class SearchService:
     ) -> SearchResponse:
         """
         正規表現モードでは Python の re で本文とファイル名を評価する。
+        イテレータで逐次処理し、メモリ使用量を抑える。
         """
         where_clause, values = self._build_common_filters(
             normalized_target_path=normalized_target_path,
@@ -156,7 +167,7 @@ class SearchService:
             types=params.types,
         )
         pattern = self._compile_regex(params.q)
-        rows = self.connection.execute(
+        cursor = self.connection.execute(
             f"""
             SELECT
                 files.id AS file_id,
@@ -171,10 +182,11 @@ class SearchService:
             ORDER BY files.mtime DESC, files.id DESC
             """,
             tuple(values),
-        ).fetchall()
+        )
 
         items: list[SearchResultItem] = []
-        for row in rows:
+        matched_count = 0
+        for row in cursor:
             normalized_path = str(row["normalized_path"])
             if self.index_service._should_exclude_path(normalize_path(normalized_path), excluded_keywords):
                 continue
@@ -184,6 +196,14 @@ class SearchService:
             content_match = pattern.search(content)
             file_name_match = pattern.search(file_name)
             if content_match is None and file_name_match is None:
+                continue
+
+            matched_count += 1
+            # offset 範囲外はスキップ
+            if matched_count <= params.offset:
+                continue
+            # limit に達したらカウントのみ続行
+            if len(items) >= params.limit:
                 continue
 
             items.append(
@@ -203,9 +223,7 @@ class SearchService:
                 )
             )
 
-        start = params.offset
-        end = params.offset + params.limit
-        return SearchResponse(total=len(items), items=items[start:end])
+        return SearchResponse(total=matched_count, items=items)
 
     def _resolve_snippet(self, *, snippet: object, file_name: str) -> str:
         if isinstance(snippet, str) and snippet.strip():

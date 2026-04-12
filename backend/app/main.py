@@ -24,6 +24,7 @@ def create_app() -> FastAPI:
 
     connection = get_connection()
     initialize_schema(connection)
+    # 起動時にスキーマだけ初期化し、リクエスト用の接続は依存性注入で都度生成する
     connection.close()
 
     @app.get("/api/health")

@@ -1,3 +1,4 @@
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from sqlite3 import Connection
@@ -119,28 +120,58 @@ class IndexService:
         return elapsed_seconds > refresh_window_minutes * 60
 
     def _index_target(self, target: dict[str, object], exclude_keywords: str) -> dict[str, object]:
+        """指定ターゲットの全ファイルをインデックスする。os.scandirでディレクトリ除外を早期に行い、バッチcommitで効率化。"""
         folder_path = normalize_path(str(target["full_path"]))
         normalized_paths: set[str] = set()
         file_count = 0
         error_count = 0
         keywords = self._parse_exclude_keywords(exclude_keywords)
+        keyword_set = frozenset(keywords)
+        non_ascii_keywords = [kw for kw in keywords if any(ord(c) > 127 for c in kw)]
+        batch_size = 100
 
-        for path in folder_path.rglob("*"):
-            if self._should_exclude_path(path, keywords):
-                continue
-            if not path.is_file() or not supports_extension(path):
-                continue
+        for path in self._walk_files(folder_path, keyword_set, non_ascii_keywords):
             normalized_path = path.resolve().as_posix()
             normalized_paths.add(normalized_path)
             try:
                 self._upsert_file(path=path)
                 file_count += 1
+                if file_count % batch_size == 0:
+                    self.connection.commit()
             except Exception as error:
                 error_count += 1
                 self._record_file_error(path, error)
 
+        self.connection.commit()
         self._remove_deleted_files(normalized_paths, root_path=folder_path.as_posix())
         return {"file_count": file_count, "error_count": error_count}
+
+    def _walk_files(
+        self,
+        root: Path,
+        keyword_set: frozenset[str],
+        non_ascii_keywords: list[str],
+    ):
+        """
+        os.scandir ベースの高速ファイル走査。
+        除外キーワードに一致するディレクトリは再帰しないため、rglob より高速。
+        """
+        try:
+            with os.scandir(root) as entries:
+                for entry in entries:
+                    path = Path(entry.path)
+                    if entry.is_dir(follow_symlinks=False):
+                        if not self._should_exclude_path_with_keywords(path, keyword_set, non_ascii_keywords):
+                            yield from self._walk_files(path, keyword_set, non_ascii_keywords)
+                    elif entry.is_file(follow_symlinks=False):
+                        if supports_extension(path) and not self._should_exclude_path_with_keywords(
+                            path,
+                            keyword_set,
+                            non_ascii_keywords,
+                        ):
+                            yield path
+        except PermissionError:
+            pass
 
     def _upsert_file(self, *, path: Path) -> None:
         stat = path.stat()
@@ -203,7 +234,6 @@ class IndexService:
             """,
             (file_id, "body", normalized_path, content),
         )
-        self.connection.commit()
 
     def _record_file_error(self, path: Path, error: Exception) -> None:
         normalized_path = path.resolve().as_posix()
@@ -217,9 +247,9 @@ class IndexService:
             "UPDATE files SET last_error = ? WHERE id = ?",
             (str(error), int(row["id"])),
         )
-        self.connection.commit()
 
     def _remove_deleted_files(self, normalized_paths: set[str], *, root_path: str) -> None:
+        """DB上に存在するが実ファイルが無くなったレコードをバッチ削除する。"""
         prefix = f"{root_path}/%"
         rows = self.connection.execute(
             "SELECT id, normalized_path FROM files WHERE normalized_path LIKE ?",
@@ -228,7 +258,12 @@ class IndexService:
         deleted_ids = [int(row["id"]) for row in rows if row["normalized_path"] not in normalized_paths]
         if not deleted_ids:
             return
-        self.connection.executemany("DELETE FROM files WHERE id = ?", [(file_id,) for file_id in deleted_ids])
+        # IN句でバッチ削除（executemanyより効率的）
+        chunk_size = 500
+        for i in range(0, len(deleted_ids), chunk_size):
+            chunk = deleted_ids[i:i + chunk_size]
+            placeholders = ",".join("?" * len(chunk))
+            self.connection.execute(f"DELETE FROM files WHERE id IN ({placeholders})", chunk)
         self.connection.commit()
 
     def _mark_target_indexed(self, target_id: int, exclude_keywords: str) -> None:
@@ -256,7 +291,7 @@ class IndexService:
         total_files: int | None = None,
         error_count: int | None = None,
     ) -> None:
-        current = self.connection.execute("SELECT * FROM index_runs WHERE id = 1").fetchone()
+        """インデックス実行ステータスを更新する。不要なSELECTを省き、COALESCEで処理。"""
         self.connection.execute(
             """
             UPDATE index_runs
@@ -273,8 +308,8 @@ class IndexService:
                 last_started_at,
                 last_finished_at,
                 last_error,
-                total_files if total_files is not None else current["total_files"],
-                error_count if error_count is not None else current["error_count"],
+                total_files,
+                error_count,
             ),
         )
         self.connection.commit()
@@ -294,23 +329,44 @@ class IndexService:
         return keywords
 
     def _should_exclude_path(self, path: Path, keywords: list[str]) -> bool:
+        """パスの各パートが除外キーワードに一致するか判定する。検索サービスからも利用される。"""
         if not keywords:
             return False
-        return any(self._part_matches_keyword(part.lower(), keywords) for part in path.parts)
+        keyword_set = frozenset(keywords)
+        non_ascii_keywords = [kw for kw in keywords if any(ord(c) > 127 for c in kw)]
+        return self._should_exclude_path_with_keywords(path, keyword_set, non_ascii_keywords)
 
-    def _part_matches_keyword(self, part: str, keywords: list[str]) -> bool:
-        ascii_tokens = [token for token in self._split_ascii_tokens(part) if token]
-        stripped_part = part.lstrip(".")
-        for keyword in keywords:
-            if keyword == part or keyword == stripped_part:
+    def _should_exclude_path_with_keywords(
+        self,
+        path: Path,
+        keyword_set: frozenset[str],
+        non_ascii_keywords: list[str],
+    ) -> bool:
+        """事前計算済みキーワード集合を用いてパス全体の除外判定を行う。"""
+        return any(self._is_excluded_name(part, keyword_set, non_ascii_keywords) for part in path.parts)
+
+    def _is_excluded_name(self, name: str, keyword_set: frozenset[str], non_ascii_keywords: list[str]) -> bool:
+        """
+        ディレクトリ名/ファイル名が除外キーワードに一致するか判定する。
+        keyword_set による O(1) ルックアップで高速化。
+        """
+        lower_name = name.lower()
+        stripped_name = lower_name.lstrip(".")
+        # 完全一致（set O(1)）
+        if lower_name in keyword_set or stripped_name in keyword_set:
+            return True
+        # 非ASCIIキーワードのサブストリング検索
+        for kw in non_ascii_keywords:
+            if kw in lower_name:
                 return True
-            if any(ord(char) > 127 for char in keyword) and keyword in part:
-                return True
-            if keyword in ascii_tokens:
-                return True
+        # ASCIIトークン分割によるマッチ
+        tokens = set(self._split_ascii_tokens(lower_name))
+        if tokens & keyword_set:
+            return True
         return False
 
     def _split_ascii_tokens(self, value: str) -> list[str]:
+        """文字列からASCII英数字トークンを分割する。"""
         token: list[str] = []
         tokens: list[str] = []
         for char in value:

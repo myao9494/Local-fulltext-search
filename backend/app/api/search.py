@@ -1,13 +1,14 @@
+"""
+検索API エンドポイント。リクエスト単位のDB接続を依存性注入で受け取る。
+"""
+
 from fastapi import APIRouter, Depends, Query
 
+from app.api.deps import get_search_service
 from app.models.search import SearchQueryParams, SearchRequest, SearchResponse
 from app.services.search_service import SearchService
 
 router = APIRouter(prefix="/api", tags=["search"])
-
-
-def get_search_service() -> SearchService:
-    return SearchService()
 
 
 @router.get("/search", response_model=SearchResponse)

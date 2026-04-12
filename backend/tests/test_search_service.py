@@ -57,6 +57,30 @@ def test_search_requires_all_whitespace_separated_terms(tmp_path: Path) -> None:
     assert [item.file_name for item in result.items] == ["match.md"]
 
 
+def test_search_preserves_total_when_offset_page_is_empty(tmp_path: Path) -> None:
+    """
+    OFFSET で結果ページが空になっても、総件数は失われない。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "match.md").write_text("alpha beta gamma", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(target),
+            index_depth=5,
+            refresh_window_minutes=60,
+            limit=10,
+            offset=10,
+        )
+    )
+
+    assert result.total == 1
+    assert result.items == []
+
+
 def test_search_supports_regex_mode_for_content_matches(tmp_path: Path) -> None:
     """
     正規表現モードでは Python 互換の正規表現で本文検索できる。
