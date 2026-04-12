@@ -51,6 +51,7 @@ export async function search(params: {
   full_path: string;
   index_depth: number;
   refresh_window_minutes: number;
+  regex_enabled?: boolean;
   types?: string;
   exclude_keywords?: string;
 }): Promise<SearchResponse> {

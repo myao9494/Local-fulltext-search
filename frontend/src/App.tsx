@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { fetchIndexStatus, pickFolder, search } from "./api/client";
 import { ResultsList } from "./components/ResultsList";
 import { SearchBar } from "./components/SearchBar";
+import { parseLaunchParams, shouldAutoSearch } from "./launchParams";
 import type { IndexStatus, SearchResult } from "./types";
 
 const SUPPORTED_EXTENSIONS = [".md", ".json", ".txt"] as const;
@@ -27,10 +28,17 @@ const DEFAULT_EXCLUDE_KEYWORDS = [
   ".parcel-cache",
 ].join("\n");
 
+/**
+ * React Strict Mode の開発時二重実行でも初回 URL 検索を重複発火させない。
+ */
+let lastAutoSearchKey = "";
+
 function App() {
-  const [query, setQuery] = useState("");
-  const [fullPath, setFullPath] = useState("");
-  const [indexDepth, setIndexDepth] = useState("5");
+  const [launchParams] = useState(() => parseLaunchParams(window.location.search));
+  const [query, setQuery] = useState(() => launchParams.q);
+  const [fullPath, setFullPath] = useState(() => launchParams.fullPath);
+  const [indexDepth, setIndexDepth] = useState(() => launchParams.indexDepth);
+  const [isRegexEnabled, setIsRegexEnabled] = useState(() => localStorage.getItem("regex_enabled") === "true");
   const [refreshWindowMinutes, setRefreshWindowMinutes] = useState(() => localStorage.getItem("refresh_window_minutes") ?? "60");
   const [excludeKeywords, setExcludeKeywords] = useState(
     () => localStorage.getItem("exclude_keywords") ?? DEFAULT_EXCLUDE_KEYWORDS,
@@ -61,6 +69,24 @@ function App() {
   useEffect(() => {
     void loadInitialData();
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem("regex_enabled", String(isRegexEnabled));
+  }, [isRegexEnabled]);
+
+  useEffect(() => {
+    if (!shouldAutoSearch(launchParams)) {
+      return;
+    }
+
+    const autoSearchKey = `${launchParams.q}\n${launchParams.fullPath}\n${launchParams.indexDepth}`;
+    if (lastAutoSearchKey === autoSearchKey) {
+      return;
+    }
+
+    lastAutoSearchKey = autoSearchKey;
+    void handleSearch();
+  }, [launchParams]);
 
   async function handleSearch(): Promise<void> {
     if (isSearching) {
@@ -102,6 +128,7 @@ function App() {
         full_path: fullPath,
         index_depth: parsedDepth,
         refresh_window_minutes: parsedWindow,
+        regex_enabled: isRegexEnabled,
         types: selectedExtensions.join(","),
         exclude_keywords: excludeKeywords,
       });
@@ -145,9 +172,11 @@ function App() {
           fullPath={fullPath}
           indexDepth={indexDepth}
           isSearching={isSearching}
+          isRegexEnabled={isRegexEnabled}
           onQueryChange={setQuery}
           onFullPathChange={setFullPath}
           onIndexDepthChange={setIndexDepth}
+          onRegexToggle={() => setIsRegexEnabled((value) => !value)}
           onPickFolder={() => void handlePickFolder()}
           onSubmit={() => void handleSearch()}
           onToggleMenu={() => setIsMenuOpen((value) => !value)}

@@ -3,9 +3,11 @@ type SearchBarProps = {
   fullPath: string;
   indexDepth: string;
   isSearching: boolean;
+  isRegexEnabled: boolean;
   onQueryChange: (value: string) => void;
   onFullPathChange: (value: string) => void;
   onIndexDepthChange: (value: string) => void;
+  onRegexToggle: () => void;
   onPickFolder: () => void;
   onSubmit: () => void;
   onToggleMenu: () => void;
@@ -16,9 +18,11 @@ export function SearchBar({
   fullPath,
   indexDepth,
   isSearching,
+  isRegexEnabled,
   onQueryChange,
   onFullPathChange,
   onIndexDepthChange,
+  onRegexToggle,
   onPickFolder,
   onSubmit,
   onToggleMenu,
@@ -70,6 +74,16 @@ export function SearchBar({
           placeholder="検索語を入力してください..."
           autoFocus
         />
+        <button
+          className={`regex-toggle-button ${isRegexEnabled ? "active" : ""}`}
+          onClick={onRegexToggle}
+          type="button"
+          aria-pressed={isRegexEnabled}
+          aria-label="正規表現検索"
+          title="正規表現検索"
+        >
+          .*
+        </button>
         <button className="primary-button" disabled={isSearching} onClick={onSubmit} type="button">
           {isSearching ? "Searching..." : "Search"}
         </button>

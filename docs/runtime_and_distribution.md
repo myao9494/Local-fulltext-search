@@ -81,6 +81,12 @@ cd backend
 
 - `http://127.0.0.1:8081/`
 
+外部アプリから特定フォルダと検索語を渡して開く場合:
+
+- `http://127.0.0.1:8081/?q=見積&full_path=%2FUsers%2Fmine%2FDocuments&index_depth=2`
+- `q` と `full_path` の両方があると初回表示時に自動検索する
+- `index_depth` を省略した場合は `5`
+
 ### 別端末からアクセスさせたい場合
 
 ```powershell

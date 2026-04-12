@@ -23,6 +23,7 @@ class SearchQueryParams(BaseModel):
     full_path: str = Field(min_length=1)
     index_depth: int = Field(ge=0, le=128)
     refresh_window_minutes: int = Field(default=60, ge=0, le=1440)
+    regex_enabled: bool = False
     types: str | None = None
     exclude_keywords: str | None = None
     limit: int = Field(default=20, ge=1, le=100)

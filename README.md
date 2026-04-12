@@ -410,6 +410,24 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 - クエリ文字列の組み立てやエスケープを気にしなくてよい
 - 将来、呼び出し元が増えても仕様を固定しやすい
 
+### UI をフォルダ指定付きで開く
+
+画面を開くだけでよい場合は、次のクエリ文字列で初期値を渡せます。
+
+- `q`
+- `full_path`
+- `index_depth` 省略時は `5`
+
+`q` と `full_path` の両方があると、初回表示時に自動で検索を実行します。
+
+例:
+
+```text
+http://127.0.0.1:8081/?q=見積&full_path=%2FUsers%2Fmine%2FDocuments&index_depth=2
+```
+
+Windows で UNC パスを渡す場合も、URL に入れるときは必ず URL エンコードしてください。
+
 ### Windows の UNC パスについて
 
 たとえば次のようなパスを渡せます。
