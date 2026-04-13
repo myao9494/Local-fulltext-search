@@ -76,17 +76,24 @@ export function ResultsList({ items }: ResultsListProps) {
 
         return (
           <article className="result-card" key={item.file_id}>
-            <button
-              type="button"
-              className="result-path result-path-button"
-              onClick={() => void handleCopyFullPath(item.file_id, item.full_path)}
-              title="クリックでフルパスをコピー"
-            >
-              <span>{item.full_path}</span>
-              {copiedFileId === item.file_id ? (
-                <span className="result-path-status">コピーしました</span>
-              ) : null}
-            </button>
+            <div className="result-path">
+              <code className="result-path-text" title="ドラッグして部分選択できます">
+                {item.full_path}
+              </code>
+              <div className="result-path-actions">
+                <button
+                  type="button"
+                  className="result-copy-button"
+                  onClick={() => void handleCopyFullPath(item.file_id, item.full_path)}
+                  title="フルパスをコピー"
+                >
+                  パスをコピー
+                </button>
+                {copiedFileId === item.file_id ? (
+                  <span className="result-path-status">コピーしました</span>
+                ) : null}
+              </div>
+            </div>
             <div className="result-header">
               <h3>
                 <a

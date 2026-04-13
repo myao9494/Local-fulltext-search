@@ -34,6 +34,51 @@ def test_search_handles_special_characters_without_fts_errors(tmp_path: Path) ->
     assert [item.file_name for item in result.items] == ["symbols.md"]
 
 
+def test_search_matches_japanese_substring_inside_longer_token(tmp_path: Path) -> None:
+    """
+    日本語の連続文字列は bi-gram 補助インデックスで部分一致検索できる。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "sushi.md").write_text("今日はお寿司が食べたい。", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="寿司",
+            full_path=str(target),
+            index_depth=5,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["sushi.md"]
+    assert "<mark>寿司</mark>" in result.items[0].snippet
+
+
+def test_search_matches_mixed_ascii_and_japanese_terms(tmp_path: Path) -> None:
+    """
+    ASCII 語と日本語語を混在させた AND 検索でも、同じ本文からヒットできる。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "mixed.md").write_text("lunch memo: 今日はお寿司が食べたい。", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="lunch 寿司",
+            full_path=str(target),
+            index_depth=5,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["mixed.md"]
+
+
 def test_search_requires_all_whitespace_separated_terms(tmp_path: Path) -> None:
     """
     空白区切りの複数語は AND 条件として検索する。

@@ -4,6 +4,7 @@
 """
 
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -64,6 +65,69 @@ def test_unchanged_files_are_skipped_on_reindex(tmp_path: Path) -> None:
     # indexed_at が変わっていないことで、スキップされたことを確認
     row = connection.execute("SELECT indexed_at FROM files WHERE file_name = 'stable.md'").fetchone()
     assert row["indexed_at"] == first_indexed_at
+
+
+def test_needs_refresh_when_japanese_bigram_segment_is_missing(tmp_path: Path) -> None:
+    """
+    旧インデックスに日本語 bi-gram 補助セグメントがない場合は再インデックスする。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    note_path = target / "sushi.md"
+    note_path.write_text("今日はお寿司が食べたい。", encoding="utf-8")
+
+    target_row = service._ensure_target(
+        full_path=str(target),
+        exclude_keywords="",
+        index_depth=5,
+        selected_extensions="",
+    )
+    indexed_at = datetime.now(UTC).isoformat()
+    cursor = connection.execute(
+        """
+        INSERT INTO files(
+            full_path, normalized_path, file_name, file_ext, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+        """,
+        (
+            note_path.as_posix(),
+            note_path.as_posix(),
+            note_path.name,
+            note_path.suffix.lower(),
+            note_path.stat().st_mtime,
+            note_path.stat().st_size,
+            indexed_at,
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO file_segments(file_id, segment_type, segment_label, content)
+        VALUES (?, 'body', ?, ?)
+        """,
+        (int(cursor.lastrowid), note_path.as_posix(), "今日はお寿司が食べたい。"),
+    )
+    service._mark_target_indexed(
+        int(target_row["id"]),
+        exclude_keywords="",
+        index_depth=5,
+        selected_extensions="",
+    )
+
+    refreshed_target = service._ensure_target(
+        full_path=str(target),
+        exclude_keywords="",
+        index_depth=5,
+        selected_extensions="",
+    )
+    assert service._needs_refresh(
+        refreshed_target,
+        refresh_window_minutes=60,
+        exclude_keywords="",
+        index_depth=5,
+        selected_extensions="",
+    )
 
 
 def test_deleted_files_are_removed_from_index(tmp_path: Path) -> None:

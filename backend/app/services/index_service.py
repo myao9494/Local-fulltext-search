@@ -24,6 +24,7 @@ from fastapi import HTTPException, status
 from app.db.connection import get_connection
 from app.extractors.text_extractor import extract_text, normalize_extension_filter, supports_content_extraction
 from app.models.indexing import FailedFileItem, FailedFileListResponse, IndexStatusResponse
+from app.services.cjk_bigram import build_cjk_bigram_index_content, has_cjk_bigram_tokens
 from app.services.path_service import get_descendant_path_prefix, get_descendant_path_range, normalize_path
 
 
@@ -201,6 +202,8 @@ class IndexService:
         if int(target.get("index_depth") or 0) != index_depth:
             return True
         if str(target.get("selected_extensions") or "") != selected_extensions:
+            return True
+        if self._needs_cjk_bigram_backfill(str(target["full_path"])):
             return True
         indexed_at = datetime.fromisoformat(str(last_indexed_at))
         elapsed_seconds = (datetime.now(UTC) - indexed_at).total_seconds()
@@ -448,6 +451,37 @@ class IndexService:
                 """,
                 (file_id, "body", candidate.normalized_path, content),
             )
+            cjk_bigram_content = build_cjk_bigram_index_content(content)
+            if cjk_bigram_content:
+                self.connection.execute(
+                    """
+                    INSERT INTO file_segments(file_id, segment_type, segment_label, content)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (file_id, "cjk_bigram", candidate.normalized_path, cjk_bigram_content),
+                )
+
+    def _needs_cjk_bigram_backfill(self, root_path: str) -> bool:
+        """
+        旧インデックスに日本語 bi-gram 補助セグメントがない場合は再インデックスする。
+        """
+        prefix_start, prefix_end = get_descendant_path_range(root_path)
+        cursor = self.connection.execute(
+            """
+            SELECT body.content
+            FROM files
+            JOIN file_segments AS body
+              ON body.file_id = files.id
+             AND body.segment_type = 'body'
+            LEFT JOIN file_segments AS cjk_bigram
+              ON cjk_bigram.file_id = files.id
+             AND cjk_bigram.segment_type = 'cjk_bigram'
+            WHERE files.normalized_path >= ? AND files.normalized_path < ?
+              AND cjk_bigram.id IS NULL
+            """,
+            (prefix_start, prefix_end),
+        )
+        return any(has_cjk_bigram_tokens(str(row["content"])) for row in cursor)
 
     def _record_file_error(self, path: Path, error: Exception) -> None:
         normalized_path = path.resolve().as_posix()

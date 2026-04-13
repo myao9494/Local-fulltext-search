@@ -359,28 +359,53 @@ h1, h2, h3 {
   background: rgba(0, 0, 0, 0.3);
   padding: 10px 14px;
   border-radius: 8px;
-  word-break: break-all;
   margin: 0 0 10px;
-}
-
-.result-path-button {
-  width: 100%;
-  border: 0;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
 
-.result-path-button:hover {
-  background: rgba(0, 0, 0, 0.4);
+.result-path-text {
+  margin: 0;
+  min-width: 0;
+  flex: 1;
+  color: inherit;
+  word-break: break-all;
+  white-space: break-spaces;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 
-.result-path-button span:first-child {
-  min-width: 0;
+.result-path-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.result-copy-button {
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  padding: 8px 14px;
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+
+.result-copy-button:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.24);
+  transform: translateY(-1px);
+}
+
+.result-copy-button:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3);
 }
 
 .result-path-status {
@@ -507,6 +532,13 @@ h1, h2, h3 {
   }
   .path-picker-row {
     grid-template-columns: 1fr;
+  }
+  .result-path {
+    flex-direction: column;
+  }
+  .result-path-actions {
+    width: 100%;
+    justify-content: space-between;
   }
   .search-input {
     width: 100%;

@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 
 from app.db.connection import get_connection
 from app.models.search import SearchQueryParams, SearchResponse, SearchResultItem
+from app.services.cjk_bigram import build_cjk_bigram_match_query
 from app.services.index_service import IndexService
 from app.services.path_service import get_descendant_path_prefix, get_descendant_path_range, normalize_path, normalize_path_str
 
@@ -64,30 +65,71 @@ class SearchService:
 
         normalized_query = params.q.strip()
         escaped_query = self._escape_like_pattern(normalized_query.lower())
-        fts_query = self._build_fts_match_query(normalized_query)
-        query_values = [*values, fts_query, *values, f"%{escaped_query}%", params.limit, params.offset]
-        rows = self.connection.execute(
+        body_fts_query = self._build_fts_match_query(normalized_query)
+        cjk_bigram_query = build_cjk_bigram_match_query(normalized_query)
+
+        matched_queries = [
             f"""
-            WITH matched_files AS (
                 SELECT
                     files.id AS file_id,
                     0 AS match_rank,
                     bm25(file_segments_fts) AS score,
-                    snippet(file_segments_fts, 0, '<mark>', '</mark>', ' ... ', 36) AS snippet
+                    snippet(file_segments_fts, 0, '<mark>', '</mark>', ' ... ', 36) AS snippet,
+                    file_segments.segment_type AS segment_type,
+                    NULL AS body_content
                 FROM file_segments_fts
                 JOIN file_segments ON file_segments.id = file_segments_fts.rowid
                 JOIN files ON files.id = file_segments.file_id
-                WHERE {where_clause} AND file_segments_fts MATCH ?
+                WHERE {where_clause}
+                  AND file_segments.segment_type = 'body'
+                  AND file_segments_fts MATCH ?
+            """,
+        ]
+        query_values: list[object] = [*values, body_fts_query]
 
-                UNION ALL
-
+        if cjk_bigram_query is not None:
+            matched_queries.append(
+                f"""
                 SELECT
                     files.id AS file_id,
                     1 AS match_rank,
+                    bm25(file_segments_fts) AS score,
+                    NULL AS snippet,
+                    file_segments.segment_type AS segment_type,
+                    body_segments.content AS body_content
+                FROM file_segments_fts
+                JOIN file_segments ON file_segments.id = file_segments_fts.rowid
+                JOIN files ON files.id = file_segments.file_id
+                JOIN file_segments AS body_segments
+                  ON body_segments.file_id = files.id
+                 AND body_segments.segment_type = 'body'
+                WHERE {where_clause}
+                  AND file_segments.segment_type = 'cjk_bigram'
+                  AND file_segments_fts MATCH ?
+                """
+            )
+            query_values.extend([*values, cjk_bigram_query])
+
+        matched_queries.append(
+            f"""
+                SELECT
+                    files.id AS file_id,
+                    2 AS match_rank,
                     1000000.0 AS score,
-                    NULL AS snippet
+                    NULL AS snippet,
+                    'filename' AS segment_type,
+                    NULL AS body_content
                 FROM files
                 WHERE {where_clause} AND lower(files.file_name) LIKE ? ESCAPE '\\'
+            """
+        )
+        query_values.extend([*values, f"%{escaped_query}%"])
+        query_values.extend([params.limit, params.offset])
+
+        rows = self.connection.execute(
+            f"""
+            WITH matched_files AS (
+                {" UNION ALL ".join(matched_queries)}
             ),
             ranked_matches AS (
                 SELECT
@@ -95,6 +137,8 @@ class SearchService:
                     match_rank,
                     score,
                     snippet,
+                    segment_type,
+                    body_content,
                     ROW_NUMBER() OVER (PARTITION BY file_id ORDER BY match_rank, score, file_id) AS rn
                 FROM matched_files
             ),
@@ -113,6 +157,8 @@ class SearchService:
                     files.file_ext,
                     files.mtime,
                     filtered.snippet,
+                    filtered.segment_type,
+                    filtered.body_content,
                     filtered.match_rank,
                     filtered.score
                 FROM filtered
@@ -127,6 +173,8 @@ class SearchService:
                 paged_matches.file_ext,
                 paged_matches.mtime,
                 paged_matches.snippet,
+                paged_matches.segment_type,
+                paged_matches.body_content,
                 total_count.total
             FROM total_count
             LEFT JOIN paged_matches ON 1 = 1
@@ -144,7 +192,13 @@ class SearchService:
                 full_path=str(row["normalized_path"]),
                 file_ext=str(row["file_ext"]),
                 mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
-                snippet=self._resolve_snippet(snippet=row["snippet"], file_name=str(row["file_name"])),
+                snippet=self._resolve_snippet(
+                    snippet=row["snippet"],
+                    file_name=str(row["file_name"]),
+                    segment_type=str(row["segment_type"] or "filename"),
+                    body_content=row["body_content"],
+                    query=normalized_query,
+                ),
             )
             for row in rows
             if row["file_id"] is not None
@@ -229,7 +283,19 @@ class SearchService:
 
         return SearchResponse(total=matched_count, items=items)
 
-    def _resolve_snippet(self, *, snippet: object, file_name: str) -> str:
+    def _resolve_snippet(
+        self,
+        *,
+        snippet: object,
+        file_name: str,
+        segment_type: str = "filename",
+        body_content: object = None,
+        query: str = "",
+    ) -> str:
+        if segment_type == "cjk_bigram":
+            literal_snippet = self._build_literal_snippet(content=str(body_content or ""), query=query)
+            if literal_snippet is not None:
+                return literal_snippet
         if isinstance(snippet, str) and snippet.strip():
             return snippet
         escaped_name = escape(file_name)
@@ -238,6 +304,36 @@ class SearchService:
             " 本文中には検索語の直接一致が見つからなかったため、"
             "ファイル名ベースの候補として表示しています。"
         )
+
+    def _build_literal_snippet(self, *, content: str, query: str) -> str | None:
+        """
+        補助インデックス由来のヒットでは、元本文から素直な部分一致抜粋を組み立てる。
+        """
+        if not content or not query.strip():
+            return None
+
+        match_range: tuple[int, int] | None = None
+        lowered_content = content.lower()
+        for term in (item for item in query.split() if item):
+            start = lowered_content.find(term.lower())
+            if start < 0:
+                continue
+            candidate = (start, start + len(term))
+            if match_range is None or candidate[0] < match_range[0]:
+                match_range = candidate
+
+        if match_range is None:
+            return None
+
+        start, end = match_range
+        snippet_start = max(start - 48, 0)
+        snippet_end = min(end + 48, len(content))
+        prefix = "..." if snippet_start > 0 else ""
+        suffix = "..." if snippet_end < len(content) else ""
+        before = escape(content[snippet_start:start])
+        matched = escape(content[start:end])
+        after = escape(content[end:snippet_end])
+        return f"{prefix}{before}<mark>{matched}</mark>{after}{suffix}"
 
     def _escape_like_pattern(self, value: str) -> str:
         return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
