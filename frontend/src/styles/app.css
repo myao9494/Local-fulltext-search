@@ -221,6 +221,12 @@ h1, h2, h3 {
   transform: translateY(-2px);
 }
 
+.secondary-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+  transform: none;
+}
+
 .secondary-button.danger {
   background: rgba(244, 63, 94, 0.1);
   color: var(--danger);
@@ -522,6 +528,17 @@ h1, h2, h3 {
   background: rgba(239, 68, 68, 0.1);
   border: 1px solid rgba(239, 68, 68, 0.2);
   color: #fca5a5;
+  display: flex;
+  align-items: center;
+}
+
+.notice-banner {
+  margin: 0 auto 32px;
+  padding: 16px 20px;
+  border-radius: 12px;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.24);
+  color: #bfdbfe;
   display: flex;
   align-items: center;
 }

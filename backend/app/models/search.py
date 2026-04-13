@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.services.path_service import AbsolutePathRequiredError, normalize_path
 
 
 class SearchResultItem(BaseModel):
@@ -26,8 +28,20 @@ class SearchQueryParams(BaseModel):
     regex_enabled: bool = False
     types: str | None = None
     exclude_keywords: str | None = None
-    limit: int = Field(default=20, ge=1, le=100)
+    limit: int = Field(default=20, ge=1, le=1000)
     offset: int = Field(default=0, ge=0)
+
+    @field_validator("full_path")
+    @classmethod
+    def validate_full_path_is_absolute(cls, value: str) -> str:
+        """
+        検索対象パスは、現在の作業ディレクトリに依存しない絶対パスだけを受け付ける。
+        """
+        try:
+            normalize_path(value)
+        except AbsolutePathRequiredError as error:
+            raise ValueError("full_path must be an absolute path or Windows UNC path.") from error
+        return value
 
 
 class SearchRequest(SearchQueryParams):

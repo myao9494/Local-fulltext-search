@@ -5,7 +5,15 @@ Windows の UNC パス正規化を検証する。
 
 from pathlib import PureWindowsPath
 
-from app.services.path_service import get_descendant_path_prefix, get_descendant_path_range, normalize_path_str
+import pytest
+
+from app.services.path_service import (
+    AbsolutePathRequiredError,
+    get_descendant_path_prefix,
+    get_descendant_path_range,
+    normalize_path,
+    normalize_path_str,
+)
 
 
 def test_normalize_path_str_preserves_windows_unc_path() -> None:
@@ -31,3 +39,11 @@ def test_descendant_path_helpers_handle_root_paths() -> None:
     assert unix_end.startswith("/")
     assert windows_start == "C:/"
     assert windows_end.startswith("C:/")
+
+
+def test_normalize_path_rejects_relative_paths() -> None:
+    """
+    検索・インデックス対象のパスは相対入力を受け付けない。
+    """
+    with pytest.raises(AbsolutePathRequiredError):
+        normalize_path("docs")

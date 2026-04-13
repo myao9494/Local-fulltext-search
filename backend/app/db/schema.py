@@ -92,13 +92,18 @@ SCHEMA_STATEMENTS: list[str] = [
 
 def initialize_schema(connection: Connection) -> None:
     if _needs_schema_reset(connection):
-        connection.execute("DROP TABLE IF EXISTS file_segments_fts;")
-        connection.execute("DROP TABLE IF EXISTS file_segments;")
-        connection.execute("DROP TABLE IF EXISTS files;")
-        connection.execute("DROP TABLE IF EXISTS failed_files;")
-        connection.execute("DROP TABLE IF EXISTS targets;")
-        connection.execute("DROP TABLE IF EXISTS folders;")
-        connection.execute("DROP TABLE IF EXISTS index_runs;")
+        _drop_managed_schema_objects(connection)
+    for statement in SCHEMA_STATEMENTS:
+        connection.execute(statement)
+    connection.commit()
+
+
+def reset_schema(connection: Connection) -> None:
+    """
+    管理対象の全テーブルと FTS を削除し、空のスキーマを再作成する。
+    共有接続を維持したまま DB を初期化したいときに使う。
+    """
+    _drop_managed_schema_objects(connection)
     for statement in SCHEMA_STATEMENTS:
         connection.execute(statement)
     connection.commit()
@@ -142,6 +147,19 @@ def _needs_schema_reset(connection: Connection) -> bool:
         or file_columns != expected_file_columns
         or failed_file_columns != expected_failed_file_columns
     )
+
+
+def _drop_managed_schema_objects(connection: Connection) -> None:
+    """
+    アプリが管理するテーブル・FTS・旧テーブルをまとめて削除する。
+    """
+    connection.execute("DROP TABLE IF EXISTS file_segments_fts;")
+    connection.execute("DROP TABLE IF EXISTS file_segments;")
+    connection.execute("DROP TABLE IF EXISTS files;")
+    connection.execute("DROP TABLE IF EXISTS failed_files;")
+    connection.execute("DROP TABLE IF EXISTS targets;")
+    connection.execute("DROP TABLE IF EXISTS folders;")
+    connection.execute("DROP TABLE IF EXISTS index_runs;")
 
 
 def _get_columns(connection: Connection, table_name: str) -> set[str]:

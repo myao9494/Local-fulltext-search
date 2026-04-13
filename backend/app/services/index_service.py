@@ -22,10 +22,16 @@ from sqlite3 import Connection
 from fastapi import HTTPException, status
 
 from app.db.connection import get_connection
+from app.db.schema import reset_schema
 from app.extractors.text_extractor import extract_text, normalize_extension_filter, supports_content_extraction
 from app.models.indexing import FailedFileItem, FailedFileListResponse, IndexStatusResponse
 from app.services.cjk_bigram import build_cjk_bigram_index_content, has_cjk_bigram_tokens
-from app.services.path_service import get_descendant_path_prefix, get_descendant_path_range, normalize_path
+from app.services.path_service import (
+    AbsolutePathRequiredError,
+    get_descendant_path_prefix,
+    get_descendant_path_range,
+    normalize_path,
+)
 
 
 @dataclass(frozen=True)
@@ -44,6 +50,15 @@ class IndexedFileCandidate:
 class IndexService:
     def __init__(self, connection: Connection | None = None) -> None:
         self.connection = connection or get_connection()
+
+    def reset_database(self) -> None:
+        """
+        インデックス DB を空の初期状態へ戻す。
+        検索結果・対象キャッシュ・失敗履歴をすべて削除し、スキーマだけを再作成する。
+        """
+        if self._is_running():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Indexing is already running.")
+        reset_schema(self.connection)
 
     def ensure_fresh_target(
         self,
@@ -148,7 +163,13 @@ class IndexService:
         index_depth: int,
         selected_extensions: str,
     ) -> dict[str, object]:
-        normalized_path = normalize_path(full_path)
+        try:
+            normalized_path = normalize_path(full_path)
+        except AbsolutePathRequiredError as error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Folder path must be an absolute path or Windows UNC path.",
+            ) from error
         if not normalized_path.exists() or not normalized_path.is_dir():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Folder path must be an existing directory.")
 

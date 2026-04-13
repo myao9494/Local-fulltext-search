@@ -77,6 +77,8 @@ def test_search_matches_mixed_ascii_and_japanese_terms(tmp_path: Path) -> None:
 
     assert result.total == 1
     assert [item.file_name for item in result.items] == ["mixed.md"]
+    assert "<mark>lunch</mark>" in result.items[0].snippet
+    assert "<mark>寿司</mark>" in result.items[0].snippet
 
 
 def test_search_requires_all_whitespace_separated_terms(tmp_path: Path) -> None:
@@ -124,6 +126,31 @@ def test_search_preserves_total_when_offset_page_is_empty(tmp_path: Path) -> Non
 
     assert result.total == 1
     assert result.items == []
+
+
+def test_search_supports_large_limit_values(tmp_path: Path) -> None:
+    """
+    file_manager 連携のため、100件を超える limit でも検索結果を返せる。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+
+    for index in range(150):
+        (target / f"memo_{index:03d}.md").write_text("alpha memo", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(target),
+            index_depth=5,
+            refresh_window_minutes=60,
+            limit=150,
+        )
+    )
+
+    assert result.total == 150
+    assert len(result.items) == 150
 
 
 def test_search_supports_regex_mode_for_content_matches(tmp_path: Path) -> None:

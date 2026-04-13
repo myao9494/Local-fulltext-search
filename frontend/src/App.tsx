@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { fetchFailedFiles, fetchIndexStatus, pickFolder, search } from "./api/client";
+import { fetchFailedFiles, fetchIndexStatus, pickFolder, resetDatabase, search } from "./api/client";
 import { ResultsList } from "./components/ResultsList";
 import { SearchBar } from "./components/SearchBar";
 import { parseLaunchParams, shouldAutoSearch } from "./launchParams";
@@ -77,12 +77,15 @@ function App() {
   const [failedFiles, setFailedFiles] = useState<FailedFile[]>([]);
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
+  const [noticeMessage, setNoticeMessage] = useState("");
   const [isSearching, setIsSearching] = useState(false);
+  const [isResettingDatabase, setIsResettingDatabase] = useState(false);
 
   async function loadInitialData(): Promise<void> {
     try {
       setIndexStatus(await fetchIndexStatus());
     } catch (error) {
+      setNoticeMessage("");
       setErrorMessage(error instanceof Error ? error.message : "初期データ取得に失敗しました。");
     }
   }
@@ -144,6 +147,7 @@ function App() {
     try {
       setIsSearching(true);
       setErrorMessage("");
+      setNoticeMessage("");
       const response = await search({
         q: query,
         full_path: fullPath,
@@ -174,7 +178,9 @@ function App() {
       const payload = await pickFolder();
       setFullPath(payload.full_path ?? "");
       setErrorMessage("");
+      setNoticeMessage("");
     } catch (error) {
+      setNoticeMessage("");
       setErrorMessage(error instanceof Error ? error.message : "フォルダ選択に失敗しました。");
     }
   }
@@ -199,8 +205,43 @@ function App() {
       const response = await fetchFailedFiles();
       setFailedFiles(response.items);
       setErrorMessage("");
+      setNoticeMessage("");
     } catch (error) {
+      setNoticeMessage("");
       setErrorMessage(error instanceof Error ? error.message : "失敗したファイル一覧の取得に失敗しました。");
+    }
+  }
+
+  /**
+   * 利用者の確認後にインデックス DB を空へ戻し、画面の一覧とステータスも初期状態へそろえる。
+   */
+  async function handleResetDatabase(): Promise<void> {
+    if (isResettingDatabase) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "データベースを初期化します。\n検索インデックス、対象キャッシュ、失敗履歴がすべて消えます。続行しますか？",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setIsResettingDatabase(true);
+      setErrorMessage("");
+      setNoticeMessage("");
+      const response = await resetDatabase();
+      setResults([]);
+      setFailedFiles([]);
+      setIsFailedFilesOpen(false);
+      setIndexStatus(response.status);
+      setNoticeMessage("データベースを初期化しました。必要なら再検索すると再インデックスされます。");
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "データベースの初期化に失敗しました。");
+    } finally {
+      setIsResettingDatabase(false);
     }
   }
 
@@ -224,6 +265,7 @@ function App() {
       </header>
 
       {errorMessage ? <div className="error-banner">{errorMessage}</div> : null}
+      {noticeMessage ? <div className="notice-banner">{noticeMessage}</div> : null}
 
       <main className="content-grid">
         <section>
@@ -322,6 +364,20 @@ function App() {
               <div className="form-help">
                 1行1キーワードで入力します。`.git` や `node_modules`、`old`、`旧`、Python / React 開発で不要になりやすい
                 キャッシュやビルド成果物を既定で除外します。
+              </div>
+
+              <div className="extension-panel">
+                <button
+                  className="secondary-button danger"
+                  onClick={() => void handleResetDatabase()}
+                  type="button"
+                  disabled={isResettingDatabase}
+                >
+                  {isResettingDatabase ? "初期化中..." : "データベースを初期化"}
+                </button>
+                <div className="form-help">
+                  検索インデックス、対象キャッシュ、失敗履歴を空に戻します。次回検索時に必要な範囲だけ再作成します。
+                </div>
               </div>
 
               <hr className="divider" />

@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 from app.db.schema import initialize_schema
 from app.services.index_service import IndexService
 
@@ -288,6 +290,58 @@ def test_index_depth_limits_recursive_walk(tmp_path: Path) -> None:
 
     indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
     assert [row["file_name"] for row in indexed_files] == ["child.md", "root.md"]
+
+
+def test_index_rejects_relative_full_path(tmp_path: Path) -> None:
+    """
+    インデックス対象 full_path は相対パスを受け付けず 400 系エラーにする。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+
+    with patch.object(service, "_update_status"), patch.object(service, "_is_running", return_value=False):
+        try:
+            service.ensure_fresh_target(full_path="docs", refresh_window_minutes=0)
+        except HTTPException as error:
+            assert error.status_code == 400
+            assert "absolute path" in str(error.detail).lower()
+        else:
+            raise AssertionError("HTTPException was not raised for relative full_path")
+
+
+def test_reset_database_clears_indexed_files_targets_and_failures(tmp_path: Path) -> None:
+    """
+    DB 初期化を実行すると、インデックス済みデータと失敗履歴を空に戻し、ステータスも初期化する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "note.md").write_text("searchable memo", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+    connection.execute(
+        """
+        INSERT INTO failed_files(normalized_path, file_name, error_message, last_failed_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (str(target / "broken.md"), "broken.md", "sample error", datetime.now(UTC).isoformat()),
+    )
+    connection.commit()
+
+    service.reset_database()
+
+    assert connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"] == 0
+    assert connection.execute("SELECT COUNT(*) AS count FROM file_segments").fetchone()["count"] == 0
+    assert connection.execute("SELECT COUNT(*) AS count FROM targets").fetchone()["count"] == 0
+    assert connection.execute("SELECT COUNT(*) AS count FROM failed_files").fetchone()["count"] == 0
+
+    status = service.get_status()
+    assert status.total_files == 0
+    assert status.error_count == 0
+    assert status.is_running is False
+    assert status.last_started_at is None
+    assert status.last_finished_at is None
 
 
 def test_selected_types_limit_indexed_extensions_and_include_filename_only_files(tmp_path: Path) -> None:

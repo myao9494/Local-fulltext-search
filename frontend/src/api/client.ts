@@ -43,6 +43,13 @@ export async function fetchFailedFiles(): Promise<FailedFileListResponse> {
   return request<FailedFileListResponse>("/api/index/failed-files");
 }
 
+export async function resetDatabase(): Promise<{ message: string; status: IndexStatus }> {
+  return request<{ message: string; status: IndexStatus }>("/api/index/reset", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export async function pickFolder(): Promise<{ full_path: string }> {
   return request<{ full_path: string }>("/api/folders/pick", {
     method: "POST",

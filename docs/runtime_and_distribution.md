@@ -86,6 +86,7 @@ cd backend
 - `http://127.0.0.1:8079/?q=見積&full_path=%2FUsers%2Fmine%2FDocuments&index_depth=2`
 - `q` と `full_path` の両方があると初回表示時に自動検索する
 - `index_depth` を省略した場合は `5`
+- `full_path` は絶対パス、または Windows の UNC パスを使う
 
 ### 別端末からアクセスさせたい場合
 
@@ -111,6 +112,7 @@ $env:SEARCH_APP_PORT="8079"
 
 - Host: `127.0.0.1`
 - Port: `8079`
+- DB 保存先: 起動ディレクトリに依存せず `backend/data/search.db`
 
 ## Git 管理方針
 

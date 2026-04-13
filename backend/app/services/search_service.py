@@ -76,7 +76,7 @@ class SearchService:
                     bm25(file_segments_fts) AS score,
                     snippet(file_segments_fts, 0, '<mark>', '</mark>', ' ... ', 36) AS snippet,
                     file_segments.segment_type AS segment_type,
-                    NULL AS body_content
+                    file_segments.content AS body_content
                 FROM file_segments_fts
                 JOIN file_segments ON file_segments.id = file_segments_fts.rowid
                 JOIN files ON files.id = file_segments.file_id
@@ -292,6 +292,10 @@ class SearchService:
         body_content: object = None,
         query: str = "",
     ) -> str:
+        if segment_type == "body":
+            literal_snippet = self._build_literal_snippet(content=str(body_content or ""), query=query)
+            if literal_snippet is not None:
+                return literal_snippet
         if segment_type == "cjk_bigram":
             literal_snippet = self._build_literal_snippet(content=str(body_content or ""), query=query)
             if literal_snippet is not None:
@@ -307,33 +311,38 @@ class SearchService:
 
     def _build_literal_snippet(self, *, content: str, query: str) -> str | None:
         """
-        補助インデックス由来のヒットでは、元本文から素直な部分一致抜粋を組み立てる。
+        本文ヒットでは、検索語をなるべく同じ抜粋に含めてハイライト表示する。
         """
         if not content or not query.strip():
             return None
 
-        match_range: tuple[int, int] | None = None
         lowered_content = content.lower()
+        term_ranges: list[tuple[int, int]] = []
         for term in (item for item in query.split() if item):
             start = lowered_content.find(term.lower())
             if start < 0:
                 continue
-            candidate = (start, start + len(term))
-            if match_range is None or candidate[0] < match_range[0]:
-                match_range = candidate
+            term_ranges.append((start, start + len(term)))
 
-        if match_range is None:
+        if not term_ranges:
             return None
 
-        start, end = match_range
+        start = min(item[0] for item in term_ranges)
+        end = max(item[1] for item in term_ranges)
         snippet_start = max(start - 48, 0)
         snippet_end = min(end + 48, len(content))
         prefix = "..." if snippet_start > 0 else ""
         suffix = "..." if snippet_end < len(content) else ""
-        before = escape(content[snippet_start:start])
-        matched = escape(content[start:end])
-        after = escape(content[end:snippet_end])
-        return f"{prefix}{before}<mark>{matched}</mark>{after}{suffix}"
+        snippet_text = content[snippet_start:snippet_end]
+        highlighted = escape(snippet_text)
+        for term in sorted({item for item in query.split() if item}, key=len, reverse=True):
+            highlighted = re.sub(
+                re.escape(escape(term)),
+                lambda match: f"<mark>{match.group(0)}</mark>",
+                highlighted,
+                flags=re.IGNORECASE,
+            )
+        return f"{prefix}{highlighted}{suffix}"
 
     def _escape_like_pattern(self, value: str) -> str:
         return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

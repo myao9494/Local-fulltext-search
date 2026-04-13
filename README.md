@@ -333,8 +333,7 @@ DB について:
 - DB ファイルは配布していない
 - バックエンド起動時に `data` ディレクトリが自動作成される
 - スキーマはアプリ起動時に自動作成される
-- 既定の DB パスは `backend/data/search.db` ではなく、バックエンドのカレントディレクトリ基準の `data/search.db`
-- `backend/run.py` を `backend/` で起動した場合は `backend/data/search.db` に作られる
+- 既定の DB パスは、起動ディレクトリに依存せず常に `backend/data/search.db`
 - 保存先を変えたい場合は `SEARCH_APP_DATA_DIR` と `SEARCH_APP_DB_NAME` で上書きできる
 
 例:
@@ -370,6 +369,7 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 
 - `q`
 - `full_path`
+  - 絶対パス、または Windows の UNC パスを指定する
 - `index_depth`
 
 任意:
@@ -411,6 +411,7 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 ## 実装メモ
 
 - パス処理は `pathlib` を使用
+- 検索対象の `full_path` は相対パスを受け付けず、絶対パス / UNC パスのみ扱う
 - 保存時は正規化したパスを `as_posix()` で保持
 - 差分更新は `mtime` と `size` で判定
 - 削除ファイルは DB から自動削除
