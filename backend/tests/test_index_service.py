@@ -90,8 +90,11 @@ def test_deleted_files_are_removed_from_index(tmp_path: Path) -> None:
     remaining = connection.execute("SELECT file_name FROM files").fetchone()
     assert remaining["file_name"] == "keep.md"
 
-    # file_segments と FTS からも削除されていること（カスケード削除）
+    # file_segments と FTS からも削除されていること
     assert connection.execute("SELECT COUNT(*) AS count FROM file_segments").fetchone()["count"] == 1
+    # FTS5 にゴーストレコードが残っていないこと
+    fts_count = connection.execute("SELECT COUNT(*) AS count FROM file_segments_fts").fetchone()["count"]
+    assert fts_count == 1
 
 
 def test_exclude_keywords_skip_directories(tmp_path: Path) -> None:
@@ -245,6 +248,31 @@ def test_selected_types_limit_indexed_extensions_and_include_filename_only_files
     indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
     assert [row["file_name"] for row in indexed_files] == ["diagram.png", "note.md"]
     assert connection.execute("SELECT COUNT(*) AS count FROM file_segments").fetchone()["count"] == 1
+
+
+def test_root_path_range_query_handles_filesystem_root(tmp_path: Path) -> None:
+    """
+    範囲クエリ最適化後も、ルートディレクトリ配下の既存レコードを正しく取得・削除できる。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+
+    connection.execute(
+        """
+        INSERT INTO files(
+            full_path, normalized_path, file_name, file_ext, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+        """,
+        ("/tmp/example.md", "/tmp/example.md", "example.md", ".md", 0.0, 10, "2026-04-13T00:00:00+00:00"),
+    )
+    connection.commit()
+
+    loaded = service._load_existing_files("/")
+    assert "/tmp/example.md" in loaded
+
+    service._remove_deleted_files(set(), root_path="/")
+    remaining = connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()
+    assert remaining["count"] == 0
 
 
 def _create_connection(tmp_path: Path) -> sqlite3.Connection:

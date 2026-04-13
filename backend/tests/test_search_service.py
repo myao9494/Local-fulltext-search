@@ -228,6 +228,49 @@ def test_search_matches_filename_only_image_in_regex_mode(tmp_path: Path) -> Non
     assert [item.file_name for item in result.items] == ["architecture-overview.png"]
 
 
+def test_search_root_target_respects_depth_filter(tmp_path: Path) -> None:
+    """
+    ルートディレクトリ対象でも index_depth に応じて検索範囲を正しく絞り込む。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
+    timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
+    connection.execute(
+        """
+        INSERT INTO files(
+            full_path, normalized_path,
+            file_name, file_ext, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+        """,
+        ("/match-root.md", "/match-root.md", "match-root.md", ".md", timestamp, 12, indexed_at),
+    )
+    connection.execute(
+        """
+        INSERT INTO files(
+            full_path, normalized_path,
+            file_name, file_ext, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+        """,
+        ("/tmp/match-nested.md", "/tmp/match-nested.md", "match-nested.md", ".md", timestamp, 12, indexed_at),
+    )
+    connection.commit()
+
+    result = service.search(
+        SearchQueryParams(
+            q="match",
+            full_path="/",
+            index_depth=0,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.full_path for item in result.items] == ["/match-root.md"]
+
+
 def _create_connection(tmp_path: Path) -> Connection:
     """
     テストごとの一時 SQLite 接続を作成する。

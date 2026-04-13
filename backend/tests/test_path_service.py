@@ -5,7 +5,7 @@ Windows の UNC パス正規化を検証する。
 
 from pathlib import PureWindowsPath
 
-from app.services.path_service import normalize_path_str
+from app.services.path_service import get_descendant_path_prefix, get_descendant_path_range, normalize_path_str
 
 
 def test_normalize_path_str_preserves_windows_unc_path() -> None:
@@ -15,3 +15,19 @@ def test_normalize_path_str_preserves_windows_unc_path() -> None:
     raw_path = r"\\hikoka\sss\日報"
 
     assert normalize_path_str(raw_path) == PureWindowsPath(raw_path).as_posix()
+
+
+def test_descendant_path_helpers_handle_root_paths() -> None:
+    """
+    ルートディレクトリでも子孫パス用の接頭辞・範囲境界を壊さず生成する。
+    """
+    assert get_descendant_path_prefix("/") == "/"
+    assert get_descendant_path_prefix("C:/") == "C:/"
+
+    unix_start, unix_end = get_descendant_path_range("/")
+    windows_start, windows_end = get_descendant_path_range("C:/")
+
+    assert unix_start == "/"
+    assert unix_end.startswith("/")
+    assert windows_start == "C:/"
+    assert windows_end.startswith("C:/")

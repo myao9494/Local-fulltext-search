@@ -1,6 +1,13 @@
 """
 インデックス更新サービス。
 走査範囲を index_depth と対象拡張子で絞り込み、本文抽出だけを並列化して SQLite 書き込みは直列で行う。
+
+高速化:
+- os.scandir の再帰走査でエントリ名のみ除外チェック（親パーツの冗長なチェックを省略）
+- I/Oバウンド対応でワーカー数上限を引き上げ
+- _clear_failed_file の個別呼び出しを廃止し一括処理に統合
+- 既存ファイル検索を LIKE から範囲クエリに変更しインデックス活用
+- CASCADE 削除時に FTS5 トリガーを確実に発火させるための明示的 DELETE
 """
 
 from __future__ import annotations
@@ -17,7 +24,7 @@ from fastapi import HTTPException, status
 from app.db.connection import get_connection
 from app.extractors.text_extractor import extract_text, normalize_extension_filter, supports_content_extraction
 from app.models.indexing import FailedFileItem, FailedFileListResponse, IndexStatusResponse
-from app.services.path_service import normalize_path
+from app.services.path_service import get_descendant_path_prefix, get_descendant_path_range, normalize_path
 
 
 @dataclass(frozen=True)
@@ -243,7 +250,6 @@ class IndexService:
 
                 if self._can_skip_existing_file(existing, stat):
                     file_count += 1
-                    self._clear_failed_file(normalized_path)
                     continue
 
                 candidate = IndexedFileCandidate(
@@ -281,9 +287,10 @@ class IndexService:
     def _resolve_extract_worker_count(self) -> int:
         """
         本文抽出スレッド数を CPU 数に応じて上限付きで決める。
+        I/Oバウンドタスクが支配的なため、CPU数の2倍（上限16）を使用する。
         """
         cpu_count = os.cpu_count() or 4
-        return max(2, min(8, cpu_count))
+        return max(2, min(16, cpu_count * 2))
 
     def _drain_pending_futures(
         self,
@@ -323,14 +330,16 @@ class IndexService:
     def _load_existing_files(self, root_path: str) -> dict[str, dict[str, object]]:
         """
         対象ルート配下の既存メタデータを一括取得し、差分判定を高速化する。
+        LIKE の代わりに範囲クエリを使い B-tree インデックスを活用する。
         """
+        prefix_start, prefix_end = get_descendant_path_range(root_path)
         rows = self.connection.execute(
             """
             SELECT id, normalized_path, mtime, size, last_error
             FROM files
-            WHERE normalized_path LIKE ?
+            WHERE normalized_path >= ? AND normalized_path < ?
             """,
-            (f"{root_path}/%",),
+            (prefix_start, prefix_end),
         ).fetchall()
         return {str(row["normalized_path"]): dict(row) for row in rows}
 
@@ -361,14 +370,14 @@ class IndexService:
         try:
             with os.scandir(root) as entries:
                 for entry in entries:
-                    path = Path(entry.path)
-                    if self._should_exclude_path_with_keywords(path, keyword_set, non_ascii_keywords):
+                    # 再帰走査なので親パーツは既にチェック済み。現在のエントリ名だけで判定する
+                    if self._is_excluded_name(entry.name, keyword_set, non_ascii_keywords):
                         continue
 
                     if entry.is_dir(follow_symlinks=False):
                         if current_depth < max_depth:
                             yield from self._walk_files(
-                                path,
+                                Path(entry.path),
                                 keyword_set,
                                 non_ascii_keywords,
                                 allowed_extensions=allowed_extensions,
@@ -377,8 +386,10 @@ class IndexService:
                             )
                         continue
 
-                    if entry.is_file(follow_symlinks=False) and path.suffix.lower() in allowed_extensions:
-                        yield path
+                    if entry.is_file(follow_symlinks=False):
+                        suffix = os.path.splitext(entry.name)[1].lower()
+                        if suffix in allowed_extensions:
+                            yield Path(entry.path)
         except PermissionError:
             pass
 
@@ -407,6 +418,7 @@ class IndexService:
                     file_id,
                 ),
             )
+            # 明示的 DELETE で FTS5 の AFTER DELETE トリガーを確実に発火させる
             self.connection.execute("DELETE FROM file_segments WHERE file_id = ?", (file_id,))
         else:
             cursor = self.connection.execute(
@@ -436,7 +448,6 @@ class IndexService:
                 """,
                 (file_id, "body", candidate.normalized_path, content),
             )
-        self._clear_failed_file(candidate.normalized_path)
 
     def _record_file_error(self, path: Path, error: Exception) -> None:
         normalized_path = path.resolve().as_posix()
@@ -467,11 +478,12 @@ class IndexService:
     def _remove_deleted_files(self, normalized_paths: set[str], *, root_path: str) -> None:
         """
         DB 上に存在するが今回の走査範囲に含まれなくなったレコードをバッチ削除する。
+        file_segments を先に明示的に DELETE して FTS5 トリガーを発火させてから files を削除する。
         """
-        prefix = f"{root_path}/%"
+        prefix_start, prefix_end = get_descendant_path_range(root_path)
         rows = self.connection.execute(
-            "SELECT id, normalized_path FROM files WHERE normalized_path LIKE ?",
-            (prefix,),
+            "SELECT id, normalized_path FROM files WHERE normalized_path >= ? AND normalized_path < ?",
+            (prefix_start, prefix_end),
         ).fetchall()
         deleted_ids = [int(row["id"]) for row in rows if row["normalized_path"] not in normalized_paths]
         if not deleted_ids:
@@ -481,23 +493,24 @@ class IndexService:
         for i in range(0, len(deleted_ids), chunk_size):
             chunk = deleted_ids[i:i + chunk_size]
             placeholders = ",".join("?" * len(chunk))
+            # file_segments を先に削除して FTS5 の AFTER DELETE トリガーを発火させる
+            self.connection.execute(f"DELETE FROM file_segments WHERE file_id IN ({placeholders})", chunk)
             self.connection.execute(f"DELETE FROM files WHERE id IN ({placeholders})", chunk)
         self.connection.commit()
-
-    def _clear_failed_file(self, normalized_path: str) -> None:
-        """
-        再取得に成功したファイルの失敗ログを削除する。
-        """
-        self.connection.execute("DELETE FROM failed_files WHERE normalized_path = ?", (normalized_path,))
 
     def _clear_resolved_failed_files(self, *, root_path: str, failed_paths: set[str]) -> None:
         """
         今回失敗していない過去ログを対象ルート配下から掃除する。
         成功済み・削除済みファイルが一覧に残り続けないようにする。
         """
+        prefix_start, prefix_end = get_descendant_path_range(root_path)
         rows = self.connection.execute(
-            "SELECT normalized_path FROM failed_files WHERE normalized_path LIKE ?",
-            (f"{root_path}/%",),
+            """
+            SELECT normalized_path
+            FROM failed_files
+            WHERE normalized_path >= ? AND normalized_path < ?
+            """,
+            (prefix_start, prefix_end),
         ).fetchall()
         stale_paths = [str(row["normalized_path"]) for row in rows if str(row["normalized_path"]) not in failed_paths]
         if not stale_paths:
@@ -531,12 +544,14 @@ class IndexService:
         """
         現在の対象条件に一致するファイル数を返す。
         """
+        prefix_start, prefix_end = get_descendant_path_range(root_path)
+        descendant_prefix = get_descendant_path_prefix(root_path)
         depth_expression = (
             "(length(normalized_path) - length(replace(normalized_path, '/', '')))"
-            " - (length(?) - length(replace(?, '/', ''))) - 1"
+            " - (length(?) - length(replace(?, '/', '')))"
         )
-        filters = ["normalized_path LIKE ?", f"{depth_expression} <= ?"]
-        values: list[object] = [f"{root_path}/%", root_path, root_path, index_depth]
+        filters = ["normalized_path >= ?", "normalized_path < ?", f"{depth_expression} <= ?"]
+        values: list[object] = [prefix_start, prefix_end, descendant_prefix, descendant_prefix, index_depth]
 
         extensions = sorted(normalize_extension_filter(selected_extensions))
         placeholders = ", ".join("?" for _ in extensions)

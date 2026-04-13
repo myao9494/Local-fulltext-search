@@ -1,3 +1,9 @@
+"""
+アプリケーションエントリポイント。
+起動時にDB接続を共有し、シャットダウン時にクローズする。
+"""
+
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -12,8 +18,18 @@ from app.db.connection import get_connection
 from app.db.schema import initialize_schema
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """起動時にDB接続を共有し、シャットダウン時にクローズする。"""
+    connection = get_connection()
+    initialize_schema(connection)
+    app.state.db_connection = connection
+    yield
+    connection.close()
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title=settings.app_name)
+    app = FastAPI(title=settings.app_name, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -22,18 +38,13 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    connection = get_connection()
-    initialize_schema(connection)
-    # 起動時にスキーマだけ初期化し、リクエスト用の接続は依存性注入で都度生成する
-    connection.close()
+    app.include_router(folders_router)
+    app.include_router(index_router)
+    app.include_router(search_router)
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
-
-    app.include_router(folders_router)
-    app.include_router(index_router)
-    app.include_router(search_router)
 
     frontend_dist = settings.frontend_dist_dir
     index_file = frontend_dist / "index.html"
@@ -58,6 +69,7 @@ def create_app() -> FastAPI:
                 return FileResponse(requested_path)
 
             return FileResponse(index_file)
+
     return app
 
 

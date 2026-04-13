@@ -1,10 +1,11 @@
 """
 API依存性注入のDB接続ライフサイクルを検証する。
-リクエストごとに新しい接続を返し、終了時にクローズすることを担保する。
+アプリケーション共有接続を使い回し、リクエスト終了時にクローズしないことを担保する。
 """
 
 import sqlite3
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -12,29 +13,14 @@ from app.api.deps import get_db_connection
 from app.config import settings
 
 
-def test_get_db_connection_yields_fresh_connection_each_time(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_get_db_connection_returns_shared_connection_from_app_state() -> None:
     """
-    DB接続依存性は呼び出しごとに別インスタンスを返す。
+    app.state.db_connection に保持された共有接続をそのまま返す。
     """
-    monkeypatch.setattr(settings, "data_dir", tmp_path)
-    monkeypatch.setattr(settings, "database_name", "deps.db")
+    mock_request = MagicMock()
+    shared_connection = MagicMock(spec=sqlite3.Connection)
+    mock_request.app.state.db_connection = shared_connection
 
-    dependency_a = get_db_connection()
-    dependency_b = get_db_connection()
-    connection_a = next(dependency_a)
-    connection_b = next(dependency_b)
+    result = get_db_connection(mock_request)
 
-    assert connection_a is not connection_b
-    assert connection_a.execute("SELECT 1").fetchone()[0] == 1
-    assert connection_b.execute("SELECT 1").fetchone()[0] == 1
-
-    dependency_a.close()
-    dependency_b.close()
-
-    with pytest.raises(sqlite3.ProgrammingError):
-        connection_a.execute("SELECT 1")
-    with pytest.raises(sqlite3.ProgrammingError):
-        connection_b.execute("SELECT 1")
+    assert result is shared_connection

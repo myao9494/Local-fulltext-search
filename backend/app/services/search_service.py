@@ -8,7 +8,7 @@ from fastapi import HTTPException, status
 from app.db.connection import get_connection
 from app.models.search import SearchQueryParams, SearchResponse, SearchResultItem
 from app.services.index_service import IndexService
-from app.services.path_service import normalize_path, normalize_path_str
+from app.services.path_service import get_descendant_path_prefix, get_descendant_path_range, normalize_path, normalize_path_str
 
 
 class SearchService:
@@ -265,13 +265,14 @@ class SearchService:
         """
         検索モード共通のパス・階層・拡張子フィルタを組み立てる。
         """
-        path_prefix = f"{normalized_target_path}/%"
+        prefix_start, prefix_end = get_descendant_path_range(normalized_target_path)
+        descendant_prefix = get_descendant_path_prefix(normalized_target_path)
         depth_expression = (
             "(length(files.normalized_path) - length(replace(files.normalized_path, '/', '')))"
-            " - (length(?) - length(replace(?, '/', ''))) - 1"
+            " - (length(?) - length(replace(?, '/', '')))"
         )
-        filters: list[str] = ["files.normalized_path LIKE ?", f"{depth_expression} <= ?"]
-        values: list[object] = [path_prefix, normalized_target_path, normalized_target_path, index_depth]
+        filters: list[str] = ["files.normalized_path >= ?", "files.normalized_path < ?", f"{depth_expression} <= ?"]
+        values: list[object] = [prefix_start, prefix_end, descendant_prefix, descendant_prefix, index_depth]
 
         if types:
             extensions = [item.strip().lower() for item in types.split(",") if item.strip()]

@@ -1,5 +1,5 @@
 r"""
-Windows の UNC パスと通常パスの正規化を扱う。
+Windows の UNC パスと通常パスの正規化、および子孫パス検索用の境界計算を扱う。
 `\\server\share\...` 形式は共有名を壊さずに保持し、検索用文字列では POSIX 風区切りへそろえる。
 """
 
@@ -25,6 +25,23 @@ def normalize_path_str(raw_path: str | Path) -> str:
     if _is_windows_unc_path(raw_value):
         return PureWindowsPath(raw_value).as_posix()
     return normalize_path(raw_path).as_posix()
+
+
+def get_descendant_path_prefix(root_path: str) -> str:
+    """
+    あるディレクトリ配下の子孫パスに限定するための前方一致接頭辞を返す。
+    ルートディレクトリでは `/` や `C:/` を二重スラッシュ化しない。
+    """
+    return root_path if root_path.endswith("/") else f"{root_path}/"
+
+
+def get_descendant_path_range(root_path: str) -> tuple[str, str]:
+    """
+    子孫パスの前方一致を B-tree 範囲検索へ変換する。
+    接頭辞に最大コードポイントを連結し、root パスでも壊れない上限を作る。
+    """
+    prefix = get_descendant_path_prefix(root_path)
+    return prefix, f"{prefix}{chr(0x10FFFF)}"
 
 
 def get_relative_path(root_path: Path, target_path: Path) -> Path:
