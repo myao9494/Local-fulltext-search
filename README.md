@@ -120,10 +120,10 @@ cd /path/to/Local-fulltext-search
 
 このスクリプトの既定値:
 
-- Backend bind: `0.0.0.0:8081`
+- Backend bind: `0.0.0.0:8079`
 - Frontend build: `frontend/dist` を生成
-- App URL: `http://127.0.0.1:8081/` または `http://<host>:8081/`
-- 起動前に `8081` を使用中なら停止してから起動
+- App URL: `http://127.0.0.1:8079/` または `http://<host>:8079/`
+- 起動前に `8079` を使用中なら停止してから起動
 
 この方法は開発用です。  
 `start_dev.sh` は `npm install` / `npm run build` を使うため、Node.js / npm が必要です。
@@ -131,7 +131,7 @@ cd /path/to/Local-fulltext-search
 必要なら環境変数で上書きできます。
 
 ```bash
-BACKEND_HOST=0.0.0.0 BACKEND_PORT=8081 ./start_dev.sh
+BACKEND_HOST=0.0.0.0 BACKEND_PORT=8079 ./start_dev.sh
 ```
 
 同一オリジン配信のため、フロントエンドはバックエンドと同じ URL から配布されます。  
@@ -176,20 +176,20 @@ python run.py
 
 `python run.py` の既定値:
 
-- API: `http://127.0.0.1:8081`
-- Health check: `http://127.0.0.1:8081/api/health`
+- API: `http://127.0.0.1:8079`
+- Health check: `http://127.0.0.1:8079/api/health`
 
 バインドアドレスを変更する場合:
 
 ```bash
-SEARCH_APP_HOST=0.0.0.0 SEARCH_APP_PORT=8081 python run.py
+SEARCH_APP_HOST=0.0.0.0 SEARCH_APP_PORT=8079 python run.py
 ```
 
 Windows PowerShell:
 
 ```powershell
 $env:SEARCH_APP_HOST="0.0.0.0"
-$env:SEARCH_APP_PORT="8081"
+$env:SEARCH_APP_PORT="8079"
 python run.py
 ```
 
@@ -210,7 +210,7 @@ python -m venv .venv
 ```powershell
 cd backend
 $env:SEARCH_APP_HOST="127.0.0.1"
-$env:SEARCH_APP_PORT="8081"
+$env:SEARCH_APP_PORT="8079"
 .venv\Scripts\python.exe run.py
 ```
 
@@ -219,14 +219,14 @@ $env:SEARCH_APP_PORT="8081"
 ```powershell
 cd backend
 $env:SEARCH_APP_HOST="0.0.0.0"
-$env:SEARCH_APP_PORT="8081"
+$env:SEARCH_APP_PORT="8079"
 .venv\Scripts\python.exe run.py
 ```
 
 起動後のアクセス先:
 
-- ローカルPCで使う場合: `http://127.0.0.1:8081/`
-- 別端末から使う場合: `http://<このPCのIPアドレス>:8081/`
+- ローカルPCで使う場合: `http://127.0.0.1:8079/`
+- 別端末から使う場合: `http://<このPCのIPアドレス>:8079/`
 
 ### 2. フロントエンドのビルド
 
@@ -247,16 +247,16 @@ Windows でも同じです。
 開発中に API 接続先だけ変えたい場合は、ビルド時に次のように指定できます。
 
 ```bash
-VITE_API_BASE_URL=http://mac-mini:8081 npm run build
+VITE_API_BASE_URL=http://mac-mini:8079 npm run build
 ```
 
 指定しない場合、フロントエンドは同一オリジンの `/api/...` を参照します。
 
 注意:
 
-- `start_dev.sh` の既定 bind は `0.0.0.0:8081`
-- `python run.py` の既定 bind は `127.0.0.1:8081`
-- どちらも既定ポートは `8081`
+- `start_dev.sh` の既定 bind は `0.0.0.0:8079`
+- `python run.py` の既定 bind は `127.0.0.1:8079`
+- どちらも既定ポートは `8079`
 
 ### 3. 使い方
 
@@ -423,7 +423,7 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 例:
 
 ```text
-http://127.0.0.1:8081/?q=見積&full_path=%2FUsers%2Fmine%2FDocuments&index_depth=2
+http://127.0.0.1:8079/?q=見積&full_path=%2FUsers%2Fmine%2FDocuments&index_depth=2
 ```
 
 Windows で UNC パスを渡す場合も、URL に入れるときは必ず URL エンコードしてください。
@@ -450,7 +450,7 @@ macOS や Linux でバックエンドを動かしている場合、`\\server\sha
 JavaScript / TypeScript:
 
 ```ts
-await fetch("http://127.0.0.1:8081/api/search", {
+await fetch("http://127.0.0.1:8079/api/search", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
@@ -481,7 +481,7 @@ $body = @{
 } | ConvertTo-Json
 
 Invoke-RestMethod `
-  -Uri "http://127.0.0.1:8081/api/search" `
+  -Uri "http://127.0.0.1:8079/api/search" `
   -Method Post `
   -ContentType "application/json; charset=utf-8" `
   -Body $body

@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="${ROOT_DIR}/backend"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
 RUN_DIR="${ROOT_DIR}/.run"
-BACKEND_PORT="${BACKEND_PORT:-8081}"
+BACKEND_PORT="${BACKEND_PORT:-8079}"
 BACKEND_HOST="${BACKEND_HOST:-0.0.0.0}"
 
 mkdir -p "${RUN_DIR}"
