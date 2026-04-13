@@ -5,6 +5,7 @@
 
 import sqlite3
 from pathlib import Path
+from unittest.mock import patch
 
 from app.db.schema import initialize_schema
 from app.services.index_service import IndexService
@@ -161,6 +162,40 @@ def test_index_status_reflects_file_count(tmp_path: Path) -> None:
     assert status.total_files == 5
     assert status.error_count == 0
     assert status.is_running is False
+
+
+def test_index_records_failed_files_and_continues(tmp_path: Path) -> None:
+    """
+    取得失敗したファイルはログへ残しつつ、他のファイルのインデックス処理は継続する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    ok_file = target / "ok.md"
+    ng_file = target / "ng.md"
+    ok_file.write_text("searchable content", encoding="utf-8")
+    ng_file.write_text("broken content", encoding="utf-8")
+
+    original_extract_text = __import__("app.services.index_service", fromlist=["extract_text"]).extract_text
+
+    def fake_extract_text(path: Path) -> str:
+        if path == ng_file:
+            raise OSError("simulated read failure")
+        return original_extract_text(path)
+
+    with patch("app.services.index_service.extract_text", side_effect=fake_extract_text):
+        service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+
+    indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
+    failed_files = connection.execute(
+        "SELECT normalized_path, file_name, error_message FROM failed_files ORDER BY file_name"
+    ).fetchall()
+
+    assert [row["file_name"] for row in indexed_files] == ["ok.md"]
+    assert len(failed_files) == 1
+    assert failed_files[0]["file_name"] == "ng.md"
+    assert "simulated read failure" in failed_files[0]["error_message"]
 
 
 def _create_connection(tmp_path: Path) -> sqlite3.Connection:

@@ -1,5 +1,6 @@
 """
-インデックスAPI エンドポイント。リクエスト単位のDB接続を依存性注入で受け取る。
+インデックスAPI エンドポイント。
+実行状況と失敗ファイル一覧を提供し、UI から確認できるようにする。
 """
 
 from fastapi import APIRouter, Depends
@@ -13,3 +14,8 @@ router = APIRouter(prefix="/api/index", tags=["index"])
 @router.get("/status")
 def get_status(service: IndexService = Depends(get_index_service)) -> dict[str, object]:
     return service.get_status().model_dump()
+
+
+@router.get("/failed-files")
+def get_failed_files(service: IndexService = Depends(get_index_service)) -> dict[str, object]:
+    return service.get_failed_files().model_dump()

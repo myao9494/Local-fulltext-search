@@ -14,3 +14,14 @@ class IndexStatusResponse(BaseModel):
     error_count: int
     is_running: bool
     last_error: str | None
+
+
+class FailedFileItem(BaseModel):
+    normalized_path: str
+    file_name: str
+    error_message: str
+    last_failed_at: datetime
+
+
+class FailedFileListResponse(BaseModel):
+    items: list[FailedFileItem]

@@ -21,3 +21,14 @@ export type IndexStatus = {
   is_running: boolean;
   last_error: string | null;
 };
+
+export type FailedFile = {
+  normalized_path: string;
+  file_name: string;
+  error_message: string;
+  last_failed_at: string;
+};
+
+export type FailedFileListResponse = {
+  items: FailedFile[];
+};

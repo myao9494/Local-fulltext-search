@@ -57,6 +57,15 @@ SCHEMA_STATEMENTS: list[str] = [
     ON CONFLICT(id) DO NOTHING;
     """,
     """
+    CREATE TABLE IF NOT EXISTS failed_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        normalized_path TEXT NOT NULL UNIQUE,
+        file_name TEXT NOT NULL,
+        error_message TEXT NOT NULL,
+        last_failed_at TEXT NOT NULL
+    );
+    """,
+    """
     CREATE TRIGGER IF NOT EXISTS file_segments_ai AFTER INSERT ON file_segments BEGIN
         INSERT INTO file_segments_fts(rowid, content, segment_label)
         VALUES (new.id, new.content, new.segment_label);
@@ -84,6 +93,7 @@ def initialize_schema(connection: Connection) -> None:
         connection.execute("DROP TABLE IF EXISTS file_segments_fts;")
         connection.execute("DROP TABLE IF EXISTS file_segments;")
         connection.execute("DROP TABLE IF EXISTS files;")
+        connection.execute("DROP TABLE IF EXISTS failed_files;")
         connection.execute("DROP TABLE IF EXISTS targets;")
         connection.execute("DROP TABLE IF EXISTS folders;")
         connection.execute("DROP TABLE IF EXISTS index_runs;")
@@ -96,8 +106,9 @@ def _needs_schema_reset(connection: Connection) -> bool:
     target_columns = _get_columns(connection, "targets")
     legacy_folder_columns = _get_columns(connection, "folders")
     file_columns = _get_columns(connection, "files")
+    failed_file_columns = _get_columns(connection, "failed_files")
 
-    if not target_columns and not legacy_folder_columns and not file_columns:
+    if not target_columns and not legacy_folder_columns and not file_columns and not failed_file_columns:
         return False
 
     expected_target_columns = {"id", "full_path", "last_indexed_at", "exclude_keywords", "created_at", "updated_at"}
@@ -112,9 +123,14 @@ def _needs_schema_reset(connection: Connection) -> bool:
         "indexed_at",
         "last_error",
     }
+    expected_failed_file_columns = {"id", "normalized_path", "file_name", "error_message", "last_failed_at"}
     if legacy_folder_columns:
         return True
-    return target_columns != expected_target_columns or file_columns != expected_file_columns
+    return (
+        target_columns != expected_target_columns
+        or file_columns != expected_file_columns
+        or failed_file_columns != expected_failed_file_columns
+    )
 
 
 def _get_columns(connection: Connection, table_name: str) -> set[str]:

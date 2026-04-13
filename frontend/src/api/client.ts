@@ -1,4 +1,4 @@
-import type { IndexStatus, SearchResponse } from "../types";
+import type { FailedFileListResponse, IndexStatus, SearchResponse } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -37,6 +37,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function fetchIndexStatus(): Promise<IndexStatus> {
   return request<IndexStatus>("/api/index/status");
+}
+
+export async function fetchFailedFiles(): Promise<FailedFileListResponse> {
+  return request<FailedFileListResponse>("/api/index/failed-files");
 }
 
 export async function pickFolder(): Promise<{ full_path: string }> {

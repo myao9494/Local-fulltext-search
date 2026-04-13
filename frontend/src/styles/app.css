@@ -460,6 +460,36 @@ h1, h2, h3 {
   cursor: pointer;
 }
 
+.failed-file-item {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+  background: rgba(11, 18, 32, 0.7);
+}
+
+.failed-file-name {
+  font-weight: 600;
+  color: #fff;
+}
+
+.failed-file-path,
+.failed-file-error {
+  font-size: 0.88rem;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.failed-file-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  color: var(--text-muted);
+}
+
+.failed-file-error {
+  color: #fca5a5;
+}
+
 .error-banner {
   margin: 0 auto 32px;
   padding: 16px 20px;

@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 
-import { fetchIndexStatus, pickFolder, search } from "./api/client";
+import { fetchFailedFiles, fetchIndexStatus, pickFolder, search } from "./api/client";
 import { ResultsList } from "./components/ResultsList";
 import { SearchBar } from "./components/SearchBar";
 import { parseLaunchParams, shouldAutoSearch } from "./launchParams";
-import type { IndexStatus, SearchResult } from "./types";
+import type { FailedFile, IndexStatus, SearchResult } from "./types";
 
 const SUPPORTED_EXTENSIONS = [".md", ".json", ".txt"] as const;
 const DEFAULT_EXCLUDE_KEYWORDS = [
@@ -53,7 +53,9 @@ function App() {
   });
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isExtensionMenuOpen, setIsExtensionMenuOpen] = useState(false);
+  const [isFailedFilesOpen, setIsFailedFilesOpen] = useState(false);
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [failedFiles, setFailedFiles] = useState<FailedFile[]>([]);
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [isSearching, setIsSearching] = useState(false);
@@ -134,6 +136,10 @@ function App() {
       });
       setResults(response.items);
       setIndexStatus(await fetchIndexStatus());
+      if (isFailedFilesOpen) {
+        const failedResponse = await fetchFailedFiles();
+        setFailedFiles(failedResponse.items);
+      }
       localStorage.setItem("refresh_window_minutes", String(parsedWindow));
       localStorage.setItem("selected_extensions", selectedExtensions.join(","));
       localStorage.setItem("exclude_keywords", excludeKeywords);
@@ -162,6 +168,21 @@ function App() {
 
   function setAllExtensions(): void {
     setSelectedExtensions([...SUPPORTED_EXTENSIONS]);
+  }
+
+  async function handleToggleFailedFiles(): Promise<void> {
+    const nextOpen = !isFailedFilesOpen;
+    setIsFailedFilesOpen(nextOpen);
+    if (!nextOpen) {
+      return;
+    }
+    try {
+      const response = await fetchFailedFiles();
+      setFailedFiles(response.items);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "失敗したファイル一覧の取得に失敗しました。");
+    }
   }
 
   return (
@@ -244,6 +265,28 @@ function App() {
                   </div>
                 ) : null}
                 <div className="form-help">現在: {selectedExtensions.join(", ") || "未選択"}</div>
+              </div>
+
+              <div className="extension-panel">
+                <button className="secondary-button" onClick={() => void handleToggleFailedFiles()} type="button">
+                  失敗したファイル
+                </button>
+                {isFailedFilesOpen ? (
+                  <div className="extension-menu">
+                    {failedFiles.length === 0 ? (
+                      <div className="form-help">現在、記録されている失敗ファイルはありません。</div>
+                    ) : (
+                      failedFiles.map((item) => (
+                        <div className="failed-file-item" key={item.normalized_path}>
+                          <div className="failed-file-name">{item.file_name}</div>
+                          <div className="failed-file-path">{item.normalized_path}</div>
+                          <div className="failed-file-error">{item.error_message}</div>
+                          <div className="form-help">{new Date(item.last_failed_at).toLocaleString()}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : null}
               </div>
 
               <label className="form-help" htmlFor="exclude-keywords">

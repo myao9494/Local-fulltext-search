@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 
 from app.db.connection import get_connection
 from app.extractors.text_extractor import extract_text, supports_extension
-from app.models.indexing import IndexStatusResponse
+from app.models.indexing import FailedFileItem, FailedFileListResponse, IndexStatusResponse
 from app.services.path_service import normalize_path
 
 
@@ -70,6 +70,19 @@ class IndexService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Index status unavailable.")
         return IndexStatusResponse.model_validate(dict(row))
 
+    def get_failed_files(self) -> FailedFileListResponse:
+        """
+        直近のインデックス処理で取得に失敗したファイル一覧を返す。
+        """
+        rows = self.connection.execute(
+            """
+            SELECT normalized_path, file_name, error_message, last_failed_at
+            FROM failed_files
+            ORDER BY last_failed_at DESC, normalized_path ASC
+            """
+        ).fetchall()
+        return FailedFileListResponse(items=[FailedFileItem.model_validate(dict(row)) for row in rows])
+
     def _is_running(self) -> bool:
         row = self.connection.execute("SELECT is_running FROM index_runs WHERE id = 1").fetchone()
         return bool(row["is_running"]) if row else False
@@ -123,6 +136,7 @@ class IndexService:
         """指定ターゲットの全ファイルをインデックスする。os.scandirでディレクトリ除外を早期に行い、バッチcommitで効率化。"""
         folder_path = normalize_path(str(target["full_path"]))
         normalized_paths: set[str] = set()
+        failed_paths: set[str] = set()
         file_count = 0
         error_count = 0
         keywords = self._parse_exclude_keywords(exclude_keywords)
@@ -140,10 +154,12 @@ class IndexService:
                     self.connection.commit()
             except Exception as error:
                 error_count += 1
+                failed_paths.add(normalized_path)
                 self._record_file_error(path, error)
 
         self.connection.commit()
         self._remove_deleted_files(normalized_paths, root_path=folder_path.as_posix())
+        self._clear_resolved_failed_files(root_path=folder_path.as_posix(), failed_paths=failed_paths)
         return {"file_count": file_count, "error_count": error_count}
 
     def _walk_files(
@@ -234,18 +250,32 @@ class IndexService:
             """,
             (file_id, "body", normalized_path, content),
         )
+        self._clear_failed_file(normalized_path)
 
     def _record_file_error(self, path: Path, error: Exception) -> None:
         normalized_path = path.resolve().as_posix()
-        row = self.connection.execute(
-            "SELECT id FROM files WHERE normalized_path = ?",
-            (normalized_path,),
-        ).fetchone()
-        if row is None:
-            return
+        error_message = str(error)
+        row = self.connection.execute("SELECT id FROM files WHERE normalized_path = ?", (normalized_path,)).fetchone()
+        if row is not None:
+            self.connection.execute(
+                "UPDATE files SET last_error = ? WHERE id = ?",
+                (error_message, int(row["id"])),
+            )
         self.connection.execute(
-            "UPDATE files SET last_error = ? WHERE id = ?",
-            (str(error), int(row["id"])),
+            """
+            INSERT INTO failed_files(normalized_path, file_name, error_message, last_failed_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(normalized_path) DO UPDATE SET
+                file_name = excluded.file_name,
+                error_message = excluded.error_message,
+                last_failed_at = excluded.last_failed_at
+            """,
+            (
+                normalized_path,
+                path.name,
+                error_message,
+                datetime.now(UTC).isoformat(),
+            ),
         )
 
     def _remove_deleted_files(self, normalized_paths: set[str], *, root_path: str) -> None:
@@ -265,6 +295,30 @@ class IndexService:
             placeholders = ",".join("?" * len(chunk))
             self.connection.execute(f"DELETE FROM files WHERE id IN ({placeholders})", chunk)
         self.connection.commit()
+
+    def _clear_failed_file(self, normalized_path: str) -> None:
+        """
+        再取得に成功したファイルの失敗ログを削除する。
+        """
+        self.connection.execute("DELETE FROM failed_files WHERE normalized_path = ?", (normalized_path,))
+
+    def _clear_resolved_failed_files(self, *, root_path: str, failed_paths: set[str]) -> None:
+        """
+        今回失敗していない過去ログを対象ルート配下から掃除する。
+        成功済み・削除済みファイルが一覧に残り続けないようにする。
+        """
+        rows = self.connection.execute(
+            "SELECT normalized_path FROM failed_files WHERE normalized_path LIKE ?",
+            (f"{root_path}/%",),
+        ).fetchall()
+        stale_paths = [str(row["normalized_path"]) for row in rows if str(row["normalized_path"]) not in failed_paths]
+        if not stale_paths:
+            return
+        chunk_size = 500
+        for index in range(0, len(stale_paths), chunk_size):
+            chunk = stale_paths[index:index + chunk_size]
+            placeholders = ",".join("?" * len(chunk))
+            self.connection.execute(f"DELETE FROM failed_files WHERE normalized_path IN ({placeholders})", chunk)
 
     def _mark_target_indexed(self, target_id: int, exclude_keywords: str) -> None:
         now = datetime.now(UTC).isoformat()
