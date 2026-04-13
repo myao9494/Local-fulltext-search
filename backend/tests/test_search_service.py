@@ -181,6 +181,53 @@ def test_search_matches_windows_unc_target_path(tmp_path: Path) -> None:
     assert [item.full_path for item in result.items] == ["//hikoka/sss/日報/2026-04-13.md"]
 
 
+def test_search_matches_filename_only_image_in_normal_mode(tmp_path: Path) -> None:
+    """
+    本文を持たない画像ファイルでも、ファイル名一致なら通常検索でヒットする。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "architecture-overview.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    result = service.search(
+        SearchQueryParams(
+            q="overview",
+            full_path=str(target),
+            index_depth=0,
+            refresh_window_minutes=60,
+            types=".png",
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["architecture-overview.png"]
+
+
+def test_search_matches_filename_only_image_in_regex_mode(tmp_path: Path) -> None:
+    """
+    本文を持たない画像ファイルでも、正規表現モードでファイル名検索できる。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "architecture-overview.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    result = service.search(
+        SearchQueryParams(
+            q=r"architecture.*overview",
+            full_path=str(target),
+            index_depth=0,
+            refresh_window_minutes=60,
+            regex_enabled=True,
+            types=".png",
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["architecture-overview.png"]
+
+
 def _create_connection(tmp_path: Path) -> Connection:
     """
     テストごとの一時 SQLite 接続を作成する。

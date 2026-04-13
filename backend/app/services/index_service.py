@@ -1,4 +1,13 @@
+"""
+インデックス更新サービス。
+走査範囲を index_depth と対象拡張子で絞り込み、本文抽出だけを並列化して SQLite 書き込みは直列で行う。
+"""
+
+from __future__ import annotations
+
 import os
+from concurrent.futures import ALL_COMPLETED, FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from sqlite3 import Connection
@@ -6,9 +15,22 @@ from sqlite3 import Connection
 from fastapi import HTTPException, status
 
 from app.db.connection import get_connection
-from app.extractors.text_extractor import extract_text, supports_extension
+from app.extractors.text_extractor import extract_text, normalize_extension_filter, supports_content_extraction
 from app.models.indexing import FailedFileItem, FailedFileListResponse, IndexStatusResponse
 from app.services.path_service import normalize_path
+
+
+@dataclass(frozen=True)
+class IndexedFileCandidate:
+    """
+    インデックス対象ファイルの事前計算済みメタデータを保持する。
+    """
+
+    path: Path
+    normalized_path: str
+    mtime: float
+    size: int
+    existing_id: int | None
 
 
 class IndexService:
@@ -21,6 +43,8 @@ class IndexService:
         full_path: str,
         refresh_window_minutes: int,
         exclude_keywords: str | None = None,
+        index_depth: int = 5,
+        types: str | None = None,
     ) -> None:
         if self._is_running():
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Indexing is already running.")
@@ -28,18 +52,39 @@ class IndexService:
         started_at = datetime.now(UTC).isoformat()
         self._update_status(is_running=True, last_started_at=started_at, last_error=None)
 
+        normalized_keywords = self._normalize_exclude_keywords(exclude_keywords)
+        normalized_extensions = self._normalize_selected_extensions(types)
+
         total_files = 0
         error_count = 0
         try:
-            normalized_keywords = self._normalize_exclude_keywords(exclude_keywords)
-            target = self._ensure_target(full_path=full_path, exclude_keywords=normalized_keywords)
-            if self._needs_refresh(target, refresh_window_minutes, normalized_keywords):
-                stats = self._index_target(target, normalized_keywords)
+            target = self._ensure_target(
+                full_path=full_path,
+                exclude_keywords=normalized_keywords,
+                index_depth=index_depth,
+                selected_extensions=normalized_extensions,
+            )
+            if self._needs_refresh(target, refresh_window_minutes, normalized_keywords, index_depth, normalized_extensions):
+                stats = self._index_target(
+                    target,
+                    normalized_keywords,
+                    index_depth=index_depth,
+                    selected_extensions=normalized_extensions,
+                )
                 total_files = stats["file_count"]
                 error_count = stats["error_count"]
-                self._mark_target_indexed(int(target["id"]), normalized_keywords)
+                self._mark_target_indexed(
+                    int(target["id"]),
+                    exclude_keywords=normalized_keywords,
+                    index_depth=index_depth,
+                    selected_extensions=normalized_extensions,
+                )
             else:
-                total_files = self._count_target_files(str(target["full_path"]))
+                total_files = self._count_target_files(
+                    str(target["full_path"]),
+                    index_depth=int(target["index_depth"]),
+                    selected_extensions=str(target["selected_extensions"]),
+                )
         except Exception as error:
             self._update_status(
                 is_running=False,
@@ -87,14 +132,22 @@ class IndexService:
         row = self.connection.execute("SELECT is_running FROM index_runs WHERE id = 1").fetchone()
         return bool(row["is_running"]) if row else False
 
-    def _ensure_target(self, *, full_path: str, exclude_keywords: str) -> dict[str, object]:
+    def _ensure_target(
+        self,
+        *,
+        full_path: str,
+        exclude_keywords: str,
+        index_depth: int,
+        selected_extensions: str,
+    ) -> dict[str, object]:
         normalized_path = normalize_path(full_path)
         if not normalized_path.exists() or not normalized_path.is_dir():
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Folder path must be an existing directory.")
 
         row = self.connection.execute(
             """
-            SELECT id, full_path, last_indexed_at, exclude_keywords, created_at, updated_at
+            SELECT
+                id, full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions, created_at, updated_at
             FROM targets
             WHERE full_path = ?
             """,
@@ -106,15 +159,18 @@ class IndexService:
         now = datetime.now(UTC).isoformat()
         cursor = self.connection.execute(
             """
-            INSERT INTO targets(full_path, last_indexed_at, exclude_keywords, created_at, updated_at)
-            VALUES (?, NULL, ?, ?, ?)
+            INSERT INTO targets(
+                full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions, created_at, updated_at
+            )
+            VALUES (?, NULL, ?, ?, ?, ?, ?)
             """,
-            (normalized_path.as_posix(), exclude_keywords, now, now),
+            (normalized_path.as_posix(), exclude_keywords, index_depth, selected_extensions, now, now),
         )
         self.connection.commit()
         created = self.connection.execute(
             """
-            SELECT id, full_path, last_indexed_at, exclude_keywords, created_at, updated_at
+            SELECT
+                id, full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions, created_at, updated_at
             FROM targets
             WHERE id = ?
             """,
@@ -122,89 +178,218 @@ class IndexService:
         ).fetchone()
         return dict(created)
 
-    def _needs_refresh(self, target: dict[str, object], refresh_window_minutes: int, exclude_keywords: str) -> bool:
+    def _needs_refresh(
+        self,
+        target: dict[str, object],
+        refresh_window_minutes: int,
+        exclude_keywords: str,
+        index_depth: int,
+        selected_extensions: str,
+    ) -> bool:
         last_indexed_at = target["last_indexed_at"]
         if last_indexed_at is None:
             return True
         if str(target.get("exclude_keywords") or "") != exclude_keywords:
             return True
+        if int(target.get("index_depth") or 0) != index_depth:
+            return True
+        if str(target.get("selected_extensions") or "") != selected_extensions:
+            return True
         indexed_at = datetime.fromisoformat(str(last_indexed_at))
         elapsed_seconds = (datetime.now(UTC) - indexed_at).total_seconds()
         return elapsed_seconds > refresh_window_minutes * 60
 
-    def _index_target(self, target: dict[str, object], exclude_keywords: str) -> dict[str, object]:
-        """指定ターゲットの全ファイルをインデックスする。os.scandirでディレクトリ除外を早期に行い、バッチcommitで効率化。"""
+    def _index_target(
+        self,
+        target: dict[str, object],
+        exclude_keywords: str,
+        *,
+        index_depth: int,
+        selected_extensions: str,
+    ) -> dict[str, object]:
+        """
+        指定ターゲット配下を高速に再走査する。
+        走査は os.scandir、本文抽出はスレッド並列、DB 書き込みは直列でまとめる。
+        """
         folder_path = normalize_path(str(target["full_path"]))
         normalized_paths: set[str] = set()
         failed_paths: set[str] = set()
         file_count = 0
         error_count = 0
+        write_count = 0
+
         keywords = self._parse_exclude_keywords(exclude_keywords)
         keyword_set = frozenset(keywords)
         non_ascii_keywords = [kw for kw in keywords if any(ord(c) > 127 for c in kw)]
+        allowed_extensions = normalize_extension_filter(selected_extensions)
+        existing_files = self._load_existing_files(folder_path.as_posix())
         batch_size = 100
+        max_workers = self._resolve_extract_worker_count()
+        max_pending = max_workers * 4
+        pending: dict[Future[str], IndexedFileCandidate] = {}
 
-        for path in self._walk_files(folder_path, keyword_set, non_ascii_keywords):
-            normalized_path = path.resolve().as_posix()
-            normalized_paths.add(normalized_path)
-            try:
-                self._upsert_file(path=path)
-                file_count += 1
-                if file_count % batch_size == 0:
-                    self.connection.commit()
-            except Exception as error:
-                error_count += 1
-                failed_paths.add(normalized_path)
-                self._record_file_error(path, error)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for path in self._walk_files(
+                folder_path,
+                keyword_set,
+                non_ascii_keywords,
+                allowed_extensions=allowed_extensions,
+                max_depth=index_depth,
+            ):
+                stat = path.stat()
+                normalized_path = path.resolve().as_posix()
+                normalized_paths.add(normalized_path)
+                existing = existing_files.get(normalized_path)
+
+                if self._can_skip_existing_file(existing, stat):
+                    file_count += 1
+                    self._clear_failed_file(normalized_path)
+                    continue
+
+                candidate = IndexedFileCandidate(
+                    path=path,
+                    normalized_path=normalized_path,
+                    mtime=stat.st_mtime,
+                    size=stat.st_size,
+                    existing_id=int(existing["id"]) if existing is not None else None,
+                )
+
+                if supports_content_extraction(path):
+                    pending[executor.submit(extract_text, path)] = candidate
+                    if len(pending) >= max_pending:
+                        result = self._drain_pending_futures(pending, failed_paths, drain_all=False)
+                        file_count += result["file_count"]
+                        error_count += result["error_count"]
+                        write_count += result["write_count"]
+                else:
+                    self._upsert_file(candidate=candidate, content=None)
+                    file_count += 1
+                    write_count += 1
+                    if write_count % batch_size == 0:
+                        self.connection.commit()
+
+            result = self._drain_pending_futures(pending, failed_paths, drain_all=True)
+            file_count += result["file_count"]
+            error_count += result["error_count"]
+            write_count += result["write_count"]
 
         self.connection.commit()
         self._remove_deleted_files(normalized_paths, root_path=folder_path.as_posix())
         self._clear_resolved_failed_files(root_path=folder_path.as_posix(), failed_paths=failed_paths)
         return {"file_count": file_count, "error_count": error_count}
 
+    def _resolve_extract_worker_count(self) -> int:
+        """
+        本文抽出スレッド数を CPU 数に応じて上限付きで決める。
+        """
+        cpu_count = os.cpu_count() or 4
+        return max(2, min(8, cpu_count))
+
+    def _drain_pending_futures(
+        self,
+        pending: dict[Future[str], IndexedFileCandidate],
+        failed_paths: set[str],
+        *,
+        drain_all: bool,
+    ) -> dict[str, int]:
+        """
+        完了した抽出タスクだけを取り出して DB へ反映する。
+        """
+        if not pending:
+            return {"file_count": 0, "error_count": 0, "write_count": 0}
+
+        done, _ = wait(
+            pending.keys(),
+            return_when=FIRST_COMPLETED if not drain_all else ALL_COMPLETED,
+        )
+
+        file_count = 0
+        error_count = 0
+        write_count = 0
+        for future in done:
+            candidate = pending.pop(future)
+            try:
+                content = future.result()
+                self._upsert_file(candidate=candidate, content=content)
+                file_count += 1
+                write_count += 1
+            except Exception as error:
+                error_count += 1
+                failed_paths.add(candidate.normalized_path)
+                self._record_file_error(candidate.path, error)
+
+        return {"file_count": file_count, "error_count": error_count, "write_count": write_count}
+
+    def _load_existing_files(self, root_path: str) -> dict[str, dict[str, object]]:
+        """
+        対象ルート配下の既存メタデータを一括取得し、差分判定を高速化する。
+        """
+        rows = self.connection.execute(
+            """
+            SELECT id, normalized_path, mtime, size, last_error
+            FROM files
+            WHERE normalized_path LIKE ?
+            """,
+            (f"{root_path}/%",),
+        ).fetchall()
+        return {str(row["normalized_path"]): dict(row) for row in rows}
+
+    def _can_skip_existing_file(self, existing: dict[str, object] | None, stat: os.stat_result) -> bool:
+        """
+        変更のない成功済みファイルは再抽出を省略する。
+        """
+        if existing is None:
+            return False
+        if existing.get("last_error"):
+            return False
+        return float(existing["mtime"]) == stat.st_mtime and int(existing["size"]) == stat.st_size
+
     def _walk_files(
         self,
         root: Path,
         keyword_set: frozenset[str],
         non_ascii_keywords: list[str],
+        *,
+        allowed_extensions: frozenset[str],
+        max_depth: int,
+        current_depth: int = 0,
     ):
         """
         os.scandir ベースの高速ファイル走査。
-        除外キーワードに一致するディレクトリは再帰しないため、rglob より高速。
+        除外ディレクトリには再帰せず、深さと拡張子の条件を満たすファイルだけを返す。
         """
         try:
             with os.scandir(root) as entries:
                 for entry in entries:
                     path = Path(entry.path)
+                    if self._should_exclude_path_with_keywords(path, keyword_set, non_ascii_keywords):
+                        continue
+
                     if entry.is_dir(follow_symlinks=False):
-                        if not self._should_exclude_path_with_keywords(path, keyword_set, non_ascii_keywords):
-                            yield from self._walk_files(path, keyword_set, non_ascii_keywords)
-                    elif entry.is_file(follow_symlinks=False):
-                        if supports_extension(path) and not self._should_exclude_path_with_keywords(
-                            path,
-                            keyword_set,
-                            non_ascii_keywords,
-                        ):
-                            yield path
+                        if current_depth < max_depth:
+                            yield from self._walk_files(
+                                path,
+                                keyword_set,
+                                non_ascii_keywords,
+                                allowed_extensions=allowed_extensions,
+                                max_depth=max_depth,
+                                current_depth=current_depth + 1,
+                            )
+                        continue
+
+                    if entry.is_file(follow_symlinks=False) and path.suffix.lower() in allowed_extensions:
+                        yield path
         except PermissionError:
             pass
 
-    def _upsert_file(self, *, path: Path) -> None:
-        stat = path.stat()
-        normalized_path = path.resolve().as_posix()
-        existing = self.connection.execute(
-            "SELECT id, mtime, size FROM files WHERE normalized_path = ?",
-            (normalized_path,),
-        ).fetchone()
-
-        if existing and float(existing["mtime"]) == stat.st_mtime and int(existing["size"]) == stat.st_size:
-            return
-
-        content = extract_text(path)
+    def _upsert_file(self, *, candidate: IndexedFileCandidate, content: str | None) -> None:
+        """
+        ファイルメタデータと本文セグメントを upsert する。
+        画像など本文を持たないファイルは files テーブルだけへ登録する。
+        """
         indexed_at = datetime.now(UTC).isoformat()
-
-        if existing:
-            file_id = int(existing["id"])
+        if candidate.existing_id is not None:
+            file_id = candidate.existing_id
             self.connection.execute(
                 """
                 UPDATE files
@@ -213,11 +398,11 @@ class IndexService:
                 WHERE id = ?
                 """,
                 (
-                    normalized_path,
-                    path.name,
-                    path.suffix.lower(),
-                    stat.st_mtime,
-                    stat.st_size,
+                    candidate.normalized_path,
+                    candidate.path.name,
+                    candidate.path.suffix.lower(),
+                    candidate.mtime,
+                    candidate.size,
                     indexed_at,
                     file_id,
                 ),
@@ -232,25 +417,26 @@ class IndexService:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
                 """,
                 (
-                    normalized_path,
-                    normalized_path,
-                    path.name,
-                    path.suffix.lower(),
-                    stat.st_mtime,
-                    stat.st_size,
+                    candidate.normalized_path,
+                    candidate.normalized_path,
+                    candidate.path.name,
+                    candidate.path.suffix.lower(),
+                    candidate.mtime,
+                    candidate.size,
                     indexed_at,
                 ),
             )
             file_id = int(cursor.lastrowid)
 
-        self.connection.execute(
-            """
-            INSERT INTO file_segments(file_id, segment_type, segment_label, content)
-            VALUES (?, ?, ?, ?)
-            """,
-            (file_id, "body", normalized_path, content),
-        )
-        self._clear_failed_file(normalized_path)
+        if content is not None and content.strip():
+            self.connection.execute(
+                """
+                INSERT INTO file_segments(file_id, segment_type, segment_label, content)
+                VALUES (?, ?, ?, ?)
+                """,
+                (file_id, "body", candidate.normalized_path, content),
+            )
+        self._clear_failed_file(candidate.normalized_path)
 
     def _record_file_error(self, path: Path, error: Exception) -> None:
         normalized_path = path.resolve().as_posix()
@@ -279,7 +465,9 @@ class IndexService:
         )
 
     def _remove_deleted_files(self, normalized_paths: set[str], *, root_path: str) -> None:
-        """DB上に存在するが実ファイルが無くなったレコードをバッチ削除する。"""
+        """
+        DB 上に存在するが今回の走査範囲に含まれなくなったレコードをバッチ削除する。
+        """
         prefix = f"{root_path}/%"
         rows = self.connection.execute(
             "SELECT id, normalized_path FROM files WHERE normalized_path LIKE ?",
@@ -288,7 +476,7 @@ class IndexService:
         deleted_ids = [int(row["id"]) for row in rows if row["normalized_path"] not in normalized_paths]
         if not deleted_ids:
             return
-        # IN句でバッチ削除（executemanyより効率的）
+
         chunk_size = 500
         for i in range(0, len(deleted_ids), chunk_size):
             chunk = deleted_ids[i:i + chunk_size]
@@ -320,20 +508,46 @@ class IndexService:
             placeholders = ",".join("?" * len(chunk))
             self.connection.execute(f"DELETE FROM failed_files WHERE normalized_path IN ({placeholders})", chunk)
 
-    def _mark_target_indexed(self, target_id: int, exclude_keywords: str) -> None:
+    def _mark_target_indexed(
+        self,
+        target_id: int,
+        *,
+        exclude_keywords: str,
+        index_depth: int,
+        selected_extensions: str,
+    ) -> None:
         now = datetime.now(UTC).isoformat()
         self.connection.execute(
-            "UPDATE targets SET last_indexed_at = ?, exclude_keywords = ?, updated_at = ? WHERE id = ?",
-            (now, exclude_keywords, now, target_id),
+            """
+            UPDATE targets
+            SET last_indexed_at = ?, exclude_keywords = ?, index_depth = ?, selected_extensions = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, exclude_keywords, index_depth, selected_extensions, now, target_id),
         )
         self.connection.commit()
 
-    def _count_target_files(self, root_path: str) -> int:
+    def _count_target_files(self, root_path: str, *, index_depth: int, selected_extensions: str) -> int:
+        """
+        現在の対象条件に一致するファイル数を返す。
+        """
+        depth_expression = (
+            "(length(normalized_path) - length(replace(normalized_path, '/', '')))"
+            " - (length(?) - length(replace(?, '/', ''))) - 1"
+        )
+        filters = ["normalized_path LIKE ?", f"{depth_expression} <= ?"]
+        values: list[object] = [f"{root_path}/%", root_path, root_path, index_depth]
+
+        extensions = sorted(normalize_extension_filter(selected_extensions))
+        placeholders = ", ".join("?" for _ in extensions)
+        filters.append(f"file_ext IN ({placeholders})")
+        values.extend(extensions)
+
         row = self.connection.execute(
-            "SELECT COUNT(*) AS count FROM files WHERE normalized_path LIKE ?",
-            (f"{root_path}/%",),
+            f"SELECT COUNT(*) AS count FROM files WHERE {' AND '.join(filters)}",
+            tuple(values),
         ).fetchone()
-        return int(row["count"])
+        return int(row["count"]) if row else 0
 
     def _update_status(
         self,
@@ -345,7 +559,9 @@ class IndexService:
         total_files: int | None = None,
         error_count: int | None = None,
     ) -> None:
-        """インデックス実行ステータスを更新する。不要なSELECTを省き、COALESCEで処理。"""
+        """
+        インデックス実行ステータスを更新する。
+        """
         self.connection.execute(
             """
             UPDATE index_runs
@@ -371,6 +587,9 @@ class IndexService:
     def _normalize_exclude_keywords(self, value: str | None) -> str:
         return "\n".join(self._parse_exclude_keywords(value))
 
+    def _normalize_selected_extensions(self, value: str | None) -> str:
+        return ",".join(sorted(normalize_extension_filter(value)))
+
     def _parse_exclude_keywords(self, value: str | None) -> list[str]:
         seen: set[str] = set()
         keywords: list[str] = []
@@ -383,7 +602,9 @@ class IndexService:
         return keywords
 
     def _should_exclude_path(self, path: Path, keywords: list[str]) -> bool:
-        """パスの各パートが除外キーワードに一致するか判定する。検索サービスからも利用される。"""
+        """
+        パスの各パートが除外キーワードに一致するか判定する。検索サービスからも利用される。
+        """
         if not keywords:
             return False
         keyword_set = frozenset(keywords)
@@ -396,7 +617,9 @@ class IndexService:
         keyword_set: frozenset[str],
         non_ascii_keywords: list[str],
     ) -> bool:
-        """事前計算済みキーワード集合を用いてパス全体の除外判定を行う。"""
+        """
+        事前計算済みキーワード集合を用いてパス全体の除外判定を行う。
+        """
         return any(self._is_excluded_name(part, keyword_set, non_ascii_keywords) for part in path.parts)
 
     def _is_excluded_name(self, name: str, keyword_set: frozenset[str], non_ascii_keywords: list[str]) -> bool:
@@ -406,22 +629,19 @@ class IndexService:
         """
         lower_name = name.lower()
         stripped_name = lower_name.lstrip(".")
-        # 完全一致（set O(1)）
         if lower_name in keyword_set or stripped_name in keyword_set:
             return True
-        # 非ASCIIキーワードのサブストリング検索
         for kw in non_ascii_keywords:
             if kw in lower_name:
                 return True
-        # ASCIIトークン分割によるマッチ
         tokens = set(self._split_ascii_tokens(lower_name))
-        if tokens & keyword_set:
-            return True
-        return False
+        return bool(tokens & keyword_set)
 
     def _split_ascii_tokens(self, value: str) -> list[str]:
-        """文字列からASCII英数字トークンを分割する。"""
-        token: list[str] = []
+        """
+        ASCII 記号で区切られたトークン列を返す。
+        """
+        token = []
         tokens: list[str] = []
         for char in value:
             if char.isascii() and char.isalnum():

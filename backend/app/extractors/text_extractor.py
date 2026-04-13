@@ -1,30 +1,265 @@
 """
-テキスト抽出ユーティリティ。
-Markdown は画像リンクや通常リンクを検索しやすい平文へ整形し、括弧を含むパスも壊さず保持する。
+検索用テキスト抽出ユーティリティ。
+本文を抽出できる拡張子と、ファイル名だけを検索対象にする拡張子を分けて扱う。
 """
 
+from __future__ import annotations
+
+from datetime import date, datetime, time
 from pathlib import Path
 
 
-SUPPORTED_EXTENSIONS: set[str] = {".md", ".json", ".txt"}
+CONTENT_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".md",
+        ".json",
+        ".txt",
+        ".pdf",
+        ".docx",
+        ".xlsx",
+        ".pptx",
+        ".msg",
+    }
+)
+
+FILENAME_ONLY_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".heic",
+        ".svg",
+        ".bmp",
+        ".tif",
+        ".tiff",
+    }
+)
+
+SUPPORTED_EXTENSIONS: frozenset[str] = CONTENT_EXTENSIONS | FILENAME_ONLY_EXTENSIONS
 
 
 def supports_extension(path: Path) -> bool:
     """
-    Phase 1 で扱う拡張子かどうかを返す。
+    検索対象として扱う拡張子かどうかを返す。
     """
     return path.suffix.lower() in SUPPORTED_EXTENSIONS
+
+
+def supports_content_extraction(path: Path) -> bool:
+    """
+    本文抽出に対応する拡張子かどうかを返す。
+    """
+    return path.suffix.lower() in CONTENT_EXTENSIONS
+
+
+def normalize_extension_filter(value: str | None) -> frozenset[str]:
+    """
+    利用者が指定した拡張子一覧を正規化し、未指定時は全対応拡張子を返す。
+    """
+    if value is None or not value.strip():
+        return SUPPORTED_EXTENSIONS
+
+    normalized = {
+        item.strip().lower()
+        for item in value.split(",")
+        if item.strip()
+    }
+    filtered = {item for item in normalized if item in SUPPORTED_EXTENSIONS}
+    return frozenset(filtered) if filtered else SUPPORTED_EXTENSIONS
 
 
 def extract_text(path: Path) -> str:
     """
     ファイル種別に応じて検索用テキストを抽出する。
-    Markdown は `![](...)` / `[](...)` を平文化して検索しやすくする。
+    Markdown は `![](...)` / `[](...)` を平文化し、Office/PDF/Outlook は平文へ変換する。
     """
-    content = path.read_text(encoding="utf-8", errors="ignore")
-    if path.suffix.lower() == ".md":
+    suffix = path.suffix.lower()
+
+    if suffix == ".md":
+        content = path.read_text(encoding="utf-8", errors="ignore")
         return _flatten_markdown_inline_links(content)
-    return content
+    if suffix in {".json", ".txt"}:
+        return path.read_text(encoding="utf-8", errors="ignore")
+    if suffix == ".pdf":
+        return _extract_pdf_text(path)
+    if suffix == ".docx":
+        return _extract_docx_text(path)
+    if suffix == ".xlsx":
+        return _extract_xlsx_text(path)
+    if suffix == ".pptx":
+        return _extract_pptx_text(path)
+    if suffix == ".msg":
+        return _extract_msg_text(path)
+
+    raise ValueError(f"Unsupported extension: {suffix}")
+
+
+def _extract_pdf_text(path: Path) -> str:
+    """
+    PDF の各ページからテキストを取り出し、ページ単位で連結する。
+    """
+    try:
+        from pypdf import PdfReader
+    except ImportError as error:
+        raise RuntimeError("PDF 抽出には pypdf が必要です。") from error
+
+    reader = PdfReader(str(path), strict=False)
+    parts: list[str] = []
+    for page_index, page in enumerate(reader.pages, start=1):
+        text = page.extract_text(extraction_mode="layout") or page.extract_text() or ""
+        stripped = text.strip()
+        if stripped:
+            parts.append(f"[Page {page_index}]\n{stripped}")
+    return "\n\n".join(parts)
+
+
+def _extract_docx_text(path: Path) -> str:
+    """
+    DOCX の段落と表を文書順で平文化する。
+    """
+    try:
+        from docx import Document
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+    except ImportError as error:
+        raise RuntimeError("DOCX 抽出には python-docx が必要です。") from error
+
+    document = Document(str(path))
+    parts: list[str] = []
+    for block in document.iter_inner_content():
+        if isinstance(block, Paragraph):
+            text = block.text.strip()
+            if text:
+                parts.append(text)
+            continue
+        if isinstance(block, Table):
+            table_text = _extract_docx_table_text(block)
+            if table_text:
+                parts.append(table_text)
+    return "\n\n".join(parts)
+
+
+def _extract_docx_table_text(table) -> str:
+    """
+    DOCX 表を行ごとのタブ区切りテキストへ変換する。
+    """
+    rows: list[str] = []
+    for row in table.rows:
+        values = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+        if values:
+            rows.append("\t".join(values))
+    return "\n".join(rows)
+
+
+def _extract_xlsx_text(path: Path) -> str:
+    """
+    XLSX のシート名とセル値を読み取り専用で抽出する。
+    """
+    try:
+        from openpyxl import load_workbook
+    except ImportError as error:
+        raise RuntimeError("XLSX 抽出には openpyxl が必要です。") from error
+
+    workbook = load_workbook(filename=str(path), read_only=True, data_only=True)
+    try:
+        parts: list[str] = []
+        for sheet in workbook.worksheets:
+            rows: list[str] = []
+            for row in sheet.iter_rows(values_only=True):
+                values = [_stringify_cell_value(value) for value in row]
+                present_values = [value for value in values if value]
+                if present_values:
+                    rows.append("\t".join(present_values))
+            if rows:
+                parts.append(f"[Sheet] {sheet.title}\n" + "\n".join(rows))
+            else:
+                parts.append(f"[Sheet] {sheet.title}")
+        return "\n\n".join(parts)
+    finally:
+        workbook.close()
+
+
+def _stringify_cell_value(value: object) -> str:
+    """
+    Excel のセル値を検索向け文字列へ正規化する。
+    """
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, (date, time)):
+        return value.isoformat()
+    return str(value).strip()
+
+
+def _extract_pptx_text(path: Path) -> str:
+    """
+    PPTX の各スライドからテキストフレームと表を抽出する。
+    """
+    try:
+        from pptx import Presentation
+    except ImportError as error:
+        raise RuntimeError("PPTX 抽出には python-pptx が必要です。") from error
+
+    presentation = Presentation(str(path))
+    slides: list[str] = []
+    for slide_index, slide in enumerate(presentation.slides, start=1):
+        parts: list[str] = []
+        for shape in slide.shapes:
+            if getattr(shape, "has_text_frame", False):
+                text = shape.text.strip()
+                if text:
+                    parts.append(text)
+            if getattr(shape, "has_table", False):
+                table_text = _extract_pptx_table_text(shape.table)
+                if table_text:
+                    parts.append(table_text)
+        if parts:
+            slides.append(f"[Slide {slide_index}]\n" + "\n\n".join(parts))
+    return "\n\n".join(slides)
+
+
+def _extract_pptx_table_text(table) -> str:
+    """
+    PPTX 表を行ごとのタブ区切りテキストへ変換する。
+    """
+    rows: list[str] = []
+    for row in table.rows:
+        values = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+        if values:
+            rows.append("\t".join(values))
+    return "\n".join(rows)
+
+
+def _extract_msg_text(path: Path) -> str:
+    """
+    Outlook の MSG から件名・差出人・宛先・本文を抽出する。
+    """
+    try:
+        import extract_msg
+    except ImportError as error:
+        raise RuntimeError("MSG 抽出には extract-msg が必要です。") from error
+
+    message = extract_msg.openMsg(str(path), delayAttachments=True)
+    try:
+        headers = [
+            ("Subject", getattr(message, "subject", None)),
+            ("From", getattr(message, "sender", None)),
+            ("To", getattr(message, "to", None)),
+            ("Cc", getattr(message, "cc", None)),
+            ("Date", getattr(message, "date", None)),
+        ]
+        parts = [f"{label}: {value}".strip() for label, value in headers if value]
+        body = str(getattr(message, "body", "") or "").strip()
+        if body:
+            parts.append(body)
+        return "\n".join(parts)
+    finally:
+        close = getattr(message, "close", None)
+        if callable(close):
+            close()
 
 
 def _flatten_markdown_inline_links(content: str) -> str:

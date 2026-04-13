@@ -4,7 +4,8 @@
 
 ## 目的
 
-- ファイル名検索ではなく、**ファイル内容の全文検索**に特化する
+- **ファイル内容の全文検索**を中心にする
+- 画像など本文抽出しないファイルは、補助的にファイル名検索で拾えるようにする
 - Google のようなシンプルな検索UIで使えるようにする
 - 主にローカル利用を前提としつつ、必要に応じて Tailscale 経由でアクセスできるようにする
 
@@ -24,19 +25,31 @@
 - 配布形態: Vite でビルドした PWA フロントエンドを FastAPI から同一オリジン配信
 - Full-text search: SQLite FTS5
 
-## 対応予定ファイル
+## 対応ファイル
 
-### Phase 1
+### 本文抽出あり
 - `.md`
 - `.json`
 - `.txt`
-
-### 将来対応
 - `.pdf`
 - `.docx`
 - `.xlsx`
 - `.pptx`
 - `.msg`
+
+### ファイル名のみ検索対象
+- `.png`
+- `.jpg`
+- `.jpeg`
+- `.gif`
+- `.webp`
+- `.heic`
+- `.svg`
+- `.bmp`
+- `.tif`
+- `.tiff`
+
+### 将来対応
 - `.excalidraw`
 - `.drawio`
 - `.drawio.svg`
@@ -66,22 +79,23 @@
 
 ## 今回の実装範囲
 
-Phase 1 として、以下のみ実装しています。
+現時点では、以下を実装しています。
 
-- 対象ファイルは `.md` / `.json` / `.txt`
+- 対象ファイルは `.md` / `.json` / `.txt` / `.pdf` / `.docx` / `.xlsx` / `.pptx` / `.msg`
+- 画像ファイルはファイル名のみ検索対象にできる
 - FastAPI バックエンド
 - React + Vite フロントエンド
 - SQLite FTS5 による全文検索
-- 検索時に指定した `フルパス + 階層数` を対象にしたオンデマンドインデックス更新
+- 検索時に指定した `フルパス + 階層数 + 対象拡張子` を対象にしたオンデマンドインデックス更新
 - `mtime + size` ベースの差分更新
-- 同一の `フルパス + 階層数` に対して、一定時間以内なら再走査を省略するキャッシュ
+- 本文抽出の並列実行によるインデックス高速化
+- 同一の `フルパス + 階層数 + 対象拡張子 + 除外キーワード` に対して、一定時間以内なら再走査を省略するキャッシュ
 - Google 風の最小 UI
 
 今回は以下を実装していません。
 
-- PDF / Office / Outlook / Excalidraw / draw.io
 - OCR
-- ファイル名検索
+- Excalidraw / draw.io
 - インターネット公開向けの認証・防御
 
 ## ディレクトリ構成
@@ -345,6 +359,7 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 
 - `POST /api/folders/pick`
 - `GET /api/index/status`
+- `GET /api/index/failed-files`
 - `GET /api/search`
 - `POST /api/search`
 
@@ -359,7 +374,9 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 任意:
 
 - `refresh_window_minutes`
+- `regex_enabled`
 - `types`
+- `exclude_keywords`
 - `limit`
 - `offset`
 
@@ -377,7 +394,9 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
   "full_path": "\\\\vss45\\一行課\\資料",
   "index_depth": 2,
   "refresh_window_minutes": 60,
-  "types": ".md,.json,.txt",
+  "regex_enabled": false,
+  "types": ".md,.json,.txt,.pdf,.docx,.xlsx,.pptx,.msg",
+  "exclude_keywords": "node_modules\n.git",
   "limit": 20,
   "offset": 0
 }
@@ -394,7 +413,7 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 - 保存時は正規化したパスを `as_posix()` で保持
 - 差分更新は `mtime` と `size` で判定
 - 削除ファイルは DB から自動削除
-- DB にはフォルダ登録設定ではなく、`フルパス + 階層数` 単位の内部ターゲットキャッシュを保存
+- DB にはフォルダ登録設定ではなく、`フルパス + 階層数 + 対象拡張子 + 除外キーワード` 単位の内部ターゲットキャッシュを保存
 - FTS5 は `file_segments` と連動するトリガで更新
 
 ## 外部アプリ連携
@@ -460,7 +479,9 @@ await fetch("http://127.0.0.1:8079/api/search", {
     full_path: String.raw`\\vss45\一行課\資料`,
     index_depth: 2,
     refresh_window_minutes: 60,
-    types: ".md,.json,.txt",
+    regex_enabled: false,
+    types: ".md,.json,.txt,.pdf,.docx,.xlsx,.pptx,.msg",
+    exclude_keywords: "node_modules\n.git",
     limit: 20,
     offset: 0,
   }),
@@ -475,7 +496,9 @@ $body = @{
   full_path = "\\vss45\一行課\資料"
   index_depth = 2
   refresh_window_minutes = 60
-  types = ".md,.json,.txt"
+  regex_enabled = $false
+  types = ".md,.json,.txt,.pdf,.docx,.xlsx,.pptx,.msg"
+  exclude_keywords = "node_modules`n.git"
   limit = 20
   offset = 0
 } | ConvertTo-Json

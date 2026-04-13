@@ -198,6 +198,55 @@ def test_index_records_failed_files_and_continues(tmp_path: Path) -> None:
     assert "simulated read failure" in failed_files[0]["error_message"]
 
 
+def test_index_depth_limits_recursive_walk(tmp_path: Path) -> None:
+    """
+    index_depth に応じて走査深さを制限し、設定変更時は再インデックスされる。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    nested = target / "nested"
+    deep = nested / "deep"
+    deep.mkdir(parents=True)
+    (target / "root.md").write_text("root level", encoding="utf-8")
+    (nested / "child.md").write_text("child level", encoding="utf-8")
+    (deep / "grandchild.md").write_text("grandchild level", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, index_depth=0)
+
+    indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
+    assert [row["file_name"] for row in indexed_files] == ["root.md"]
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, index_depth=1)
+
+    indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
+    assert [row["file_name"] for row in indexed_files] == ["child.md", "root.md"]
+
+
+def test_selected_types_limit_indexed_extensions_and_include_filename_only_files(tmp_path: Path) -> None:
+    """
+    対象拡張子で走査対象を絞り込み、画像のような本文なしファイルもファイル名検索用に登録する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "note.md").write_text("searchable memo", encoding="utf-8")
+    (target / "diagram.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, types=".png")
+
+    indexed_files = connection.execute("SELECT file_name, file_ext FROM files ORDER BY file_name").fetchall()
+    assert [(row["file_name"], row["file_ext"]) for row in indexed_files] == [("diagram.png", ".png")]
+    assert connection.execute("SELECT COUNT(*) AS count FROM file_segments").fetchone()["count"] == 0
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, types=".md,.png")
+
+    indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
+    assert [row["file_name"] for row in indexed_files] == ["diagram.png", "note.md"]
+    assert connection.execute("SELECT COUNT(*) AS count FROM file_segments").fetchone()["count"] == 1
+
+
 def _create_connection(tmp_path: Path) -> sqlite3.Connection:
     """
     テストごとの一時 SQLite 接続を作成する。

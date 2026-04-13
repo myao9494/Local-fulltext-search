@@ -6,7 +6,26 @@ import { SearchBar } from "./components/SearchBar";
 import { parseLaunchParams, shouldAutoSearch } from "./launchParams";
 import type { FailedFile, IndexStatus, SearchResult } from "./types";
 
-const SUPPORTED_EXTENSIONS = [".md", ".json", ".txt"] as const;
+const SUPPORTED_EXTENSIONS = [
+  ".md",
+  ".json",
+  ".txt",
+  ".pdf",
+  ".docx",
+  ".xlsx",
+  ".pptx",
+  ".msg",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".heic",
+  ".svg",
+  ".bmp",
+  ".tif",
+  ".tiff",
+] as const;
 const DEFAULT_EXCLUDE_KEYWORDS = [
   "node_modules",
   ".git",

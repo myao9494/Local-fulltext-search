@@ -8,6 +8,8 @@ SCHEMA_STATEMENTS: list[str] = [
         full_path TEXT NOT NULL,
         last_indexed_at TEXT,
         exclude_keywords TEXT NOT NULL DEFAULT '',
+        index_depth INTEGER NOT NULL DEFAULT 5,
+        selected_extensions TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE(full_path)
@@ -111,7 +113,16 @@ def _needs_schema_reset(connection: Connection) -> bool:
     if not target_columns and not legacy_folder_columns and not file_columns and not failed_file_columns:
         return False
 
-    expected_target_columns = {"id", "full_path", "last_indexed_at", "exclude_keywords", "created_at", "updated_at"}
+    expected_target_columns = {
+        "id",
+        "full_path",
+        "last_indexed_at",
+        "exclude_keywords",
+        "index_depth",
+        "selected_extensions",
+        "created_at",
+        "updated_at",
+    }
     expected_file_columns = {
         "id",
         "full_path",

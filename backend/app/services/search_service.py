@@ -28,6 +28,8 @@ class SearchService:
             full_path=normalized_target_path,
             refresh_window_minutes=params.refresh_window_minutes,
             exclude_keywords=params.exclude_keywords,
+            index_depth=params.index_depth,
+            types=params.types,
         )
 
         if params.regex_enabled:
@@ -177,7 +179,9 @@ class SearchService:
                 files.mtime,
                 file_segments.content
             FROM files
-            JOIN file_segments ON file_segments.file_id = files.id
+            LEFT JOIN file_segments
+                ON file_segments.file_id = files.id
+               AND file_segments.segment_type = 'body'
             WHERE {where_clause}
             ORDER BY files.mtime DESC, files.id DESC
             """,
@@ -192,7 +196,7 @@ class SearchService:
                 continue
 
             file_name = str(row["file_name"])
-            content = str(row["content"])
+            content = str(row["content"] or "")
             content_match = pattern.search(content)
             file_name_match = pattern.search(file_name)
             if content_match is None and file_name_match is None:
