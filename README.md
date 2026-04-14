@@ -302,7 +302,7 @@ VITE_API_BASE_URL=http://mac-mini:8079 npm run build
 
 `対象拡張子` について:
 
-- 現在選択できるのは `.md`, `.json`, `.txt` のみ
+- 現在選択できるのは `.md`, `.json`, `.txt`, `.pdf`, `.docx`, `.xlsx`, `.xlsm`, `.pptx`, `.msg` と画像系拡張子
 - デフォルトはすべて選択
 - ハンバーガーメニュー内で変更できる
 
@@ -437,7 +437,7 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 
 - `q`
 - `full_path`
-- `index_depth` 省略時は `5`
+- `index_depth` 省略時は `1`
 
 `q` と `full_path` の両方があると、初回表示時に自動で検索を実行します。
 

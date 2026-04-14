@@ -1,4 +1,4 @@
-import type { FailedFileListResponse, IndexStatus, SearchResponse } from "../types";
+import type { FailedFileListResponse, IndexedTargetListResponse, IndexStatus, SearchResponse } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -43,8 +43,26 @@ export async function fetchFailedFiles(): Promise<FailedFileListResponse> {
   return request<FailedFileListResponse>("/api/index/failed-files");
 }
 
+export async function fetchIndexedTargets(): Promise<IndexedTargetListResponse> {
+  return request<IndexedTargetListResponse>("/api/index/targets");
+}
+
+export async function deleteIndexedTargets(folderPaths: string[]): Promise<{ deleted_count: number }> {
+  return request<{ deleted_count: number }>("/api/index/targets", {
+    method: "DELETE",
+    body: JSON.stringify({ folder_paths: folderPaths }),
+  });
+}
+
 export async function resetDatabase(): Promise<{ message: string; status: IndexStatus }> {
   return request<{ message: string; status: IndexStatus }>("/api/index/reset", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function cancelIndexing(): Promise<{ message: string; status: IndexStatus }> {
+  return request<{ message: string; status: IndexStatus }>("/api/index/cancel", {
     method: "POST",
     body: JSON.stringify({}),
   });
@@ -63,6 +81,7 @@ export async function search(params: {
   index_depth: number;
   refresh_window_minutes: number;
   regex_enabled?: boolean;
+  index_types?: string;
   types?: string;
   exclude_keywords?: string;
 }): Promise<SearchResponse> {

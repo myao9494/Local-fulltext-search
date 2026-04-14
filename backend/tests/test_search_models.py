@@ -50,3 +50,16 @@ def test_search_query_params_accepts_windows_unc_full_path() -> None:
     )
 
     assert params.full_path == r"\\hikoka\sss\日報"
+
+
+def test_search_query_params_accepts_empty_full_path_for_global_search() -> None:
+    """
+    全データベース検索モードでは full_path の空文字を受け付ける。
+    """
+    params = SearchQueryParams(
+        q="alpha",
+        full_path="",
+        index_depth=5,
+    )
+
+    assert params.full_path == ""

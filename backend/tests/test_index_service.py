@@ -214,6 +214,46 @@ def test_exclude_keywords_skip_matching_file_names(tmp_path: Path) -> None:
     assert remaining["file_name"] == "readme.md"
 
 
+def test_index_stores_compound_extension_distinctly_from_md(tmp_path: Path) -> None:
+    """
+    `.excalidraw.md` は `.md` と区別した file_ext で保存する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "memo.md").write_text("plain markdown", encoding="utf-8")
+    (target / "board.excalidraw.md").write_text("diagram markdown", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+
+    indexed_files = connection.execute("SELECT file_name, file_ext FROM files ORDER BY file_name").fetchall()
+    assert [(row["file_name"], row["file_ext"]) for row in indexed_files] == [
+        ("board.excalidraw.md", ".excalidraw.md"),
+        ("memo.md", ".md"),
+    ]
+
+
+def test_index_stores_dio_svg_distinctly_from_svg(tmp_path: Path) -> None:
+    """
+    `.dio.svg` は `.svg` と区別した file_ext で保存する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "icon.svg").write_bytes(b"<svg/>")
+    (target / "flow.dio.svg").write_text("<svg><text>diagram</text></svg>", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+
+    indexed_files = connection.execute("SELECT file_name, file_ext FROM files ORDER BY file_name").fetchall()
+    assert [(row["file_name"], row["file_ext"]) for row in indexed_files] == [
+        ("flow.dio.svg", ".dio.svg"),
+        ("icon.svg", ".svg"),
+    ]
+
+
 def test_index_status_reflects_file_count(tmp_path: Path) -> None:
     """
     インデックス完了後、ステータスにファイル数が正しく反映される。
@@ -231,6 +271,7 @@ def test_index_status_reflects_file_count(tmp_path: Path) -> None:
     assert status.total_files == 5
     assert status.error_count == 0
     assert status.is_running is False
+    assert status.cancel_requested is False
 
 
 def test_index_records_failed_files_and_continues(tmp_path: Path) -> None:
@@ -265,6 +306,86 @@ def test_index_records_failed_files_and_continues(tmp_path: Path) -> None:
     assert len(failed_files) == 1
     assert failed_files[0]["file_name"] == "ng.md"
     assert "simulated read failure" in failed_files[0]["error_message"]
+
+
+def test_index_keeps_encrypted_pdf_as_filename_only_record(tmp_path: Path) -> None:
+    """
+    暗号化 PDF は失敗扱いにせず、本文なしのファイル名インデックスとして保持する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    pdf_file = target / "secret.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4")
+
+    with patch("app.services.index_service.extract_text", return_value=""):
+        service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+
+    indexed_files = connection.execute(
+        "SELECT file_name, file_ext, last_error FROM files ORDER BY file_name"
+    ).fetchall()
+    segments = connection.execute("SELECT COUNT(*) AS count FROM file_segments").fetchone()
+    failed_files = connection.execute("SELECT COUNT(*) AS count FROM failed_files").fetchone()
+
+    assert [(row["file_name"], row["file_ext"], row["last_error"]) for row in indexed_files] == [
+        ("secret.pdf", ".pdf", None)
+    ]
+    assert segments["count"] == 0
+    assert failed_files["count"] == 0
+
+
+def test_cancel_requested_during_indexing_stops_run_and_clears_running_state(tmp_path: Path) -> None:
+    """
+    実行中にキャンセル要求が入った場合、以降の走査を止めて is_running を解除する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    first = target / "first.md"
+    second = target / "second.md"
+    first.write_text("first", encoding="utf-8")
+    second.write_text("second", encoding="utf-8")
+
+    def fake_walk_files(*args, **kwargs):
+        yield first
+        service.cancel_indexing()
+        yield second
+
+    with patch.object(service, "_walk_files", side_effect=fake_walk_files):
+        try:
+            service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+        except HTTPException as error:
+            assert error.status_code == 409
+            assert error.detail == "Indexing was cancelled."
+        else:
+            raise AssertionError("HTTPException was not raised after cancellation")
+
+    indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
+    assert "second.md" not in [row["file_name"] for row in indexed_files]
+
+    status = service.get_status()
+    assert status.is_running is False
+    assert status.total_files <= 1
+    assert status.error_count == 0
+    assert status.cancel_requested is False
+    assert status.last_error is None
+
+
+def test_cancel_indexing_marks_status_as_cancel_requested(tmp_path: Path) -> None:
+    """
+    実行中フラグが立っている間に中止要求すると、ステータスに中止要求中が反映される。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+
+    service._update_status(is_running=True, cancel_requested=False)
+    service.cancel_indexing()
+
+    status = service.get_status()
+    assert status.is_running is True
+    assert status.cancel_requested is True
 
 
 def test_index_depth_limits_recursive_walk(tmp_path: Path) -> None:
@@ -344,6 +465,62 @@ def test_reset_database_clears_indexed_files_targets_and_failures(tmp_path: Path
     assert status.last_finished_at is None
 
 
+def test_list_indexed_targets_returns_all_indexed_folders_from_files(tmp_path: Path) -> None:
+    """
+    インデックス済みフォルダ一覧は files から祖先フォルダを展開して返す。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "alpha"
+    nested = target / "nested"
+    nested.mkdir(parents=True)
+    (target / "root.md").write_text("alpha", encoding="utf-8")
+    (nested / "child.md").write_text("beta", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, index_depth=2, types=".md")
+
+    targets = service.list_indexed_targets().items
+
+    folder_paths = [item.full_path for item in targets]
+    assert target.as_posix() in folder_paths
+    assert nested.as_posix() in folder_paths
+    assert tmp_path.as_posix() not in folder_paths
+    nested_item = next(item for item in targets if item.full_path == nested.as_posix())
+    target_item = next(item for item in targets if item.full_path == target.as_posix())
+    assert nested_item.indexed_file_count == 1
+    assert target_item.indexed_file_count == 2
+    assert nested_item.last_indexed_at is not None
+
+
+def test_delete_indexed_folders_removes_selected_folder_indexes_and_marks_targets_stale(tmp_path: Path) -> None:
+    """
+    選択したフォルダ配下の files・segments を削除し、重なる targets は再取得対象へ戻す。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    root = tmp_path / "root"
+    keep = root / "keep"
+    drop = root / "drop"
+    keep.mkdir(parents=True)
+    drop.mkdir(parents=True)
+    (keep / "a.md").write_text("keep", encoding="utf-8")
+    (drop / "b.md").write_text("drop", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(root), refresh_window_minutes=0, index_depth=2)
+
+    deleted_count = service.delete_indexed_folders([drop.as_posix()]).deleted_count
+
+    assert deleted_count == 1
+    remaining_targets = connection.execute("SELECT full_path, last_indexed_at FROM targets ORDER BY full_path").fetchall()
+    remaining_files = connection.execute("SELECT normalized_path FROM files ORDER BY normalized_path").fetchall()
+    remaining_segments = connection.execute("SELECT COUNT(*) AS count FROM file_segments").fetchone()
+
+    assert [row["normalized_path"] for row in remaining_files] == [(keep / "a.md").as_posix()]
+    assert remaining_segments["count"] == 1
+    assert [row["full_path"] for row in remaining_targets] == [root.as_posix()]
+    assert remaining_targets[0]["last_indexed_at"] is None
+
+
 def test_selected_types_limit_indexed_extensions_and_include_filename_only_files(tmp_path: Path) -> None:
     """
     対象拡張子で走査対象を絞り込み、画像のような本文なしファイルもファイル名検索用に登録する。
@@ -366,6 +543,43 @@ def test_selected_types_limit_indexed_extensions_and_include_filename_only_files
     indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
     assert [row["file_name"] for row in indexed_files] == ["diagram.png", "note.md"]
     assert connection.execute("SELECT COUNT(*) AS count FROM file_segments").fetchone()["count"] == 1
+
+
+def test_network_error_path_is_added_to_exclude_keywords_and_skipped_on_retry(tmp_path: Path) -> None:
+    """
+    WinError 59 が出たディレクトリは除外キーワードへ追加し、次回以降の再走査対象から外す。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    restricted = target / "restricted"
+    target.mkdir()
+    restricted.mkdir()
+    (target / "ok.md").write_text("searchable", encoding="utf-8")
+    (restricted / "secret.md").write_text("do not touch", encoding="utf-8")
+
+    original_scandir = __import__("app.services.index_service", fromlist=["os"]).os.scandir
+    restricted_hits = 0
+
+    def fake_scandir(path: str | bytes | int | Path):
+        nonlocal restricted_hits
+        if Path(path).name == "restricted":
+            restricted_hits += 1
+            error = OSError("[WinError 59] 予期しないネットワーク エラーが発生しました。")
+            error.winerror = 59
+            raise error
+        return original_scandir(path)
+
+    with patch("app.services.index_service.os.scandir", side_effect=fake_scandir):
+        service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+        service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+
+    indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
+    target_row = connection.execute("SELECT exclude_keywords FROM targets").fetchone()
+
+    assert [row["file_name"] for row in indexed_files] == ["ok.md"]
+    assert restricted_hits == 1
+    assert restricted.as_posix().lower() in str(target_row["exclude_keywords"]).splitlines()
 
 
 def test_root_path_range_query_handles_filesystem_root(tmp_path: Path) -> None:

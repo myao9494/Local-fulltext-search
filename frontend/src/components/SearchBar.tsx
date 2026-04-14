@@ -1,13 +1,24 @@
+type IndexUiStatus = "idle" | "running" | "cancelling";
+
 type SearchBarProps = {
   query: string;
   fullPath: string;
   indexDepth: string;
+  searchFilterText: string;
   isSearching: boolean;
   isRegexEnabled: boolean;
+  isSearchAllEnabled: boolean;
+  indexStatusLabel: string;
+  indexStatusTone: IndexUiStatus;
+  isCancelDisabled: boolean;
+  isCancellingIndex: boolean;
   onQueryChange: (value: string) => void;
   onFullPathChange: (value: string) => void;
   onIndexDepthChange: (value: string) => void;
+  onSearchFilterTextChange: (value: string) => void;
+  onCancelIndexing: () => void;
   onRegexToggle: () => void;
+  onSearchAllToggle: () => void;
   onPickFolder: () => void;
   onSubmit: () => void;
   onToggleMenu: () => void;
@@ -17,12 +28,21 @@ export function SearchBar({
   query,
   fullPath,
   indexDepth,
+  searchFilterText,
   isSearching,
   isRegexEnabled,
+  isSearchAllEnabled,
+  indexStatusLabel,
+  indexStatusTone,
+  isCancelDisabled,
+  isCancellingIndex,
   onQueryChange,
   onFullPathChange,
   onIndexDepthChange,
+  onSearchFilterTextChange,
+  onCancelIndexing,
   onRegexToggle,
+  onSearchAllToggle,
   onPickFolder,
   onSubmit,
   onToggleMenu,
@@ -30,34 +50,59 @@ export function SearchBar({
   return (
     <div className="search-panel">
       <div className="top-filters">
-        <div className="filter-group path-group">
-          <label className="filter-label">フォルダ:</label>
-          <div className="path-picker-row top-path-picker">
-            <input
-              className="small-input path-input"
-              value={fullPath}
-              onChange={(event) => onFullPathChange(event.target.value)}
-              placeholder="フルパス"
-            />
-            <button className="secondary-button small-btn" onClick={onPickFolder} type="button">
-              選択
-            </button>
+        <div className="top-filters-main">
+          <div className="filter-group path-group">
+            <label className="filter-label">フォルダ:</label>
+            <div className="path-picker-row top-path-picker">
+              <button
+                className={`secondary-button small-btn search-all-button ${isSearchAllEnabled ? "active" : ""}`}
+                onClick={onSearchAllToggle}
+                type="button"
+                aria-pressed={isSearchAllEnabled}
+              >
+                全データベース
+              </button>
+              <input
+                className="small-input path-input"
+                value={fullPath}
+                onChange={(event) => onFullPathChange(event.target.value)}
+                placeholder="フルパス"
+              />
+              <button className="secondary-button small-btn" onClick={onPickFolder} type="button">
+                選択
+              </button>
+            </div>
+          </div>
+
+          <div className="filter-group depth-group">
+            <label className="filter-label">階層:</label>
+            <div className="depth-field">
+              <input
+                className="small-input depth-input"
+                value={indexDepth}
+                onChange={(event) => onIndexDepthChange(event.target.value)}
+                placeholder="0"
+                type="number"
+                min={0}
+              />
+              <span className="filter-hint">0=直下のみ</span>
+            </div>
           </div>
         </div>
 
-        <div className="filter-group depth-group">
-          <label className="filter-label">階層:</label>
-          <div className="depth-field">
-            <input
-              className="small-input depth-input"
-              value={indexDepth}
-              onChange={(event) => onIndexDepthChange(event.target.value)}
-              placeholder="0"
-              type="number"
-              min={0}
-            />
-            <span className="filter-hint">0=直下のみ</span>
+        <div className="top-filters-status">
+          <div className={`index-status-pill ${indexStatusTone}`} aria-live="polite">
+            <span className="index-status-dot" />
+            <span>{indexStatusLabel}</span>
           </div>
+          <button
+            className="secondary-button index-cancel-button"
+            disabled={isCancelDisabled}
+            onClick={onCancelIndexing}
+            type="button"
+          >
+            {isCancellingIndex ? "中止中..." : "取得を中止"}
+          </button>
         </div>
       </div>
 
@@ -84,12 +129,24 @@ export function SearchBar({
         >
           .*
         </button>
+        <input
+          className="small-input extension-filter-input"
+          value={searchFilterText}
+          onChange={(event) => onSearchFilterTextChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing && !isSearching) {
+              onSubmit();
+            }
+          }}
+          placeholder="md excalidraw"
+          aria-label="検索拡張子フィルタ"
+        />
         <button className="primary-button" disabled={isSearching} onClick={onSubmit} type="button">
           {isSearching ? "Searching..." : "Search"}
         </button>
         <button className="menu-button" onClick={onToggleMenu} type="button" aria-label="設定">
           <svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24">
-             <path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path>
+            <path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path>
           </svg>
         </button>
       </div>

@@ -8,7 +8,7 @@ SCHEMA_STATEMENTS: list[str] = [
         full_path TEXT NOT NULL,
         last_indexed_at TEXT,
         exclude_keywords TEXT NOT NULL DEFAULT '',
-        index_depth INTEGER NOT NULL DEFAULT 5,
+        index_depth INTEGER NOT NULL DEFAULT 1,
         selected_extensions TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -46,6 +46,7 @@ SCHEMA_STATEMENTS: list[str] = [
     CREATE TABLE IF NOT EXISTS index_runs (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         is_running INTEGER NOT NULL DEFAULT 0,
+        cancel_requested INTEGER NOT NULL DEFAULT 0,
         last_started_at TEXT,
         last_finished_at TEXT,
         last_error TEXT,
@@ -54,8 +55,8 @@ SCHEMA_STATEMENTS: list[str] = [
     );
     """,
     """
-    INSERT INTO index_runs (id, is_running, total_files, error_count)
-    VALUES (1, 0, 0, 0)
+    INSERT INTO index_runs (id, is_running, cancel_requested, total_files, error_count)
+    VALUES (1, 0, 0, 0, 0)
     ON CONFLICT(id) DO NOTHING;
     """,
     """
@@ -139,12 +140,24 @@ def _needs_schema_reset(connection: Connection) -> bool:
         "indexed_at",
         "last_error",
     }
+    expected_index_run_columns = {
+        "id",
+        "is_running",
+        "cancel_requested",
+        "last_started_at",
+        "last_finished_at",
+        "last_error",
+        "total_files",
+        "error_count",
+    }
     expected_failed_file_columns = {"id", "normalized_path", "file_name", "error_message", "last_failed_at"}
     if legacy_folder_columns:
         return True
+    index_run_columns = _get_columns(connection, "index_runs")
     return (
         target_columns != expected_target_columns
         or file_columns != expected_file_columns
+        or index_run_columns != expected_index_run_columns
         or failed_file_columns != expected_failed_file_columns
     )
 

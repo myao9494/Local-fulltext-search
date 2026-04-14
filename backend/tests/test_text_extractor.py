@@ -7,20 +7,73 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.extractors.text_extractor import extract_text, supports_extension
+from app.extractors.text_extractor import extract_text, normalize_extension_filter, resolve_supported_extension, supports_extension
 
 
 def test_supports_extension_includes_office_pdf_and_images() -> None:
     """
-    対応拡張子には Office/PDF/Outlook と画像のファイル名検索対象が含まれる。
+    対応拡張子には Office/PDF/Outlook と作図系テキスト、画像のファイル名検索対象が含まれる。
     """
     assert supports_extension(Path("report.docx")) is True
     assert supports_extension(Path("sheet.xlsx")) is True
+    assert supports_extension(Path("macro_sheet.xlsm")) is True
     assert supports_extension(Path("deck.pptx")) is True
     assert supports_extension(Path("memo.pdf")) is True
     assert supports_extension(Path("mail.msg")) is True
+    assert supports_extension(Path("canvas.excalidraw")) is True
+    assert supports_extension(Path("canvas.excalidraw.md")) is True
+    assert supports_extension(Path("flow.dio")) is True
+    assert supports_extension(Path("flow.dio.svg")) is True
     assert supports_extension(Path("photo.png")) is True
     assert supports_extension(Path("archive.zip")) is False
+
+
+def test_extract_text_reads_excalidraw_and_dio_as_plain_text(tmp_path: Path) -> None:
+    """
+    Excalidraw と draw.io の保存ファイルは、JSON/XML の平文として検索対象へ取り込む。
+    """
+    excalidraw_file = tmp_path / "architecture.excalidraw"
+    excalidraw_file.write_text('{"type":"excalidraw","elements":[{"text":"検索導線"}]}', encoding="utf-8")
+
+    dio_file = tmp_path / "sequence.dio"
+    dio_file.write_text("<mxfile><diagram>index status filter</diagram></mxfile>", encoding="utf-8")
+    dio_svg_file = tmp_path / "sequence.dio.svg"
+    dio_svg_file.write_text("<svg><text>embedded drawio text</text></svg>", encoding="utf-8")
+
+    assert "検索導線" in extract_text(excalidraw_file)
+    assert "index status filter" in extract_text(dio_file)
+    assert "embedded drawio text" in extract_text(dio_svg_file)
+
+
+def test_normalize_extension_filter_accepts_space_separated_values_without_dots() -> None:
+    """
+    拡張子フィルタは `md excalidraw` のようなスペース区切り・ドットなし入力も受け付ける。
+    """
+    normalized = normalize_extension_filter("md excalidraw dio excalidraw.md dio.svg")
+
+    assert normalized == frozenset({".md", ".excalidraw", ".dio", ".excalidraw.md", ".dio.svg"})
+
+
+def test_resolve_supported_extension_prefers_longest_match_for_compound_suffix() -> None:
+    """
+    複合拡張子は最長一致で判定し、`.md` と `.excalidraw.md` を区別する。
+    """
+    assert resolve_supported_extension(Path("note.md")) == ".md"
+    assert resolve_supported_extension(Path("diagram.excalidraw.md")) == ".excalidraw.md"
+    assert resolve_supported_extension(Path("flow.dio.svg")) == ".dio.svg"
+
+
+def test_extract_text_reads_excalidraw_markdown_as_distinct_extension(tmp_path: Path) -> None:
+    """
+    `.excalidraw.md` は通常の `.md` と別拡張子として扱いつつ、本文抽出は Markdown と同様に行う。
+    """
+    excalidraw_markdown = tmp_path / "whiteboard.excalidraw.md"
+    excalidraw_markdown.write_text("# 図\n\nリンクは [こちら](docs/spec.md)", encoding="utf-8")
+
+    extracted = extract_text(excalidraw_markdown)
+
+    assert "図" in extracted
+    assert "こちら" in extracted
 
 
 def test_extract_text_reads_docx_paragraphs_and_tables(tmp_path: Path) -> None:
@@ -71,6 +124,29 @@ def test_extract_text_reads_xlsx_sheet_names_and_cell_values(tmp_path: Path) -> 
     assert "佐藤\t125000" in extracted
 
 
+def test_extract_text_reads_xlsm_sheet_names_and_cell_values(tmp_path: Path) -> None:
+    """
+    XLSM も XLSX と同様にシート名とセル値を検索用テキストとして抽出する。
+    """
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "在庫"
+    sheet["A1"] = "品名"
+    sheet["B1"] = "数量"
+    sheet["A2"] = "ボルト"
+    sheet["B2"] = 42
+    xlsm_file = tmp_path / "inventory.xlsm"
+    workbook.save(xlsm_file)
+
+    extracted = extract_text(xlsm_file)
+
+    assert "[Sheet] 在庫" in extracted
+    assert "品名\t数量" in extracted
+    assert "ボルト\t42" in extracted
+
+
 def test_extract_text_reads_pptx_slide_text(tmp_path: Path) -> None:
     """
     PPTX は各スライドのテキストを検索用テキストとして抽出する。
@@ -117,6 +193,59 @@ def test_extract_text_reads_pdf_text_via_pypdf(tmp_path: Path) -> None:
     assert "2ページ目" in extracted
 
 
+def test_extract_text_skips_encrypted_pdf_without_error(tmp_path: Path) -> None:
+    """
+    暗号化された PDF は本文抽出を行わず、空文字を返して静かにスキップする。
+    """
+    pdf_file = tmp_path / "secret.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4")
+
+    class FakePdfReader:
+        def __init__(self, *args, **kwargs) -> None:
+            self.is_encrypted = True
+            self.pages = []
+
+    with patch.dict("sys.modules", {"pypdf": SimpleNamespace(PdfReader=FakePdfReader)}):
+        extracted = extract_text(pdf_file)
+
+    assert extracted == ""
+
+
+def test_extract_text_keeps_extractable_pdf_pages_when_one_page_breaks(tmp_path: Path) -> None:
+    """
+    PDF の一部ページで抽出エラーが起きても、読めたページの本文は取り込む。
+    """
+    pdf_file = tmp_path / "partial.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4")
+
+    class FakePage:
+        def __init__(self, *, layout_text: str | None = None, error: Exception | None = None) -> None:
+            self._layout_text = layout_text
+            self._error = error
+
+        def extract_text(self, *args, **kwargs) -> str:
+            if self._error is not None:
+                raise self._error
+            return self._layout_text or ""
+
+    class FakePdfReader:
+        def __init__(self, *args, **kwargs) -> None:
+            self.is_encrypted = False
+            self.pages = [
+                FakePage(layout_text="読める1ページ目"),
+                FakePage(error=ValueError("unknown encoding: /90ms-RKSJ-H")),
+                FakePage(error=ZeroDivisionError("float floor division by zero")),
+                FakePage(layout_text="読める4ページ目"),
+            ]
+
+    with patch.dict("sys.modules", {"pypdf": SimpleNamespace(PdfReader=FakePdfReader)}):
+        extracted = extract_text(pdf_file)
+
+    assert "読める1ページ目" in extracted
+    assert "読める4ページ目" in extracted
+    assert "90ms-RKSJ-H" not in extracted
+
+
 def test_extract_text_reads_msg_header_and_body(tmp_path: Path) -> None:
     """
     Outlook の MSG は件名や差出人と本文を検索用テキストへ変換する。
@@ -146,6 +275,40 @@ def test_extract_text_reads_msg_header_and_body(tmp_path: Path) -> None:
     assert "From: sales@example.com" in extracted
     assert "To: team@example.com" in extracted
     assert "案件の見積を確認してください。" in extracted
+
+
+def test_extract_text_returns_empty_string_when_msg_decode_fails(tmp_path: Path) -> None:
+    """
+    MSG の文字コード解釈に失敗した場合は、空文字へフォールバックして継続する。
+    """
+    msg_file = tmp_path / "broken.msg"
+    msg_file.write_bytes(b"msg")
+
+    def fake_open_msg(path: str, **kwargs):
+        assert path.endswith("broken.msg")
+        raise UnicodeDecodeError("iso2022_jp", b"header", 1, 2, "illegal multibyte sequence")
+
+    with patch.dict("sys.modules", {"extract_msg": SimpleNamespace(openMsg=fake_open_msg)}):
+        extracted = extract_text(msg_file)
+
+    assert extracted == ""
+
+
+def test_extract_text_returns_empty_string_when_pptx_package_is_broken(tmp_path: Path) -> None:
+    """
+    壊れた PPTX は空文字へフォールバックし、全体のインデックス処理を止めない。
+    """
+    pptx_file = tmp_path / "broken.pptx"
+    pptx_file.write_bytes(b"pptx")
+
+    def fake_presentation(path: str):
+        assert path.endswith("broken.pptx")
+        raise ValueError('Package not found at "/tmp/broken.pptx"')
+
+    with patch.dict("sys.modules", {"pptx": SimpleNamespace(Presentation=fake_presentation)}):
+        extracted = extract_text(pptx_file)
+
+    assert extracted == ""
 
 
 def test_extract_text_flattens_markdown_image_path_with_parentheses(tmp_path: Path) -> None:

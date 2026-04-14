@@ -22,10 +22,11 @@ class SearchResponse(BaseModel):
 
 class SearchQueryParams(BaseModel):
     q: str = Field(min_length=1)
-    full_path: str = Field(min_length=1)
+    full_path: str = ""
     index_depth: int = Field(ge=0, le=128)
     refresh_window_minutes: int = Field(default=60, ge=0, le=1440)
     regex_enabled: bool = False
+    index_types: str | None = None
     types: str | None = None
     exclude_keywords: str | None = None
     limit: int = Field(default=20, ge=1, le=1000)
@@ -37,6 +38,8 @@ class SearchQueryParams(BaseModel):
         """
         検索対象パスは、現在の作業ディレクトリに依存しない絶対パスだけを受け付ける。
         """
+        if value == "":
+            return value
         try:
             normalize_path(value)
         except AbsolutePathRequiredError as error:

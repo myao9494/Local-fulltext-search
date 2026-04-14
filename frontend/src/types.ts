@@ -19,6 +19,7 @@ export type IndexStatus = {
   total_files: number;
   error_count: number;
   is_running: boolean;
+  cancel_requested: boolean;
   last_error: string | null;
 };
 
@@ -31,4 +32,14 @@ export type FailedFile = {
 
 export type FailedFileListResponse = {
   items: FailedFile[];
+};
+
+export type IndexedTarget = {
+  full_path: string;
+  last_indexed_at: string | null;
+  indexed_file_count: number;
+};
+
+export type IndexedTargetListResponse = {
+  items: IndexedTarget[];
 };

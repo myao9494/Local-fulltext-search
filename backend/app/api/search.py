@@ -14,10 +14,11 @@ router = APIRouter(prefix="/api", tags=["search"])
 @router.get("/search", response_model=SearchResponse)
 def search(
     q: str = Query(..., min_length=1),
-    full_path: str = Query(..., min_length=1),
+    full_path: str = Query(default=""),
     index_depth: int = Query(..., ge=0, le=128),
     refresh_window_minutes: int = Query(default=60, ge=0, le=1440),
     regex_enabled: bool = Query(default=False),
+    index_types: str | None = None,
     types: str | None = None,
     exclude_keywords: str | None = None,
     limit: int = Query(default=20, ge=1, le=100),
@@ -30,6 +31,7 @@ def search(
         index_depth=index_depth,
         refresh_window_minutes=refresh_window_minutes,
         regex_enabled=regex_enabled,
+        index_types=index_types,
         types=types,
         exclude_keywords=exclude_keywords,
         limit=limit,

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from concurrent.futures import ALL_COMPLETED, FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,8 +24,20 @@ from fastapi import HTTPException, status
 
 from app.db.connection import get_connection
 from app.db.schema import reset_schema
-from app.extractors.text_extractor import extract_text, normalize_extension_filter, supports_content_extraction
-from app.models.indexing import FailedFileItem, FailedFileListResponse, IndexStatusResponse
+from app.extractors.text_extractor import (
+    extract_text,
+    normalize_extension_filter,
+    resolve_supported_extension,
+    supports_content_extraction,
+)
+from app.models.indexing import (
+    DeleteIndexedFoldersResponse,
+    FailedFileItem,
+    FailedFileListResponse,
+    IndexedTargetItem,
+    IndexedTargetListResponse,
+    IndexStatusResponse,
+)
 from app.services.cjk_bigram import build_cjk_bigram_index_content, has_cjk_bigram_tokens
 from app.services.path_service import (
     AbsolutePathRequiredError,
@@ -47,6 +60,38 @@ class IndexedFileCandidate:
     existing_id: int | None
 
 
+class IndexingCancelledError(Exception):
+    """
+    利用者がインデックス中止を要求したことを表す。
+    """
+
+
+class IndexRunController:
+    """
+    共有DB接続ごとに、インデックス中止要求の状態を保持する。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._cancel_requested = False
+
+    def reset(self) -> None:
+        with self._lock:
+            self._cancel_requested = False
+
+    def request_cancel(self) -> None:
+        with self._lock:
+            self._cancel_requested = True
+
+    def is_cancel_requested(self) -> bool:
+        with self._lock:
+            return self._cancel_requested
+
+
+_CONTROLLERS_LOCK = threading.Lock()
+_CONTROLLERS: dict[int, IndexRunController] = {}
+
+
 class IndexService:
     def __init__(self, connection: Connection | None = None) -> None:
         self.connection = connection or get_connection()
@@ -66,14 +111,16 @@ class IndexService:
         full_path: str,
         refresh_window_minutes: int,
         exclude_keywords: str | None = None,
-        index_depth: int = 5,
+        index_depth: int = 1,
         types: str | None = None,
     ) -> None:
+        controller = self._get_run_controller()
         if self._is_running():
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Indexing is already running.")
 
+        controller.reset()
         started_at = datetime.now(UTC).isoformat()
-        self._update_status(is_running=True, last_started_at=started_at, last_error=None)
+        self._update_status(is_running=True, cancel_requested=False, last_started_at=started_at, last_error=None)
 
         normalized_keywords = self._normalize_exclude_keywords(exclude_keywords)
         normalized_extensions = self._normalize_selected_extensions(types)
@@ -87,10 +134,15 @@ class IndexService:
                 index_depth=index_depth,
                 selected_extensions=normalized_extensions,
             )
-            if self._needs_refresh(target, refresh_window_minutes, normalized_keywords, index_depth, normalized_extensions):
+            effective_keywords = self._merge_exclude_keyword_strings(
+                normalized_keywords,
+                str(target.get("exclude_keywords") or ""),
+            )
+            if self._needs_refresh(target, refresh_window_minutes, effective_keywords, index_depth, normalized_extensions):
                 stats = self._index_target(
                     target,
-                    normalized_keywords,
+                    effective_keywords,
+                    controller=controller,
                     index_depth=index_depth,
                     selected_extensions=normalized_extensions,
                 )
@@ -98,7 +150,7 @@ class IndexService:
                 error_count = stats["error_count"]
                 self._mark_target_indexed(
                     int(target["id"]),
-                    exclude_keywords=normalized_keywords,
+                    exclude_keywords=str(stats["exclude_keywords"]),
                     index_depth=index_depth,
                     selected_extensions=normalized_extensions,
                 )
@@ -108,9 +160,20 @@ class IndexService:
                     index_depth=int(target["index_depth"]),
                     selected_extensions=str(target["selected_extensions"]),
                 )
+        except IndexingCancelledError as error:
+            self._update_status(
+                is_running=False,
+                cancel_requested=False,
+                last_finished_at=datetime.now(UTC).isoformat(),
+                total_files=total_files,
+                error_count=error_count,
+                last_error=None,
+            )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
         except Exception as error:
             self._update_status(
                 is_running=False,
+                cancel_requested=False,
                 last_finished_at=datetime.now(UTC).isoformat(),
                 last_error=str(error),
                 total_files=total_files,
@@ -120,16 +183,25 @@ class IndexService:
 
         self._update_status(
             is_running=False,
+            cancel_requested=False,
             last_finished_at=datetime.now(UTC).isoformat(),
             total_files=total_files,
             error_count=error_count,
             last_error=None,
         )
 
+    def cancel_indexing(self) -> None:
+        """
+        実行中インデックスへ中止要求を送る。
+        """
+        self._get_run_controller().request_cancel()
+        self._update_status(cancel_requested=True)
+
     def get_status(self) -> IndexStatusResponse:
         row = self.connection.execute(
             """
             SELECT last_started_at, last_finished_at, total_files, error_count, is_running, last_error
+                   , cancel_requested
             FROM index_runs
             WHERE id = 1
             """
@@ -150,6 +222,79 @@ class IndexService:
             """
         ).fetchall()
         return FailedFileListResponse(items=[FailedFileItem.model_validate(dict(row)) for row in rows])
+
+    def list_indexed_targets(self) -> IndexedTargetListResponse:
+        """
+        UI 向けに、実際にインデックス済みファイルが存在する全フォルダ一覧を返す。
+        """
+        rows = self.connection.execute(
+            """
+            SELECT
+                normalized_path,
+                indexed_at
+            FROM files
+            ORDER BY normalized_path ASC
+            """
+        ).fetchall()
+        target_rows = self.connection.execute(
+            """
+            SELECT full_path
+            FROM targets
+            WHERE last_indexed_at IS NOT NULL
+            ORDER BY length(full_path) DESC
+            """
+        ).fetchall()
+        target_roots = [str(row["full_path"]) for row in target_rows]
+        folder_map: dict[str, dict[str, object]] = {}
+        for row in rows:
+            file_path = normalize_path(str(row["normalized_path"]))
+            for folder_path in self._expand_indexed_folder_paths(file_path, target_roots):
+                folder_entry = folder_map.get(folder_path)
+                indexed_at = row["indexed_at"]
+                if folder_entry is None:
+                    folder_map[folder_path] = {
+                        "full_path": folder_path,
+                        "last_indexed_at": indexed_at,
+                        "indexed_file_count": 1,
+                    }
+                    continue
+                folder_entry["indexed_file_count"] = int(folder_entry["indexed_file_count"]) + 1
+                current_last = folder_entry["last_indexed_at"]
+                if current_last is None or str(indexed_at) > str(current_last):
+                    folder_entry["last_indexed_at"] = indexed_at
+
+        items = [
+            IndexedTargetItem.model_validate(item)
+            for item in sorted(
+                folder_map.values(),
+                key=lambda item: (str(item["last_indexed_at"]), str(item["full_path"])),
+                reverse=True,
+            )
+        ]
+        return IndexedTargetListResponse(items=items)
+
+    def delete_indexed_folders(self, folder_paths: list[str]) -> DeleteIndexedFoldersResponse:
+        """
+        選択したフォルダ群配下のインデックスを削除し、重なる targets は次回再取得される状態へ戻す。
+        """
+        if self._is_running():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Indexing is already running.")
+        normalized_paths = sorted(
+            {
+                normalize_path(folder_path).as_posix()
+                for folder_path in folder_paths
+                if str(folder_path).strip()
+            }
+        )
+        if not normalized_paths:
+            return DeleteIndexedFoldersResponse(deleted_count=0)
+
+        for folder_path in normalized_paths:
+            self._delete_target_related_rows(folder_path)
+            self._mark_overlapping_targets_stale(folder_path)
+
+        self.connection.commit()
+        return DeleteIndexedFoldersResponse(deleted_count=len(normalized_paths))
 
     def _is_running(self) -> bool:
         row = self.connection.execute("SELECT is_running FROM index_runs WHERE id = 1").fetchone()
@@ -234,6 +379,7 @@ class IndexService:
         self,
         target: dict[str, object],
         exclude_keywords: str,
+        controller: IndexRunController,
         *,
         index_depth: int,
         selected_extensions: str,
@@ -245,13 +391,13 @@ class IndexService:
         folder_path = normalize_path(str(target["full_path"]))
         normalized_paths: set[str] = set()
         failed_paths: set[str] = set()
+        auto_excluded_paths: set[str] = set()
         file_count = 0
         error_count = 0
         write_count = 0
 
         keywords = self._parse_exclude_keywords(exclude_keywords)
-        keyword_set = frozenset(keywords)
-        non_ascii_keywords = [kw for kw in keywords if any(ord(c) > 127 for c in kw)]
+        keyword_set, non_ascii_keywords, excluded_path_prefixes = self._compile_exclude_keywords(keywords)
         allowed_extensions = normalize_extension_filter(selected_extensions)
         existing_files = self._load_existing_files(folder_path.as_posix())
         batch_size = 100
@@ -259,14 +405,19 @@ class IndexService:
         max_pending = max_workers * 4
         pending: dict[Future[str], IndexedFileCandidate] = {}
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor = ThreadPoolExecutor(max_workers=max_workers)
+        cancelled = False
+        try:
             for path in self._walk_files(
                 folder_path,
                 keyword_set,
                 non_ascii_keywords,
+                excluded_path_prefixes=excluded_path_prefixes,
+                auto_excluded_paths=auto_excluded_paths,
                 allowed_extensions=allowed_extensions,
                 max_depth=index_depth,
             ):
+                self._raise_if_cancel_requested(controller)
                 stat = path.stat()
                 normalized_path = path.resolve().as_posix()
                 normalized_paths.add(normalized_path)
@@ -287,7 +438,12 @@ class IndexService:
                 if supports_content_extraction(path):
                     pending[executor.submit(extract_text, path)] = candidate
                     if len(pending) >= max_pending:
-                        result = self._drain_pending_futures(pending, failed_paths, drain_all=False)
+                        result = self._drain_pending_futures(
+                            pending,
+                            failed_paths,
+                            controller=controller,
+                            drain_all=False,
+                        )
                         file_count += result["file_count"]
                         error_count += result["error_count"]
                         write_count += result["write_count"]
@@ -298,15 +454,31 @@ class IndexService:
                     if write_count % batch_size == 0:
                         self.connection.commit()
 
-            result = self._drain_pending_futures(pending, failed_paths, drain_all=True)
+            result = self._drain_pending_futures(
+                pending,
+                failed_paths,
+                controller=controller,
+                drain_all=True,
+            )
             file_count += result["file_count"]
             error_count += result["error_count"]
             write_count += result["write_count"]
+        except IndexingCancelledError:
+            cancelled = True
+            self.connection.commit()
+            raise
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
-        self.connection.commit()
-        self._remove_deleted_files(normalized_paths, root_path=folder_path.as_posix())
-        self._clear_resolved_failed_files(root_path=folder_path.as_posix(), failed_paths=failed_paths)
-        return {"file_count": file_count, "error_count": error_count}
+        if not cancelled:
+            self.connection.commit()
+            self._remove_deleted_files(normalized_paths, root_path=folder_path.as_posix())
+            self._clear_resolved_failed_files(root_path=folder_path.as_posix(), failed_paths=failed_paths)
+        return {
+            "file_count": file_count,
+            "error_count": error_count,
+            "exclude_keywords": self._normalize_keyword_list([*keywords, *sorted(auto_excluded_paths)]),
+        }
 
     def _resolve_extract_worker_count(self) -> int:
         """
@@ -320,6 +492,7 @@ class IndexService:
         self,
         pending: dict[Future[str], IndexedFileCandidate],
         failed_paths: set[str],
+        controller: IndexRunController,
         *,
         drain_all: bool,
     ) -> dict[str, int]:
@@ -338,6 +511,7 @@ class IndexService:
         error_count = 0
         write_count = 0
         for future in done:
+            self._raise_if_cancel_requested(controller)
             candidate = pending.pop(future)
             try:
                 content = future.result()
@@ -350,6 +524,25 @@ class IndexService:
                 self._record_file_error(candidate.path, error)
 
         return {"file_count": file_count, "error_count": error_count, "write_count": write_count}
+
+    def _raise_if_cancel_requested(self, controller: IndexRunController) -> None:
+        """
+        中止要求が来ていたら即座に処理を打ち切る。
+        """
+        if controller.is_cancel_requested():
+            raise IndexingCancelledError("Indexing was cancelled.")
+
+    def _get_run_controller(self) -> IndexRunController:
+        """
+        共有DB接続単位で中止要求コントローラを再利用する。
+        """
+        connection_key = id(self.connection)
+        with _CONTROLLERS_LOCK:
+            controller = _CONTROLLERS.get(connection_key)
+            if controller is None:
+                controller = IndexRunController()
+                _CONTROLLERS[connection_key] = controller
+            return controller
 
     def _load_existing_files(self, root_path: str) -> dict[str, dict[str, object]]:
         """
@@ -383,6 +576,8 @@ class IndexService:
         keyword_set: frozenset[str],
         non_ascii_keywords: list[str],
         *,
+        excluded_path_prefixes: tuple[str, ...],
+        auto_excluded_paths: set[str],
         allowed_extensions: frozenset[str],
         max_depth: int,
         current_depth: int = 0,
@@ -391,11 +586,22 @@ class IndexService:
         os.scandir ベースの高速ファイル走査。
         除外ディレクトリには再帰せず、深さと拡張子の条件を満たすファイルだけを返す。
         """
+        normalized_root = self._normalize_excluded_path_prefix(root)
+        if normalized_root is not None and self._is_excluded_path_prefix(normalized_root, excluded_path_prefixes):
+            return
+
         try:
             with os.scandir(root) as entries:
                 for entry in entries:
                     # 再帰走査なので親パーツは既にチェック済み。現在のエントリ名だけで判定する
                     if self._is_excluded_name(entry.name, keyword_set, non_ascii_keywords):
+                        continue
+
+                    normalized_entry_path = self._normalize_excluded_path_prefix(entry.path)
+                    if normalized_entry_path is not None and self._is_excluded_path_prefix(
+                        normalized_entry_path,
+                        excluded_path_prefixes,
+                    ):
                         continue
 
                     if entry.is_dir(follow_symlinks=False):
@@ -404,6 +610,8 @@ class IndexService:
                                 Path(entry.path),
                                 keyword_set,
                                 non_ascii_keywords,
+                                excluded_path_prefixes=excluded_path_prefixes,
+                                auto_excluded_paths=auto_excluded_paths,
                                 allowed_extensions=allowed_extensions,
                                 max_depth=max_depth,
                                 current_depth=current_depth + 1,
@@ -411,11 +619,17 @@ class IndexService:
                         continue
 
                     if entry.is_file(follow_symlinks=False):
-                        suffix = os.path.splitext(entry.name)[1].lower()
-                        if suffix in allowed_extensions:
+                        resolved_extension = resolve_supported_extension(Path(entry.name))
+                        if resolved_extension in allowed_extensions:
                             yield Path(entry.path)
         except PermissionError:
             pass
+        except OSError as error:
+            if self._is_unexpected_network_error(error):
+                if normalized_root is not None:
+                    auto_excluded_paths.add(normalized_root)
+                return
+            raise
 
     def _upsert_file(self, *, candidate: IndexedFileCandidate, content: str | None) -> None:
         """
@@ -435,7 +649,7 @@ class IndexService:
                 (
                     candidate.normalized_path,
                     candidate.path.name,
-                    candidate.path.suffix.lower(),
+                    resolve_supported_extension(candidate.path) or candidate.path.suffix.lower(),
                     candidate.mtime,
                     candidate.size,
                     indexed_at,
@@ -456,7 +670,7 @@ class IndexService:
                     candidate.normalized_path,
                     candidate.normalized_path,
                     candidate.path.name,
-                    candidate.path.suffix.lower(),
+                    resolve_supported_extension(candidate.path) or candidate.path.suffix.lower(),
                     candidate.mtime,
                     candidate.size,
                     indexed_at,
@@ -553,6 +767,89 @@ class IndexService:
             self.connection.execute(f"DELETE FROM files WHERE id IN ({placeholders})", chunk)
         self.connection.commit()
 
+    def _delete_target_related_rows(self, root_path: str) -> None:
+        """
+        対象フォルダ配下の files / file_segments / failed_files をまとめて削除する。
+        """
+        prefix_start, prefix_end = get_descendant_path_range(root_path)
+        rows = self.connection.execute(
+            """
+            SELECT id
+            FROM files
+            WHERE normalized_path >= ? AND normalized_path < ?
+            """,
+            (prefix_start, prefix_end),
+        ).fetchall()
+        file_ids = [int(row["id"]) for row in rows]
+        if file_ids:
+            chunk_size = 500
+            for index in range(0, len(file_ids), chunk_size):
+                chunk = file_ids[index:index + chunk_size]
+                placeholders = ",".join("?" * len(chunk))
+                self.connection.execute(f"DELETE FROM file_segments WHERE file_id IN ({placeholders})", chunk)
+                self.connection.execute(f"DELETE FROM files WHERE id IN ({placeholders})", chunk)
+
+        self.connection.execute(
+            """
+            DELETE FROM failed_files
+            WHERE normalized_path >= ? AND normalized_path < ?
+            """,
+            (prefix_start, prefix_end),
+        )
+
+    def _mark_overlapping_targets_stale(self, folder_path: str) -> None:
+        """
+        削除対象と重なる targets は、次回検索時に必ず再インデックスされるよう last_indexed_at を外す。
+        """
+        rows = self.connection.execute(
+            """
+            SELECT id, full_path
+            FROM targets
+            """
+        ).fetchall()
+        now = datetime.now(UTC).isoformat()
+        for row in rows:
+            target_path = str(row["full_path"])
+            if self._paths_overlap(folder_path, target_path):
+                self.connection.execute(
+                    """
+                    UPDATE targets
+                    SET last_indexed_at = NULL, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, int(row["id"])),
+                )
+
+    def _expand_indexed_folder_paths(self, file_path: Path, target_roots: list[str]) -> list[str]:
+        """
+        ファイルから、最も近い target までの祖先フォルダを展開する。
+        """
+        file_path_str = file_path.as_posix()
+        limit_path = self._find_nearest_target_root(file_path_str, target_roots)
+        folders: list[str] = []
+        current = file_path.parent
+        while True:
+            folders.append(current.as_posix())
+            if current.as_posix() == limit_path or current.parent == current:
+                break
+            current = current.parent
+        return folders
+
+    def _find_nearest_target_root(self, file_path: str, target_roots: list[str]) -> str:
+        """
+        指定ファイルを含む最も深い target ルートを返す。
+        """
+        for root_path in target_roots:
+            if file_path == root_path or file_path.startswith(f"{root_path}/"):
+                return root_path
+        return Path(file_path).parent.as_posix()
+
+    def _paths_overlap(self, left: str, right: str) -> bool:
+        """
+        フォルダどうしが同一または祖先・子孫関係にあるかを判定する。
+        """
+        return left == right or left.startswith(f"{right}/") or right.startswith(f"{left}/")
+
     def _clear_resolved_failed_files(self, *, root_path: str, failed_paths: set[str]) -> None:
         """
         今回失敗していない過去ログを対象ルート配下から掃除する。
@@ -622,7 +919,8 @@ class IndexService:
     def _update_status(
         self,
         *,
-        is_running: bool,
+        is_running: bool | None = None,
+        cancel_requested: bool | None = None,
         last_started_at: str | None = None,
         last_finished_at: str | None = None,
         last_error: str | None = None,
@@ -635,7 +933,8 @@ class IndexService:
         self.connection.execute(
             """
             UPDATE index_runs
-            SET is_running = ?,
+            SET is_running = COALESCE(?, is_running),
+                cancel_requested = COALESCE(?, cancel_requested),
                 last_started_at = COALESCE(?, last_started_at),
                 last_finished_at = COALESCE(?, last_finished_at),
                 last_error = ?,
@@ -644,7 +943,8 @@ class IndexService:
             WHERE id = 1
             """,
             (
-                int(is_running),
+                int(is_running) if is_running is not None else None,
+                int(cancel_requested) if cancel_requested is not None else None,
                 last_started_at,
                 last_finished_at,
                 last_error,
@@ -657,8 +957,17 @@ class IndexService:
     def _normalize_exclude_keywords(self, value: str | None) -> str:
         return "\n".join(self._parse_exclude_keywords(value))
 
+    def _normalize_keyword_list(self, keywords: list[str]) -> str:
+        return "\n".join(self._parse_exclude_keywords("\n".join(keywords)))
+
     def _normalize_selected_extensions(self, value: str | None) -> str:
         return ",".join(sorted(normalize_extension_filter(value)))
+
+    def _merge_exclude_keyword_strings(self, *values: str) -> str:
+        merged: list[str] = []
+        for value in values:
+            merged.extend(self._parse_exclude_keywords(value))
+        return self._normalize_keyword_list(merged)
 
     def _parse_exclude_keywords(self, value: str | None) -> list[str]:
         seen: set[str] = set()
@@ -677,20 +986,66 @@ class IndexService:
         """
         if not keywords:
             return False
-        keyword_set = frozenset(keywords)
-        non_ascii_keywords = [kw for kw in keywords if any(ord(c) > 127 for c in kw)]
-        return self._should_exclude_path_with_keywords(path, keyword_set, non_ascii_keywords)
+        keyword_set, non_ascii_keywords, excluded_path_prefixes = self._compile_exclude_keywords(keywords)
+        return self._should_exclude_path_with_keywords(path, keyword_set, non_ascii_keywords, excluded_path_prefixes)
 
     def _should_exclude_path_with_keywords(
         self,
         path: Path,
         keyword_set: frozenset[str],
         non_ascii_keywords: list[str],
+        excluded_path_prefixes: tuple[str, ...],
     ) -> bool:
         """
         事前計算済みキーワード集合を用いてパス全体の除外判定を行う。
         """
+        normalized_path = self._normalize_excluded_path_prefix(path)
+        if normalized_path is not None and self._is_excluded_path_prefix(normalized_path, excluded_path_prefixes):
+            return True
         return any(self._is_excluded_name(part, keyword_set, non_ascii_keywords) for part in path.parts)
+
+    def _compile_exclude_keywords(self, keywords: list[str]) -> tuple[frozenset[str], list[str], tuple[str, ...]]:
+        """
+        名前一致用キーワードとフルパス除外用プレフィックスを分離して前処理する。
+        """
+        name_keywords: list[str] = []
+        path_prefixes: list[str] = []
+        for keyword in keywords:
+            normalized_path = self._normalize_excluded_path_prefix(keyword)
+            if normalized_path is not None:
+                path_prefixes.append(normalized_path)
+                continue
+            name_keywords.append(keyword)
+        keyword_set = frozenset(name_keywords)
+        non_ascii_keywords = [kw for kw in name_keywords if any(ord(c) > 127 for c in kw)]
+        return keyword_set, non_ascii_keywords, tuple(path_prefixes)
+
+    def _normalize_excluded_path_prefix(self, value: str | os.PathLike[str] | Path) -> str | None:
+        """
+        除外キーワードがフルパス形式なら比較しやすい表記へ正規化する。
+        """
+        raw_value = os.fspath(value).strip().lower()
+        if "/" not in raw_value and "\\" not in raw_value:
+            return None
+        normalized = raw_value.replace("\\", "/")
+        if len(normalized) > 1:
+            normalized = normalized.rstrip("/")
+        return normalized
+
+    def _is_excluded_path_prefix(self, normalized_path: str, excluded_path_prefixes: tuple[str, ...]) -> bool:
+        """
+        パス全体またはその祖先がフルパス除外キーワードに一致するか判定する。
+        """
+        for prefix in excluded_path_prefixes:
+            if normalized_path == prefix or normalized_path.startswith(f"{prefix}/"):
+                return True
+        return False
+
+    def _is_unexpected_network_error(self, error: OSError) -> bool:
+        """
+        Windows の WinError 59 はアクセス不能な共有先として扱い、以降の走査対象から外す。
+        """
+        return getattr(error, "winerror", None) == 59
 
     def _is_excluded_name(self, name: str, keyword_set: frozenset[str], non_ascii_keywords: list[str]) -> bool:
         """

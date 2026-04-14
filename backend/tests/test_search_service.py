@@ -300,6 +300,126 @@ def test_search_matches_filename_only_image_in_regex_mode(tmp_path: Path) -> Non
     assert [item.file_name for item in result.items] == ["architecture-overview.png"]
 
 
+def test_search_uses_independent_index_types_for_refresh_target(tmp_path: Path) -> None:
+    """
+    再インデックス判定に渡す拡張子は検索フィルタと分離し、index_types だけを使う。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "memo.md").write_text("alpha memo", encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    def fake_ensure_fresh_target(**kwargs) -> None:
+        captured.update(kwargs)
+
+    service.index_service.ensure_fresh_target = fake_ensure_fresh_target
+
+    service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(target),
+            index_depth=0,
+            refresh_window_minutes=60,
+            index_types="md",
+            types="png",
+        )
+    )
+
+    assert captured["types"] == "md"
+
+
+def test_search_extension_filter_accepts_space_separated_values_without_dots(tmp_path: Path) -> None:
+    """
+    検索時の拡張子フィルタは、スペース区切り・ドットなし入力でも正しく絞り込める。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "board.excalidraw").write_text('{"text":"alpha board"}', encoding="utf-8")
+    (target / "memo.md").write_text("alpha memo", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(target),
+            index_depth=0,
+            refresh_window_minutes=60,
+            types="excalidraw",
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["board.excalidraw"]
+
+
+def test_search_treats_md_and_excalidraw_md_as_distinct_extensions(tmp_path: Path) -> None:
+    """
+    `.md` と `.excalidraw.md` は別拡張子として検索フィルタできる。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "memo.md").write_text("alpha memo", encoding="utf-8")
+    (target / "board.excalidraw.md").write_text("alpha board", encoding="utf-8")
+
+    markdown_result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(target),
+            index_depth=0,
+            refresh_window_minutes=60,
+            types="md",
+        )
+    )
+    excalidraw_result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(target),
+            index_depth=0,
+            refresh_window_minutes=60,
+            types="excalidraw.md",
+        )
+    )
+
+    assert [item.file_name for item in markdown_result.items] == ["memo.md"]
+    assert [item.file_name for item in excalidraw_result.items] == ["board.excalidraw.md"]
+
+
+def test_search_treats_svg_and_dio_svg_as_distinct_extensions(tmp_path: Path) -> None:
+    """
+    `.svg` と `.dio.svg` は別拡張子として検索フィルタできる。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "icon.svg").write_bytes(b"<svg/>")
+    (target / "flow.dio.svg").write_text("<svg><text>alpha flow</text></svg>", encoding="utf-8")
+
+    svg_result = service.search(
+        SearchQueryParams(
+            q="flow",
+            full_path=str(target),
+            index_depth=0,
+            refresh_window_minutes=60,
+            types="svg",
+        )
+    )
+    dio_svg_result = service.search(
+        SearchQueryParams(
+            q="flow",
+            full_path=str(target),
+            index_depth=0,
+            refresh_window_minutes=60,
+            types="dio.svg",
+        )
+    )
+
+    assert svg_result.items == []
+    assert [item.file_name for item in dio_svg_result.items] == ["flow.dio.svg"]
+
+
 def test_search_root_target_respects_depth_filter(tmp_path: Path) -> None:
     """
     ルートディレクトリ対象でも index_depth に応じて検索範囲を正しく絞り込む。
@@ -341,6 +461,179 @@ def test_search_root_target_respects_depth_filter(tmp_path: Path) -> None:
 
     assert result.total == 1
     assert [item.full_path for item in result.items] == ["/match-root.md"]
+
+
+def test_search_does_not_exclude_results_by_ancestor_directory_name(tmp_path: Path) -> None:
+    """
+    検索時の除外判定は対象配下に限定し、絶対パス上の親ディレクトリ名では落とさない。
+    """
+    workspace_root = tmp_path / "app" / "project"
+    docs_dir = workspace_root / "docs"
+    docs_dir.mkdir(parents=True)
+    note_path = docs_dir / "guide.md"
+    note_path.write_text("全文検索のメモです。", encoding="utf-8")
+
+    service = SearchService(connection=_create_connection(tmp_path))
+
+    result = service.search(
+        SearchQueryParams(
+            q="全文",
+            full_path=str(workspace_root),
+            index_depth=5,
+            refresh_window_minutes=60,
+            exclude_keywords="app",
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["guide.md"]
+
+
+def test_search_without_full_path_matches_across_entire_database(tmp_path: Path) -> None:
+    """
+    full_path を空にすると、DB 全体を対象に検索できる。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
+    timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
+    rows = [
+        ("/docs/alpha.md", "/docs/alpha.md", "alpha.md", ".md", timestamp, 12, indexed_at),
+        ("/archive/alpha-notes.md", "/archive/alpha-notes.md", "alpha-notes.md", ".md", timestamp, 12, indexed_at),
+    ]
+    connection.executemany(
+        """
+        INSERT INTO files(
+            full_path, normalized_path,
+            file_name, file_ext, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+        """,
+        rows,
+    )
+    connection.executemany(
+        """
+        INSERT INTO file_segments(file_id, segment_type, segment_label, content)
+        VALUES (?, 'body', ?, ?)
+        """,
+        [
+            (1, "/docs/alpha.md", "alpha project memo"),
+            (2, "/archive/alpha-notes.md", "alpha archive memo"),
+        ],
+    )
+    connection.commit()
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            index_depth=5,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 2
+    assert [item.file_name for item in result.items] == ["alpha.md", "alpha-notes.md"]
+    assert all(item.target_path == "" for item in result.items)
+
+
+def test_search_without_full_path_applies_exclude_keywords_to_entire_database(tmp_path: Path) -> None:
+    """
+    全 DB 検索では除外キーワードを絶対パス全体へ適用する。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
+    timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
+    rows = [
+        ("/docs/alpha.md", "/docs/alpha.md", "alpha.md", ".md", timestamp, 12, indexed_at),
+        ("/archive/alpha-notes.md", "/archive/alpha-notes.md", "alpha-notes.md", ".md", timestamp, 12, indexed_at),
+    ]
+    connection.executemany(
+        """
+        INSERT INTO files(
+            full_path, normalized_path,
+            file_name, file_ext, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+        """,
+        rows,
+    )
+    connection.executemany(
+        """
+        INSERT INTO file_segments(file_id, segment_type, segment_label, content)
+        VALUES (?, 'body', ?, ?)
+        """,
+        [
+            (1, "/docs/alpha.md", "alpha project memo"),
+            (2, "/archive/alpha-notes.md", "alpha archive memo"),
+        ],
+    )
+    connection.commit()
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            index_depth=5,
+            refresh_window_minutes=60,
+            exclude_keywords="archive",
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["alpha.md"]
+
+
+def test_search_without_full_path_excludes_dot_prefixed_directory_keyword(tmp_path: Path) -> None:
+    """
+    全 DB 検索では `.gemini` のようなドット始まりディレクトリ名も除外できる。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
+    timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
+    rows = [
+        ("/workspace/docs/alpha.md", "/workspace/docs/alpha.md", "alpha.md", ".md", timestamp, 12, indexed_at),
+        ("/workspace/.gemini/secret.md", "/workspace/.gemini/secret.md", "secret.md", ".md", timestamp, 12, indexed_at),
+    ]
+    connection.executemany(
+        """
+        INSERT INTO files(
+            full_path, normalized_path,
+            file_name, file_ext, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+        """,
+        rows,
+    )
+    connection.executemany(
+        """
+        INSERT INTO file_segments(file_id, segment_type, segment_label, content)
+        VALUES (?, 'body', ?, ?)
+        """,
+        [
+            (1, "/workspace/docs/alpha.md", "alpha project memo"),
+            (2, "/workspace/.gemini/secret.md", "alpha secret memo"),
+        ],
+    )
+    connection.commit()
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            index_depth=5,
+            refresh_window_minutes=60,
+            exclude_keywords=".gemini",
+        )
+    )
+
+    assert result.total == 1
+    assert [item.full_path for item in result.items] == ["/workspace/docs/alpha.md"]
 
 
 def _create_connection(tmp_path: Path) -> Connection:

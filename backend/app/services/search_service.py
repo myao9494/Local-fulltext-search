@@ -6,6 +6,7 @@ from sqlite3 import Connection
 from fastapi import HTTPException, status
 
 from app.db.connection import get_connection
+from app.extractors.text_extractor import normalize_extension_filter
 from app.models.search import SearchQueryParams, SearchResponse, SearchResultItem
 from app.services.cjk_bigram import build_cjk_bigram_match_query
 from app.services.index_service import IndexService
@@ -23,15 +24,16 @@ class SearchService:
         self.index_service = IndexService(connection=self.connection)
 
     def search(self, params: SearchQueryParams) -> SearchResponse:
-        normalized_target_path = normalize_path_str(params.full_path)
+        normalized_target_path = normalize_path_str(params.full_path) if params.full_path else ""
         excluded_keywords = self.index_service._parse_exclude_keywords(params.exclude_keywords)
-        self.index_service.ensure_fresh_target(
-            full_path=normalized_target_path,
-            refresh_window_minutes=params.refresh_window_minutes,
-            exclude_keywords=params.exclude_keywords,
-            index_depth=params.index_depth,
-            types=params.types,
-        )
+        if normalized_target_path:
+            self.index_service.ensure_fresh_target(
+                full_path=normalized_target_path,
+                refresh_window_minutes=params.refresh_window_minutes,
+                exclude_keywords=params.exclude_keywords,
+                index_depth=params.index_depth,
+                types=params.index_types,
+            )
 
         if params.regex_enabled:
             return self._search_with_regex(
@@ -124,6 +126,68 @@ class SearchService:
             """
         )
         query_values.extend([*values, f"%{escaped_query}%"])
+
+        if not normalized_target_path and excluded_keywords:
+            rows = self.connection.execute(
+                f"""
+                WITH matched_files AS (
+                    {" UNION ALL ".join(matched_queries)}
+                ),
+                ranked_matches AS (
+                    SELECT
+                        file_id,
+                        match_rank,
+                        score,
+                        snippet,
+                        segment_type,
+                        body_content,
+                        ROW_NUMBER() OVER (PARTITION BY file_id ORDER BY match_rank, score, file_id) AS rn
+                    FROM matched_files
+                ),
+                filtered AS (
+                    SELECT * FROM ranked_matches WHERE rn = 1
+                )
+                SELECT
+                    files.id AS file_id,
+                    files.file_name,
+                    files.normalized_path,
+                    files.file_ext,
+                    files.mtime,
+                    filtered.snippet,
+                    filtered.segment_type,
+                    filtered.body_content
+                FROM filtered
+                JOIN files ON files.id = filtered.file_id
+                ORDER BY filtered.match_rank, filtered.score, files.mtime DESC
+                """,
+                tuple(query_values),
+            ).fetchall()
+
+            visible_items = [
+                SearchResultItem(
+                    file_id=int(row["file_id"]),
+                    target_path=normalized_target_path,
+                    file_name=str(row["file_name"]),
+                    full_path=str(row["normalized_path"]),
+                    file_ext=str(row["file_ext"]),
+                    mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
+                    snippet=self._resolve_snippet(
+                        snippet=row["snippet"],
+                        file_name=str(row["file_name"]),
+                        segment_type=str(row["segment_type"] or "filename"),
+                        body_content=row["body_content"],
+                        query=normalized_query,
+                    ),
+                )
+                for row in rows
+                if not self._should_exclude_search_result(
+                    target_path=normalized_target_path,
+                    candidate_path=str(row["normalized_path"]),
+                    excluded_keywords=excluded_keywords,
+                )
+            ]
+            return SearchResponse(total=len(visible_items), items=visible_items[params.offset : params.offset + params.limit])
+
         query_values.extend([params.limit, params.offset])
 
         rows = self.connection.execute(
@@ -202,7 +266,11 @@ class SearchService:
             )
             for row in rows
             if row["file_id"] is not None
-            and not self.index_service._should_exclude_path(normalize_path(str(row["normalized_path"])), excluded_keywords)
+            and not self._should_exclude_search_result(
+                target_path=normalized_target_path,
+                candidate_path=str(row["normalized_path"]),
+                excluded_keywords=excluded_keywords,
+            )
         ]
         return SearchResponse(total=total, items=items)
 
@@ -347,6 +415,30 @@ class SearchService:
     def _escape_like_pattern(self, value: str) -> str:
         return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
+    def _should_exclude_search_result(
+        self,
+        *,
+        target_path: str,
+        candidate_path: str,
+        excluded_keywords: list[str],
+    ) -> bool:
+        """
+        検索結果の除外判定は対象フォルダ配下の相対パスだけで行う。
+        絶対パス上の祖先ディレクトリ名まで見ると、対象外の親フォルダ名で誤除外される。
+        """
+        if not excluded_keywords:
+            return False
+        if not target_path:
+            return self.index_service._should_exclude_path(normalize_path(candidate_path), excluded_keywords)
+
+        target_root = normalize_path(target_path)
+        result_path = normalize_path(candidate_path)
+        try:
+            relative_path = result_path.relative_to(target_root)
+        except ValueError:
+            relative_path = result_path
+        return self.index_service._should_exclude_path(relative_path, excluded_keywords)
+
     def _build_fts_match_query(self, value: str) -> str:
         """
         FTS5 の構文文字を無害化しつつ、空白区切りは AND 検索として扱う。
@@ -370,21 +462,28 @@ class SearchService:
         """
         検索モード共通のパス・階層・拡張子フィルタを組み立てる。
         """
-        prefix_start, prefix_end = get_descendant_path_range(normalized_target_path)
-        descendant_prefix = get_descendant_path_prefix(normalized_target_path)
-        depth_expression = (
-            "(length(files.normalized_path) - length(replace(files.normalized_path, '/', '')))"
-            " - (length(?) - length(replace(?, '/', '')))"
-        )
-        filters: list[str] = ["files.normalized_path >= ?", "files.normalized_path < ?", f"{depth_expression} <= ?"]
-        values: list[object] = [prefix_start, prefix_end, descendant_prefix, descendant_prefix, index_depth]
+        filters: list[str] = []
+        values: list[object] = []
+
+        if normalized_target_path:
+            prefix_start, prefix_end = get_descendant_path_range(normalized_target_path)
+            descendant_prefix = get_descendant_path_prefix(normalized_target_path)
+            depth_expression = (
+                "(length(files.normalized_path) - length(replace(files.normalized_path, '/', '')))"
+                " - (length(?) - length(replace(?, '/', '')))"
+            )
+            filters.extend(["files.normalized_path >= ?", "files.normalized_path < ?", f"{depth_expression} <= ?"])
+            values.extend([prefix_start, prefix_end, descendant_prefix, descendant_prefix, index_depth])
 
         if types:
-            extensions = [item.strip().lower() for item in types.split(",") if item.strip()]
+            extensions = sorted(normalize_extension_filter(types))
             if extensions:
                 placeholders = ", ".join("?" for _ in extensions)
                 filters.append(f"files.file_ext IN ({placeholders})")
                 values.extend(extensions)
+
+        if not filters:
+            return "1 = 1", values
 
         return " AND ".join(filters), values
 

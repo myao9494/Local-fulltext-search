@@ -5,6 +5,7 @@ export type LaunchParams = {
   q: string;
   fullPath: string;
   indexDepth: string;
+  searchAll: boolean;
 };
 
 /**
@@ -15,11 +16,13 @@ export function parseLaunchParams(search: string): LaunchParams {
   const fullPath = params.get("full_path")?.trim() ?? "";
   const q = params.get("q")?.trim() ?? "";
   const rawIndexDepth = params.get("index_depth")?.trim() ?? "";
+  const searchAll = isTruthyQueryFlag(params.get("search_all"));
 
   return {
     q,
     fullPath,
     indexDepth: normalizeIndexDepth(rawIndexDepth),
+    searchAll,
   };
 }
 
@@ -27,7 +30,7 @@ export function parseLaunchParams(search: string): LaunchParams {
  * 自動検索を実行してよい URL パラメータかを判定する。
  */
 export function shouldAutoSearch(params: LaunchParams): boolean {
-  return params.q.length > 0 && params.fullPath.length > 0;
+  return params.q.length > 0 && (params.fullPath.length > 0 || params.searchAll);
 }
 
 /**
@@ -35,13 +38,21 @@ export function shouldAutoSearch(params: LaunchParams): boolean {
  */
 function normalizeIndexDepth(value: string): string {
   if (value.length === 0) {
-    return "5";
+    return "1";
   }
 
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) {
-    return "5";
+    return "1";
   }
 
   return String(parsed);
+}
+
+function isTruthyQueryFlag(value: string | null): boolean {
+  if (value === null) {
+    return false;
+  }
+
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }

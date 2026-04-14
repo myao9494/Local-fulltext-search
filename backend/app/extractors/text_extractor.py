@@ -7,16 +7,22 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from pathlib import Path
+import re
 
 
 CONTENT_EXTENSIONS: frozenset[str] = frozenset(
     {
         ".md",
+        ".excalidraw.md",
+        ".dio.svg",
         ".json",
         ".txt",
+        ".excalidraw",
+        ".dio",
         ".pdf",
         ".docx",
         ".xlsx",
+        ".xlsm",
         ".pptx",
         ".msg",
     }
@@ -38,20 +44,34 @@ FILENAME_ONLY_EXTENSIONS: frozenset[str] = frozenset(
 )
 
 SUPPORTED_EXTENSIONS: frozenset[str] = CONTENT_EXTENSIONS | FILENAME_ONLY_EXTENSIONS
+SORTED_SUPPORTED_EXTENSIONS: tuple[str, ...] = tuple(sorted(SUPPORTED_EXTENSIONS, key=len, reverse=True))
 
 
 def supports_extension(path: Path) -> bool:
     """
     検索対象として扱う拡張子かどうかを返す。
     """
-    return path.suffix.lower() in SUPPORTED_EXTENSIONS
+    return resolve_supported_extension(path) is not None
 
 
 def supports_content_extraction(path: Path) -> bool:
     """
     本文抽出に対応する拡張子かどうかを返す。
     """
-    return path.suffix.lower() in CONTENT_EXTENSIONS
+    resolved = resolve_supported_extension(path)
+    return resolved in CONTENT_EXTENSIONS
+
+
+def resolve_supported_extension(path: Path) -> str | None:
+    """
+    対応拡張子のうち、ファイル名末尾に最長一致するものを返す。
+    `excalidraw.md` のような複合拡張子を `.md` と区別する。
+    """
+    lower_name = path.name.lower()
+    for extension in SORTED_SUPPORTED_EXTENSIONS:
+        if lower_name.endswith(extension):
+            return extension
+    return None
 
 
 def normalize_extension_filter(value: str | None) -> frozenset[str]:
@@ -62,12 +82,22 @@ def normalize_extension_filter(value: str | None) -> frozenset[str]:
         return SUPPORTED_EXTENSIONS
 
     normalized = {
-        item.strip().lower()
-        for item in value.split(",")
+        _normalize_extension_token(item)
+        for item in re.split(r"[\s,]+", value.strip())
         if item.strip()
     }
     filtered = {item for item in normalized if item in SUPPORTED_EXTENSIONS}
     return frozenset(filtered) if filtered else SUPPORTED_EXTENSIONS
+
+
+def _normalize_extension_token(value: str) -> str:
+    """
+    拡張子入力を `.md` 形式へそろえる。ドットなし入力も受け付ける。
+    """
+    token = value.strip().lower()
+    if not token:
+        return ""
+    return token if token.startswith(".") else f".{token}"
 
 
 def extract_text(path: Path) -> str:
@@ -76,29 +106,33 @@ def extract_text(path: Path) -> str:
     Markdown は `![](...)` / `[](...)` を平文化し、Office/PDF/Outlook は平文へ変換する。
     """
     suffix = path.suffix.lower()
+    resolved_extension = resolve_supported_extension(path)
+    if resolved_extension is None:
+        raise ValueError(f"Unsupported extension: {suffix}")
 
-    if suffix == ".md":
+    if resolved_extension in {".md", ".excalidraw.md"}:
         content = path.read_text(encoding="utf-8", errors="ignore")
         return _flatten_markdown_inline_links(content)
-    if suffix in {".json", ".txt"}:
+    if resolved_extension in {".json", ".txt", ".excalidraw", ".dio", ".dio.svg"}:
         return path.read_text(encoding="utf-8", errors="ignore")
-    if suffix == ".pdf":
+    if resolved_extension == ".pdf":
         return _extract_pdf_text(path)
-    if suffix == ".docx":
+    if resolved_extension == ".docx":
         return _extract_docx_text(path)
-    if suffix == ".xlsx":
+    if resolved_extension in {".xlsx", ".xlsm"}:
         return _extract_xlsx_text(path)
-    if suffix == ".pptx":
+    if resolved_extension == ".pptx":
         return _extract_pptx_text(path)
-    if suffix == ".msg":
+    if resolved_extension == ".msg":
         return _extract_msg_text(path)
 
-    raise ValueError(f"Unsupported extension: {suffix}")
+    raise ValueError(f"Unsupported extension: {resolved_extension}")
 
 
 def _extract_pdf_text(path: Path) -> str:
     """
     PDF の各ページからテキストを取り出し、ページ単位で連結する。
+    暗号化 PDF は無理に復号せずスキップし、ページ単位の抽出失敗は読めたページだけを残す。
     """
     try:
         from pypdf import PdfReader
@@ -106,13 +140,46 @@ def _extract_pdf_text(path: Path) -> str:
         raise RuntimeError("PDF 抽出には pypdf が必要です。") from error
 
     reader = PdfReader(str(path), strict=False)
+    if bool(getattr(reader, "is_encrypted", False)):
+        return ""
+
     parts: list[str] = []
     for page_index, page in enumerate(reader.pages, start=1):
-        text = page.extract_text(extraction_mode="layout") or page.extract_text() or ""
+        text = _extract_pdf_page_text(page)
         stripped = text.strip()
         if stripped:
             parts.append(f"[Page {page_index}]\n{stripped}")
     return "\n\n".join(parts)
+
+
+def _extract_pdf_page_text(page) -> str:
+    """
+    PDF 1ページ分の本文を抽出する。
+    layout 抽出に失敗しても通常抽出へフォールバックし、既知の不正PDF系エラーは空文字扱いにする。
+    """
+    for kwargs in ({"extraction_mode": "layout"}, {}):
+        try:
+            return page.extract_text(**kwargs) or ""
+        except Exception as error:
+            if _is_recoverable_pdf_error(error):
+                continue
+            raise
+    return ""
+
+
+def _is_recoverable_pdf_error(error: Exception) -> bool:
+    """
+    暗号化や壊れた埋め込みフォントなど、既知の PDF 抽出失敗はスキップ可能と判定する。
+    """
+    if isinstance(error, ZeroDivisionError):
+        return True
+    message = str(error)
+    recoverable_markers = (
+        "unknown encoding:",
+        "File has not been decrypted",
+        "float floor division by zero",
+    )
+    return any(marker in message for marker in recoverable_markers)
 
 
 def _extract_docx_text(path: Path) -> str:
@@ -155,12 +222,12 @@ def _extract_docx_table_text(table) -> str:
 
 def _extract_xlsx_text(path: Path) -> str:
     """
-    XLSX のシート名とセル値を読み取り専用で抽出する。
+    XLSX / XLSM のシート名とセル値を読み取り専用で抽出する。
     """
     try:
         from openpyxl import load_workbook
     except ImportError as error:
-        raise RuntimeError("XLSX 抽出には openpyxl が必要です。") from error
+        raise RuntimeError("XLSX / XLSM 抽出には openpyxl が必要です。") from error
 
     workbook = load_workbook(filename=str(path), read_only=True, data_only=True)
     try:
@@ -203,7 +270,12 @@ def _extract_pptx_text(path: Path) -> str:
     except ImportError as error:
         raise RuntimeError("PPTX 抽出には python-pptx が必要です。") from error
 
-    presentation = Presentation(str(path))
+    try:
+        presentation = Presentation(str(path))
+    except Exception as error:
+        if _is_recoverable_pptx_error(error):
+            return ""
+        raise
     slides: list[str] = []
     for slide_index, slide in enumerate(presentation.slides, start=1):
         parts: list[str] = []
@@ -242,7 +314,10 @@ def _extract_msg_text(path: Path) -> str:
     except ImportError as error:
         raise RuntimeError("MSG 抽出には extract-msg が必要です。") from error
 
-    message = extract_msg.openMsg(str(path), delayAttachments=True)
+    try:
+        message = extract_msg.openMsg(str(path), delayAttachments=True)
+    except UnicodeDecodeError:
+        return ""
     try:
         headers = [
             ("Subject", getattr(message, "subject", None)),
@@ -260,6 +335,13 @@ def _extract_msg_text(path: Path) -> str:
         close = getattr(message, "close", None)
         if callable(close):
             close()
+
+
+def _is_recoverable_pptx_error(error: Exception) -> bool:
+    """
+    壊れた zip/package 由来で開けない PPTX は、本文抽出不能として空文字へフォールバックする。
+    """
+    return "Package not found at" in str(error)
 
 
 def _flatten_markdown_inline_links(content: str) -> str:
