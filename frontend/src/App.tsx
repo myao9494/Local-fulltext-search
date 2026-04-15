@@ -148,7 +148,7 @@ function App() {
     }
     return stored;
   });
-  const [dateField, setDateField] = useState<"created" | "modified">("created");
+  const [dateField, setDateField] = useState<"created" | "modified">("modified");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
   const [isMenuOpen, setIsMenuOpen] = useState(false);

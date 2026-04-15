@@ -174,7 +174,7 @@ test("検索バーに作成日フィルタを追加する", () => {
   assert.match(searchBarSource, /className="secondary-button date-filter-cancel-button"/);
   assert.match(searchBarSource, /className="small-input date-filter-input"/);
   assert.match(searchBarSource, /className="small-input date-field-select"/);
-  assert.match(appSource, /const \[dateField, setDateField\] = useState<"created" \| "modified">\("created"\)/);
+  assert.match(appSource, /const \[dateField, setDateField\] = useState<"created" \| "modified">\("modified"\)/);
   assert.match(appSource, /const \[createdFrom, setCreatedFrom\] = useState\(""\)/);
   assert.match(appSource, /const \[createdTo, setCreatedTo\] = useState\(""\)/);
   assert.match(appSource, /function handleClearCreatedDateFilter\(\): void \{/);
