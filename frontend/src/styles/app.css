@@ -696,6 +696,24 @@ h1, h2, h3 {
   background: rgba(15, 23, 42, 0.8);
 }
 
+.extension-menu-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.extension-menu-actions .secondary-button {
+  min-width: 0;
+  width: 100%;
+  padding: 14px 16px;
+  font-size: 0.95rem;
+  white-space: nowrap;
+}
+
+.extension-menu-actions .settings-save-button {
+  min-width: 0;
+}
+
 .extension-option {
   display: flex;
   align-items: center;

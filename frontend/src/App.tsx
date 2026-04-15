@@ -95,6 +95,14 @@ function normalizeDefaultSearchPath(value: string): string {
   return value.trim();
 }
 
+/**
+ * 拡張子選択は対応順のまま一意化し、保存値と画面表示の順序を安定させる。
+ */
+function normalizeIndexExtensions(extensions: readonly string[]): string[] {
+  const selected = new Set(extensions);
+  return SUPPORTED_EXTENSIONS.filter((extension) => selected.has(extension));
+}
+
 function App() {
   const [launchParams] = useState(() => parseLaunchParams(window.location.search));
   const [pageView, setPageView] = useState<PageView>("search");
@@ -118,7 +126,19 @@ function App() {
     if (!stored || stored === LEGACY_ALL_EXTENSIONS_VALUE) {
       return DEFAULT_INDEX_EXTENSIONS;
     }
-    const parsed = stored.split(/[\s,]+/).filter((item) => SUPPORTED_EXTENSIONS.includes(item as (typeof SUPPORTED_EXTENSIONS)[number]));
+    const parsed = normalizeIndexExtensions(
+      stored.split(/[\s,]+/).filter((item) => SUPPORTED_EXTENSIONS.includes(item as (typeof SUPPORTED_EXTENSIONS)[number])),
+    );
+    return parsed.length > 0 ? parsed : DEFAULT_INDEX_EXTENSIONS;
+  });
+  const [savedIndexExtensions, setSavedIndexExtensions] = useState<string[]>(() => {
+    const stored = localStorage.getItem("index_selected_extensions") ?? localStorage.getItem("selected_extensions");
+    if (!stored || stored === LEGACY_ALL_EXTENSIONS_VALUE) {
+      return DEFAULT_INDEX_EXTENSIONS;
+    }
+    const parsed = normalizeIndexExtensions(
+      stored.split(/[\s,]+/).filter((item) => SUPPORTED_EXTENSIONS.includes(item as (typeof SUPPORTED_EXTENSIONS)[number])),
+    );
     return parsed.length > 0 ? parsed : DEFAULT_INDEX_EXTENSIONS;
   });
   const [searchFilterText, setSearchFilterText] = useState(() => {
@@ -164,6 +184,7 @@ function App() {
   const hasUnsavedExcludeKeywords = normalizedExcludeKeywordsDraft !== savedExcludeKeywords;
   const normalizedDefaultSearchPath = normalizeDefaultSearchPath(defaultSearchPathDraft);
   const hasUnsavedDefaultSearchPath = normalizedDefaultSearchPath !== savedDefaultSearchPath;
+  const hasUnsavedIndexExtensions = selectedIndexExtensions.join(" ") !== savedIndexExtensions.join(" ");
 
   async function refreshIndexStatus(): Promise<void> {
     setIndexStatus(await fetchIndexStatus());
@@ -288,7 +309,6 @@ function App() {
         setFailedFiles(failedResponse.items);
       }
       localStorage.setItem("refresh_window_minutes", String(parsedWindow));
-      localStorage.setItem("index_selected_extensions", selectedIndexExtensions.join(" "));
       localStorage.setItem("search_filter_extensions", searchFilterText);
       if (hasUnsavedExcludeKeywords) {
         setNoticeMessage("未保存の除外キーワードは今回の検索に反映していません。保存後に再検索してください。");
@@ -359,6 +379,24 @@ function App() {
 
   function setAllIndexExtensions(): void {
     setSelectedIndexExtensions([...SUPPORTED_EXTENSIONS]);
+  }
+
+  function clearAllIndexExtensions(): void {
+    setSelectedIndexExtensions([]);
+  }
+
+  /**
+   * インデックス対象拡張子は localStorage へ明示保存し、次回起動時の初期値に使う。
+   */
+  function handleSaveIndexExtensions(): void {
+    localStorage.setItem("index_selected_extensions", selectedIndexExtensions.join(" "));
+    setSavedIndexExtensions([...selectedIndexExtensions]);
+    setErrorMessage("");
+    setNoticeMessage(
+      selectedIndexExtensions.length > 0
+        ? "インデックス対象の拡張子を保存しました。次回起動時もこの選択を使います。"
+        : "インデックス対象の拡張子をすべて解除した状態で保存しました。",
+    );
   }
 
   /**
@@ -736,9 +774,22 @@ function App() {
                 </button>
                 {isIndexExtensionMenuOpen ? (
                   <div className="extension-menu">
-                    <button className="secondary-button" onClick={setAllIndexExtensions} type="button">
-                      すべて選択
-                    </button>
+                    <div className="extension-menu-actions">
+                      <button className="secondary-button" onClick={setAllIndexExtensions} type="button">
+                        すべて選択
+                      </button>
+                      <button className="secondary-button" onClick={clearAllIndexExtensions} type="button">
+                        全解除
+                      </button>
+                      <button
+                        className="secondary-button settings-save-button"
+                        onClick={handleSaveIndexExtensions}
+                        type="button"
+                        disabled={!hasUnsavedIndexExtensions}
+                      >
+                        保存
+                      </button>
+                    </div>
                     {SUPPORTED_EXTENSIONS.map((extension) => (
                       <label className="extension-option" key={extension}>
                         <input
@@ -751,6 +802,9 @@ function App() {
                     ))}
                   </div>
                 ) : null}
+                <div className={`settings-save-status ${hasUnsavedIndexExtensions ? "dirty" : "saved"}`}>
+                  {hasUnsavedIndexExtensions ? "未保存の変更があります" : "保存済み"}
+                </div>
                 <div className="form-help">
                   インデックス作成対象です。検索フィルタ側の拡張子選択とは独立しています。
                 </div>
