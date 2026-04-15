@@ -30,6 +30,9 @@ class StubIndexService:
         self.did_cancel = False
         self.deleted_target_ids: list[int] = []
         self.saved_exclude_keywords = ".git\nnode_modules"
+        self.saved_index_selected_extensions = ".md\n.json"
+        self.saved_custom_content_extensions = ".py\n.dat"
+        self.saved_custom_filename_extensions = ".CAE"
 
     def reset_database(self) -> None:
         self.did_reset = True
@@ -78,17 +81,49 @@ class StubIndexService:
 
     def get_app_settings(self) -> object:
         class AppSettings:
-            def __init__(self, exclude_keywords: str) -> None:
+            def __init__(
+                self,
+                exclude_keywords: str,
+                index_selected_extensions: str,
+                custom_content_extensions: str,
+                custom_filename_extensions: str,
+            ) -> None:
                 self.exclude_keywords = exclude_keywords
+                self.index_selected_extensions = index_selected_extensions
+                self.custom_content_extensions = custom_content_extensions
+                self.custom_filename_extensions = custom_filename_extensions
 
             def model_dump(self) -> dict[str, object]:
-                return {"exclude_keywords": self.exclude_keywords}
+                return {
+                    "exclude_keywords": self.exclude_keywords,
+                    "index_selected_extensions": self.index_selected_extensions,
+                    "custom_content_extensions": self.custom_content_extensions,
+                    "custom_filename_extensions": self.custom_filename_extensions,
+                }
 
-        return AppSettings(self.saved_exclude_keywords)
+        return AppSettings(
+            self.saved_exclude_keywords,
+            self.saved_index_selected_extensions,
+            self.saved_custom_content_extensions,
+            self.saved_custom_filename_extensions,
+        )
 
-    def update_app_settings(self, *, exclude_keywords: str | None = None) -> object:
+    def update_app_settings(
+        self,
+        *,
+        exclude_keywords: str | None = None,
+        index_selected_extensions: str | None = None,
+        custom_content_extensions: str | None = None,
+        custom_filename_extensions: str | None = None,
+    ) -> object:
         if exclude_keywords is not None:
             self.saved_exclude_keywords = exclude_keywords
+        if index_selected_extensions is not None:
+            self.saved_index_selected_extensions = index_selected_extensions
+        if custom_content_extensions is not None:
+            self.saved_custom_content_extensions = custom_content_extensions
+        if custom_filename_extensions is not None:
+            self.saved_custom_filename_extensions = custom_filename_extensions
         return self.get_app_settings()
 
 
@@ -154,6 +189,9 @@ def test_get_app_settings_endpoint_returns_saved_settings() -> None:
     payload = get_app_settings(service)
 
     assert payload["exclude_keywords"] == ".git\nnode_modules"
+    assert payload["index_selected_extensions"] == ".md\n.json"
+    assert payload["custom_content_extensions"] == ".py\n.dat"
+    assert payload["custom_filename_extensions"] == ".CAE"
 
 
 def test_update_app_settings_endpoint_returns_updated_settings() -> None:
@@ -162,10 +200,21 @@ def test_update_app_settings_endpoint_returns_updated_settings() -> None:
     """
     service = StubIndexService()
 
-    payload = update_app_settings(AppSettingsUpdateRequest(exclude_keywords="dist\nbuild"), service)
+    payload = update_app_settings(
+        AppSettingsUpdateRequest(
+            exclude_keywords="dist\nbuild",
+            index_selected_extensions=".md\n.py",
+            custom_content_extensions=".py\n.dat",
+            custom_filename_extensions=".cae",
+        ),
+        service,
+    )
 
     assert payload["exclude_keywords"] == "dist\nbuild"
     assert service.saved_exclude_keywords == "dist\nbuild"
+    assert payload["index_selected_extensions"] == ".md\n.py"
+    assert payload["custom_content_extensions"] == ".py\n.dat"
+    assert payload["custom_filename_extensions"] == ".cae"
 
 
 def test_reset_database_route_is_registered(tmp_path: Path, monkeypatch) -> None:

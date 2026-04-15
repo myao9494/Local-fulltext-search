@@ -128,6 +128,7 @@ test("対象拡張子に XLSM と Excalidraw / DIO を含める", () => {
   assert.match(source, /"\.xlsm"/);
   assert.match(source, /"\.excalidraw"/);
   assert.match(source, /"\.dio"/);
+  assert.match(source, /"\.xml"/);
 });
 
 /**
@@ -204,20 +205,37 @@ test("検索バーに作成日フィルタを追加する", () => {
 test("設定メニューのインデックス拡張子はチェックボックスで選択する", () => {
   const appSource = readFileSync(appPath, "utf-8");
   const styleSource = readFileSync(appStylesPath, "utf-8");
+  const clientSource = readFileSync(clientPath, "utf-8");
 
   assert.match(appSource, /isIndexExtensionMenuOpen/);
   assert.match(appSource, /toggleIndexExtension/);
   assert.match(appSource, /setAllIndexExtensions/);
   assert.match(appSource, /clearAllIndexExtensions/);
   assert.match(appSource, /handleSaveIndexExtensions/);
+  assert.match(appSource, /handleAddCustomExtension/);
+  assert.match(appSource, /handleRemoveCustomExtension/);
+  assert.match(appSource, /本文を index 化する追加拡張子/);
+  assert.match(appSource, /ファイル名だけを index 化する追加拡張子/);
+  assert.match(appSource, /customContentExtensions/);
+  assert.match(appSource, /customFilenameExtensions/);
   assert.match(appSource, /savedIndexExtensions/);
   assert.match(appSource, /hasUnsavedIndexExtensions/);
   assert.match(appSource, /selectedIndexExtensions\.includes\(extension\)/);
   assert.match(appSource, /全解除/);
   assert.match(appSource, /保存/);
-  assert.match(appSource, /localStorage\.setItem\("index_selected_extensions", selectedIndexExtensions\.join\(" "\)\)/);
-  assert.match(appSource, /インデックス作成対象です。検索フィルタ側の拡張子選択とは独立しています。/);
+  assert.match(clientSource, /index_selected_extensions\?: string/);
+  assert.match(clientSource, /custom_content_extensions\?: string/);
+  assert.match(clientSource, /custom_filename_extensions\?: string/);
+  assert.match(appSource, /updateAppSettings\(\{/);
+  assert.match(appSource, /index_selected_extensions: normalizedSelectedIndexExtensions\.join\("\\n"\)/);
+  assert.match(appSource, /custom_content_extensions: normalizedCustomContentExtensions\.join\("\\n"\)/);
+  assert.match(appSource, /custom_filename_extensions: normalizedCustomFilenameExtensions\.join\("\\n"\)/);
+  assert.match(appSource, /backend のテキストファイルへ保存され/);
   assert.match(styleSource, /\.extension-menu-actions\s*\{/);
+  assert.match(styleSource, /\.extension-add-grid\s*\{/);
+  assert.match(styleSource, /\.extension-add-row\s*\{/);
+  assert.match(styleSource, /\.extension-custom-row\s*\{/);
+  assert.match(styleSource, /\.extension-remove-button\s*\{/);
 });
 
 /**

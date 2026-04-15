@@ -165,6 +165,123 @@ def test_deleted_files_are_removed_from_index(tmp_path: Path) -> None:
     assert fts_count == 1
 
 
+def test_json_family_files_store_only_json_values_in_index(tmp_path: Path) -> None:
+    """
+    JSON / Excalidraw / draw.io 系ファイルは、インデックスへ JSON の値だけを保存する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+
+    (target / "settings.json").write_text(
+        '{"title":"alpha","enabled":true,"items":[1,"beta"]}',
+        encoding="utf-8",
+    )
+    (target / "board.excalidraw").write_text(
+        '{"type":"excalidraw","elements":[{"text":"gamma note"}]}',
+        encoding="utf-8",
+    )
+    (target / "flow.dio.svg").write_text(
+        '<svg><metadata>{&quot;label&quot;:&quot;delta flow&quot;}</metadata><text>ignored text</text></svg>',
+        encoding="utf-8",
+    )
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+
+    rows = connection.execute(
+        """
+        SELECT files.file_name, file_segments.content
+        FROM file_segments
+        INNER JOIN files ON files.id = file_segments.file_id
+        WHERE file_segments.segment_type = 'body'
+        ORDER BY files.file_name
+        """
+    ).fetchall()
+    indexed_content = {row["file_name"]: row["content"] for row in rows}
+
+    assert '"title"' not in indexed_content["settings.json"]
+    assert "alpha" in indexed_content["settings.json"]
+    assert "beta" in indexed_content["settings.json"]
+    assert '"type"' not in indexed_content["board.excalidraw"]
+    assert "gamma note" in indexed_content["board.excalidraw"]
+    assert "<svg>" not in indexed_content["flow.dio.svg"]
+    assert "delta flow" in indexed_content["flow.dio.svg"]
+    assert "ignored text" not in indexed_content["flow.dio.svg"]
+
+
+def test_xml_files_store_only_text_content_in_index(tmp_path: Path) -> None:
+    """
+    XML ファイルは、タグや属性ではなくテキストノードの中身だけをインデックスへ保存する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+
+    (target / "layout.xml").write_text(
+        "<root><title>alpha layout</title><item status='draft'>beta note</item></root>",
+        encoding="utf-8",
+    )
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+
+    row = connection.execute(
+        """
+        SELECT file_segments.content
+        FROM file_segments
+        INNER JOIN files ON files.id = file_segments.file_id
+        WHERE files.file_name = 'layout.xml' AND file_segments.segment_type = 'body'
+        """
+    ).fetchone()
+
+    assert row is not None
+    assert "alpha layout" in row["content"]
+    assert "beta note" in row["content"]
+    assert "<root>" not in row["content"]
+    assert "status" not in row["content"]
+
+
+def test_custom_extensions_can_be_indexed_by_content_or_filename_only(tmp_path: Path, monkeypatch) -> None:
+    """
+    利用者追加の拡張子は、本文抽出対象とファイル名のみ対象を分けてインデックスできる。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "index_selected_extensions_name", "index_selected_extensions.txt")
+    monkeypatch.setattr(settings, "custom_content_extensions_name", "custom_content_extensions.txt")
+    monkeypatch.setattr(settings, "custom_filename_extensions_name", "custom_filename_extensions.txt")
+
+    service.update_app_settings(
+        index_selected_extensions=".dat\n.cae",
+        custom_content_extensions=".dat",
+        custom_filename_extensions=".cae",
+    )
+
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "solver.dat").write_text("stress result alpha", encoding="utf-8")
+    (target / "mesh.cae").write_text("binary-like payload", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, types=".dat .cae")
+
+    rows = connection.execute(
+        """
+        SELECT files.file_name, file_segments.content
+        FROM files
+        LEFT JOIN file_segments
+          ON file_segments.file_id = files.id
+         AND file_segments.segment_type = 'body'
+        ORDER BY files.file_name
+        """
+    ).fetchall()
+    indexed_content = {row["file_name"]: row["content"] for row in rows}
+
+    assert indexed_content["solver.dat"] == "stress result alpha"
+    assert indexed_content["mesh.cae"] is None
+
+
 def test_exclude_keywords_skip_directories(tmp_path: Path) -> None:
     """
     除外キーワードに一致するディレクトリ配下のファイルはインデックスされない。
@@ -363,7 +480,7 @@ def test_index_records_failed_files_and_continues(tmp_path: Path) -> None:
 
     original_extract_text = __import__("app.services.index_service", fromlist=["extract_text"]).extract_text
 
-    def fake_extract_text(path: Path) -> str:
+    def fake_extract_text(path: Path, *args, **kwargs) -> str:
         if path == ng_file:
             raise OSError("simulated read failure")
         return original_extract_text(path)
@@ -698,6 +815,31 @@ def test_app_settings_can_store_exclude_keywords(tmp_path: Path, monkeypatch) ->
     assert exclude_keywords_path.read_text(encoding="utf-8") == "dist\nbuild\n.dist"
 
 
+def test_app_settings_can_store_extension_files(tmp_path: Path, monkeypatch) -> None:
+    """
+    アプリ設定として保存した拡張子一覧は、役割ごとのテキストファイルへ正規化して保持される。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "index_selected_extensions_name", "index_selected_extensions.txt")
+    monkeypatch.setattr(settings, "custom_content_extensions_name", "custom_content_extensions.txt")
+    monkeypatch.setattr(settings, "custom_filename_extensions_name", "custom_filename_extensions.txt")
+
+    saved_settings = service.update_app_settings(
+        index_selected_extensions=".md\n.py\n.cae\n.py",
+        custom_content_extensions="py\n dat \n.py",
+        custom_filename_extensions=".cae\nCAE",
+    )
+
+    assert saved_settings.index_selected_extensions == ".cae\n.md\n.py"
+    assert saved_settings.custom_content_extensions == ".py\n.dat"
+    assert saved_settings.custom_filename_extensions == ".cae"
+    assert (tmp_path / "index_selected_extensions.txt").read_text(encoding="utf-8") == ".cae\n.md\n.py"
+    assert (tmp_path / "custom_content_extensions.txt").read_text(encoding="utf-8") == ".py\n.dat"
+    assert (tmp_path / "custom_filename_extensions.txt").read_text(encoding="utf-8") == ".cae"
+
+
 def test_app_settings_preserve_distinct_path_keyword_letter_case_variants(tmp_path: Path, monkeypatch) -> None:
     """
     パス形式の除外キーワードは大文字小文字違いを別物として保持する。
@@ -725,12 +867,23 @@ def test_reset_database_keeps_app_settings(tmp_path: Path, monkeypatch) -> None:
     exclude_keywords_path = tmp_path / "exclude_keywords.txt"
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     monkeypatch.setattr(settings, "exclude_keywords_name", "exclude_keywords.txt")
+    monkeypatch.setattr(settings, "index_selected_extensions_name", "index_selected_extensions.txt")
+    monkeypatch.setattr(settings, "custom_content_extensions_name", "custom_content_extensions.txt")
+    monkeypatch.setattr(settings, "custom_filename_extensions_name", "custom_filename_extensions.txt")
 
-    service.update_app_settings(exclude_keywords=".cache\ndist")
+    service.update_app_settings(
+        exclude_keywords=".cache\ndist",
+        index_selected_extensions=".md\n.py",
+        custom_content_extensions=".py",
+        custom_filename_extensions=".cae",
+    )
     service.reset_database()
 
     loaded_settings = service.get_app_settings()
     assert loaded_settings.exclude_keywords == ".cache\ndist"
+    assert loaded_settings.index_selected_extensions == ".md\n.py"
+    assert loaded_settings.custom_content_extensions == ".py"
+    assert loaded_settings.custom_filename_extensions == ".cae"
 
 
 def test_app_settings_migrates_legacy_sqlite_value_to_text_file(tmp_path: Path, monkeypatch) -> None:

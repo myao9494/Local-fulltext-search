@@ -28,6 +28,7 @@ from app.db.connection import get_connection
 from app.db.schema import reset_schema
 from app.extractors.text_extractor import (
     extract_text,
+    normalize_extension_token,
     normalize_extension_filter,
     resolve_supported_extension,
     supports_content_extraction,
@@ -62,6 +63,7 @@ class IndexedFileCandidate:
     created_at: float
     mtime: float
     size: int
+    file_ext: str
     existing_id: int | None
 
 
@@ -127,8 +129,13 @@ class IndexService:
         started_at = datetime.now(UTC).isoformat()
         self._update_status(is_running=True, cancel_requested=False, last_started_at=started_at, last_error=None)
 
+        app_settings = self.get_app_settings()
         normalized_keywords = self._normalize_exclude_keywords(exclude_keywords)
-        normalized_extensions = self._normalize_selected_extensions(types)
+        normalized_extensions = self._normalize_selected_extensions(
+            types,
+            custom_content_extensions=app_settings.custom_content_extensions,
+            custom_filename_extensions=app_settings.custom_filename_extensions,
+        )
 
         total_files = 0
         error_count = 0
@@ -150,6 +157,8 @@ class IndexService:
                     controller=controller,
                     index_depth=index_depth,
                     selected_extensions=normalized_extensions,
+                    custom_content_extensions=app_settings.custom_content_extensions,
+                    custom_filename_extensions=app_settings.custom_filename_extensions,
                 )
                 total_files = stats["file_count"]
                 error_count = stats["error_count"]
@@ -164,6 +173,8 @@ class IndexService:
                     str(target["full_path"]),
                     index_depth=int(target["index_depth"]),
                     selected_extensions=str(target["selected_extensions"]),
+                    custom_content_extensions=app_settings.custom_content_extensions,
+                    custom_filename_extensions=app_settings.custom_filename_extensions,
                 )
         except IndexingCancelledError as error:
             self._update_status(
@@ -219,9 +230,26 @@ class IndexService:
         """
         アプリ全体で共有する設定値を返す。
         """
-        return AppSettingsResponse(exclude_keywords=self._read_persisted_exclude_keywords())
+        custom_content_extensions = self._read_persisted_custom_content_extensions()
+        custom_filename_extensions = self._read_persisted_custom_filename_extensions()
+        return AppSettingsResponse(
+            exclude_keywords=self._read_persisted_exclude_keywords(),
+            index_selected_extensions=self._read_persisted_index_selected_extensions(
+                custom_content_extensions=custom_content_extensions,
+                custom_filename_extensions=custom_filename_extensions,
+            ),
+            custom_content_extensions=custom_content_extensions,
+            custom_filename_extensions=custom_filename_extensions,
+        )
 
-    def update_app_settings(self, *, exclude_keywords: str | None = None) -> AppSettingsResponse:
+    def update_app_settings(
+        self,
+        *,
+        exclude_keywords: str | None = None,
+        index_selected_extensions: str | None = None,
+        custom_content_extensions: str | None = None,
+        custom_filename_extensions: str | None = None,
+    ) -> AppSettingsResponse:
         """
         アプリ全体で共有する設定値を更新し、保存後の値を返す。
         """
@@ -229,8 +257,39 @@ class IndexService:
         normalized_exclude_keywords = (
             self._normalize_exclude_keywords(exclude_keywords) if exclude_keywords is not None else current.exclude_keywords
         )
+        normalized_custom_content_extensions = (
+            self._normalize_extension_entries(custom_content_extensions)
+            if custom_content_extensions is not None
+            else current.custom_content_extensions
+        )
+        normalized_custom_filename_extensions = (
+            self._normalize_extension_entries(custom_filename_extensions)
+            if custom_filename_extensions is not None
+            else current.custom_filename_extensions
+        )
+        normalized_index_selected_extensions = (
+            self._normalize_selected_extensions(
+                index_selected_extensions,
+                custom_content_extensions=normalized_custom_content_extensions,
+                custom_filename_extensions=normalized_custom_filename_extensions,
+            )
+            if index_selected_extensions is not None
+            else self._normalize_selected_extensions(
+                current.index_selected_extensions,
+                custom_content_extensions=normalized_custom_content_extensions,
+                custom_filename_extensions=normalized_custom_filename_extensions,
+            )
+        )
         self._write_persisted_exclude_keywords(normalized_exclude_keywords)
-        return AppSettingsResponse(exclude_keywords=normalized_exclude_keywords)
+        self._write_persisted_custom_content_extensions(normalized_custom_content_extensions)
+        self._write_persisted_custom_filename_extensions(normalized_custom_filename_extensions)
+        self._write_persisted_index_selected_extensions(normalized_index_selected_extensions)
+        return AppSettingsResponse(
+            exclude_keywords=normalized_exclude_keywords,
+            index_selected_extensions=normalized_index_selected_extensions,
+            custom_content_extensions=normalized_custom_content_extensions,
+            custom_filename_extensions=normalized_custom_filename_extensions,
+        )
 
     def _read_persisted_exclude_keywords(self) -> str:
         """
@@ -255,6 +314,82 @@ class IndexService:
         path = settings.exclude_keywords_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self._normalize_exclude_keywords(value), encoding="utf-8")
+
+    def _read_persisted_custom_content_extensions(self) -> str:
+        """
+        本文抽出対象として追加した拡張子一覧をテキストファイルから読み込む。
+        """
+        return self._read_persisted_extension_file(settings.custom_content_extensions_path)
+
+    def _write_persisted_custom_content_extensions(self, value: str) -> None:
+        """
+        本文抽出対象の追加拡張子一覧をテキストファイルへ保存する。
+        """
+        self._write_persisted_extension_file(settings.custom_content_extensions_path, value)
+
+    def _read_persisted_custom_filename_extensions(self) -> str:
+        """
+        ファイル名のみ検索対象として追加した拡張子一覧をテキストファイルから読み込む。
+        """
+        return self._read_persisted_extension_file(settings.custom_filename_extensions_path)
+
+    def _write_persisted_custom_filename_extensions(self, value: str) -> None:
+        """
+        ファイル名のみ検索対象の追加拡張子一覧をテキストファイルへ保存する。
+        """
+        self._write_persisted_extension_file(settings.custom_filename_extensions_path, value)
+
+    def _read_persisted_index_selected_extensions(
+        self,
+        *,
+        custom_content_extensions: str,
+        custom_filename_extensions: str,
+    ) -> str:
+        """
+        インデックス対象として有効化された拡張子一覧をテキストファイルから読み込む。
+        初回は現在サポートしている全拡張子を既定値として保存する。
+        """
+        ensure_data_dir()
+        path = settings.index_selected_extensions_path
+        if path.exists():
+            return self._normalize_selected_extensions(
+                path.read_text(encoding="utf-8"),
+                custom_content_extensions=custom_content_extensions,
+                custom_filename_extensions=custom_filename_extensions,
+            )
+
+        initial_value = self._normalize_selected_extensions(
+            None,
+            custom_content_extensions=custom_content_extensions,
+            custom_filename_extensions=custom_filename_extensions,
+        )
+        self._write_persisted_index_selected_extensions(initial_value)
+        return initial_value
+
+    def _write_persisted_index_selected_extensions(self, value: str) -> None:
+        """
+        インデックス対象として有効化された拡張子一覧をテキストファイルへ保存する。
+        """
+        self._write_persisted_extension_file(settings.index_selected_extensions_path, value)
+
+    def _read_persisted_extension_file(self, path: Path) -> str:
+        """
+        拡張子一覧ファイルを読み込み、未作成なら空ファイルを作って返す。
+        """
+        ensure_data_dir()
+        if path.exists():
+            return self._normalize_extension_entries(path.read_text(encoding="utf-8"))
+
+        self._write_persisted_extension_file(path, "")
+        return ""
+
+    def _write_persisted_extension_file(self, path: Path, value: str) -> None:
+        """
+        拡張子一覧ファイルを正規化して保存する。
+        """
+        ensure_data_dir()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._normalize_extension_entries(value), encoding="utf-8")
 
     def _read_legacy_exclude_keywords_from_db(self) -> str | None:
         """
@@ -449,6 +584,8 @@ class IndexService:
         *,
         index_depth: int,
         selected_extensions: str,
+        custom_content_extensions: str,
+        custom_filename_extensions: str,
     ) -> dict[str, object]:
         """
         指定ターゲット配下を高速に再走査する。
@@ -464,7 +601,13 @@ class IndexService:
 
         keywords = self._parse_exclude_keywords(exclude_keywords)
         keyword_set, non_ascii_keywords, excluded_path_prefixes = self._compile_exclude_keywords(keywords)
-        allowed_extensions = normalize_extension_filter(selected_extensions)
+        custom_content_extension_list = tuple(self._parse_extension_entries(custom_content_extensions))
+        custom_filename_extension_list = tuple(self._parse_extension_entries(custom_filename_extensions))
+        allowed_extensions = normalize_extension_filter(
+            selected_extensions,
+            extra_content_extensions=custom_content_extension_list,
+            extra_filename_extensions=custom_filename_extension_list,
+        )
         existing_files = self._load_existing_files(folder_path.as_posix())
         batch_size = 100
         max_workers = self._resolve_extract_worker_count()
@@ -499,11 +642,28 @@ class IndexService:
                     created_at=self._resolve_created_at(stat),
                     mtime=stat.st_mtime,
                     size=stat.st_size,
+                    file_ext=resolve_supported_extension(
+                        path,
+                        extra_content_extensions=custom_content_extension_list,
+                        extra_filename_extensions=custom_filename_extension_list,
+                    )
+                    or path.suffix.lower(),
                     existing_id=int(existing["id"]) if existing is not None else None,
                 )
 
-                if supports_content_extraction(path):
-                    pending[executor.submit(extract_text, path)] = candidate
+                if supports_content_extraction(
+                    path,
+                    extra_content_extensions=custom_content_extension_list,
+                    extra_filename_extensions=custom_filename_extension_list,
+                ):
+                    pending[
+                        executor.submit(
+                            extract_text,
+                            path,
+                            extra_content_extensions=custom_content_extension_list,
+                            extra_filename_extensions=custom_filename_extension_list,
+                        )
+                    ] = candidate
                     if len(pending) >= max_pending:
                         result = self._drain_pending_futures(
                             pending,
@@ -686,7 +846,10 @@ class IndexService:
                         continue
 
                     if entry.is_file(follow_symlinks=False):
-                        resolved_extension = resolve_supported_extension(Path(entry.name))
+                        resolved_extension = next(
+                            (extension for extension in sorted(allowed_extensions, key=len, reverse=True) if entry.name.lower().endswith(extension)),
+                            None,
+                        )
                         if resolved_extension in allowed_extensions:
                             yield Path(entry.path)
         except PermissionError:
@@ -716,7 +879,7 @@ class IndexService:
                 (
                     candidate.normalized_path,
                     candidate.path.name,
-                    resolve_supported_extension(candidate.path) or candidate.path.suffix.lower(),
+                    candidate.file_ext,
                     candidate.created_at,
                     candidate.mtime,
                     candidate.size,
@@ -738,7 +901,7 @@ class IndexService:
                     candidate.normalized_path,
                     candidate.normalized_path,
                     candidate.path.name,
-                    resolve_supported_extension(candidate.path) or candidate.path.suffix.lower(),
+                    candidate.file_ext,
                     candidate.created_at,
                     candidate.mtime,
                     candidate.size,
@@ -971,7 +1134,15 @@ class IndexService:
         )
         self.connection.commit()
 
-    def _count_target_files(self, root_path: str, *, index_depth: int, selected_extensions: str) -> int:
+    def _count_target_files(
+        self,
+        root_path: str,
+        *,
+        index_depth: int,
+        selected_extensions: str,
+        custom_content_extensions: str,
+        custom_filename_extensions: str,
+    ) -> int:
         """
         現在の対象条件に一致するファイル数を返す。
         """
@@ -984,7 +1155,13 @@ class IndexService:
         filters = ["normalized_path >= ?", "normalized_path < ?", f"{depth_expression} <= ?"]
         values: list[object] = [prefix_start, prefix_end, descendant_prefix, descendant_prefix, index_depth]
 
-        extensions = sorted(normalize_extension_filter(selected_extensions))
+        extensions = sorted(
+            normalize_extension_filter(
+                selected_extensions,
+                extra_content_extensions=tuple(self._parse_extension_entries(custom_content_extensions)),
+                extra_filename_extensions=tuple(self._parse_extension_entries(custom_filename_extensions)),
+            )
+        )
         placeholders = ", ".join("?" for _ in extensions)
         filters.append(f"file_ext IN ({placeholders})")
         values.extend(extensions)
@@ -1039,8 +1216,25 @@ class IndexService:
     def _normalize_keyword_list(self, keywords: list[str]) -> str:
         return "\n".join(self._parse_exclude_keywords("\n".join(keywords)))
 
-    def _normalize_selected_extensions(self, value: str | None) -> str:
-        return ",".join(sorted(normalize_extension_filter(value)))
+    def _normalize_extension_entries(self, value: str | None) -> str:
+        return "\n".join(self._parse_extension_entries(value))
+
+    def _normalize_selected_extensions(
+        self,
+        value: str | None,
+        *,
+        custom_content_extensions: str = "",
+        custom_filename_extensions: str = "",
+    ) -> str:
+        return "\n".join(
+            sorted(
+                normalize_extension_filter(
+                    value,
+                    extra_content_extensions=tuple(self._parse_extension_entries(custom_content_extensions)),
+                    extra_filename_extensions=tuple(self._parse_extension_entries(custom_filename_extensions)),
+                )
+            )
+        )
 
     def _merge_exclude_keyword_strings(self, *values: str) -> str:
         merged: list[str] = []
@@ -1061,6 +1255,17 @@ class IndexService:
             seen.add(normalized_keyword)
             keywords.append(keyword)
         return keywords
+
+    def _parse_extension_entries(self, value: str | None) -> list[str]:
+        seen: set[str] = set()
+        extensions: list[str] = []
+        for raw_token in (value or "").replace(",", "\n").splitlines():
+            extension = normalize_extension_token(raw_token)
+            if not extension or extension in seen:
+                continue
+            seen.add(extension)
+            extensions.append(extension)
+        return extensions
 
     def _should_exclude_path(self, path: Path, keywords: list[str]) -> bool:
         """

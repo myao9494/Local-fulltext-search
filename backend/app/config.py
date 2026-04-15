@@ -19,6 +19,11 @@ class Settings(BaseModel):
     data_dir: Path = Path(os.getenv("SEARCH_APP_DATA_DIR", str(BACKEND_DIR / "data")))
     database_name: str = os.getenv("SEARCH_APP_DB_NAME", "search.db")
     exclude_keywords_name: str = os.getenv("SEARCH_APP_EXCLUDE_KEYWORDS_NAME", "exclude_keywords.txt")
+    index_selected_extensions_name: str = os.getenv("SEARCH_APP_INDEX_SELECTED_EXTENSIONS_NAME", "index_selected_extensions.txt")
+    custom_content_extensions_name: str = os.getenv("SEARCH_APP_CUSTOM_CONTENT_EXTENSIONS_NAME", "custom_content_extensions.txt")
+    custom_filename_extensions_name: str = os.getenv(
+        "SEARCH_APP_CUSTOM_FILENAME_EXTENSIONS_NAME", "custom_filename_extensions.txt"
+    )
     frontend_dist_dir: Path = Path(os.getenv("SEARCH_APP_FRONTEND_DIST_DIR", str(PROJECT_ROOT_DIR / "frontend" / "dist")))
 
     @field_validator("data_dir", "frontend_dist_dir", mode="before")
@@ -35,7 +40,13 @@ class Settings(BaseModel):
         base_dir = BACKEND_DIR if info.field_name == "data_dir" else PROJECT_ROOT_DIR
         return (base_dir / path).resolve()
 
-    @field_validator("database_name", "exclude_keywords_name")
+    @field_validator(
+        "database_name",
+        "exclude_keywords_name",
+        "index_selected_extensions_name",
+        "custom_content_extensions_name",
+        "custom_filename_extensions_name",
+    )
     @classmethod
     def _validate_file_name(cls, value: str) -> str:
         """
@@ -52,6 +63,18 @@ class Settings(BaseModel):
     @property
     def exclude_keywords_path(self) -> Path:
         return (self.data_dir / self.exclude_keywords_name).resolve()
+
+    @property
+    def index_selected_extensions_path(self) -> Path:
+        return (self.data_dir / self.index_selected_extensions_name).resolve()
+
+    @property
+    def custom_content_extensions_path(self) -> Path:
+        return (self.data_dir / self.custom_content_extensions_name).resolve()
+
+    @property
+    def custom_filename_extensions_path(self) -> Path:
+        return (self.data_dir / self.custom_filename_extensions_name).resolve()
 
 
 settings = Settings()

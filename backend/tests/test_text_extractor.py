@@ -7,7 +7,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.extractors.text_extractor import extract_text, normalize_extension_filter, resolve_supported_extension, supports_extension
+from app.extractors.text_extractor import (
+    extract_text,
+    normalize_extension_filter,
+    resolve_supported_extension,
+    supports_content_extraction,
+    supports_extension,
+)
 
 
 def test_supports_extension_includes_office_pdf_and_images() -> None:
@@ -24,6 +30,7 @@ def test_supports_extension_includes_office_pdf_and_images() -> None:
     assert supports_extension(Path("canvas.excalidraw.md")) is True
     assert supports_extension(Path("flow.dio")) is True
     assert supports_extension(Path("flow.dio.svg")) is True
+    assert supports_extension(Path("layout.xml")) is True
     assert supports_extension(Path("photo.png")) is True
     assert supports_extension(Path("song.mp3")) is True
     assert supports_extension(Path("voice.m4a")) is True
@@ -33,19 +40,78 @@ def test_supports_extension_includes_office_pdf_and_images() -> None:
 
 def test_extract_text_reads_excalidraw_and_dio_as_plain_text(tmp_path: Path) -> None:
     """
-    Excalidraw と draw.io の保存ファイルは、JSON/XML の平文として検索対象へ取り込む。
+    Excalidraw と draw.io 系ファイルは、JSON の値だけを検索対象へ取り込む。
     """
     excalidraw_file = tmp_path / "architecture.excalidraw"
-    excalidraw_file.write_text('{"type":"excalidraw","elements":[{"text":"検索導線"}]}', encoding="utf-8")
+    excalidraw_file.write_text(
+        '{"type":"excalidraw","elements":[{"text":"検索導線","x":120}],"appState":{"viewBackgroundColor":"#0f172a"}}',
+        encoding="utf-8",
+    )
 
     dio_file = tmp_path / "sequence.dio"
-    dio_file.write_text("<mxfile><diagram>index status filter</diagram></mxfile>", encoding="utf-8")
+    dio_file.write_text(
+        '<mxfile><diagram>{"title":"index status filter","steps":["open","search"]}</diagram></mxfile>',
+        encoding="utf-8",
+    )
     dio_svg_file = tmp_path / "sequence.dio.svg"
-    dio_svg_file.write_text("<svg><text>embedded drawio text</text></svg>", encoding="utf-8")
+    dio_svg_file.write_text(
+        '<svg><metadata>{&quot;label&quot;:&quot;embedded drawio text&quot;,&quot;count&quot;:3}</metadata><text>ignored label</text></svg>',
+        encoding="utf-8",
+    )
 
-    assert "検索導線" in extract_text(excalidraw_file)
-    assert "index status filter" in extract_text(dio_file)
-    assert "embedded drawio text" in extract_text(dio_svg_file)
+    excalidraw_text = extract_text(excalidraw_file)
+    dio_text = extract_text(dio_file)
+    dio_svg_text = extract_text(dio_svg_file)
+
+    assert "検索導線" in excalidraw_text
+    assert "120" in excalidraw_text
+    assert '"type"' not in excalidraw_text
+    assert "index status filter" in dio_text
+    assert "open" in dio_text
+    assert "<mxfile>" not in dio_text
+    assert "embedded drawio text" in dio_svg_text
+    assert "3" in dio_svg_text
+    assert "ignored label" not in dio_svg_text
+
+
+def test_extract_text_reads_json_values_without_json_syntax(tmp_path: Path) -> None:
+    """
+    JSON ファイルはキー名や記号ではなく、値だけを検索用テキストとして取り込む。
+    """
+    json_file = tmp_path / "settings.json"
+    json_file.write_text(
+        '{"name":"alpha search","enabled":true,"items":[1,"beta"],"meta":{"owner":"team"}}',
+        encoding="utf-8",
+    )
+
+    extracted = extract_text(json_file)
+
+    assert "alpha search" in extracted
+    assert "true" in extracted
+    assert "1" in extracted
+    assert "beta" in extracted
+    assert "team" in extracted
+    assert '"name"' not in extracted
+    assert "{" not in extracted
+
+
+def test_extract_text_reads_xml_text_without_tags(tmp_path: Path) -> None:
+    """
+    XML ファイルはタグ名ではなく、テキストノードの中身だけを検索用テキストとして取り込む。
+    """
+    xml_file = tmp_path / "layout.xml"
+    xml_file.write_text(
+        "<root><title>alpha layout</title><item priority='high'>beta</item><meta><count>3</count></meta></root>",
+        encoding="utf-8",
+    )
+
+    extracted = extract_text(xml_file)
+
+    assert "alpha layout" in extracted
+    assert "beta" in extracted
+    assert "3" in extracted
+    assert "<title>" not in extracted
+    assert "priority" not in extracted
 
 
 def test_normalize_extension_filter_accepts_space_separated_values_without_dots() -> None:
@@ -338,3 +404,28 @@ def test_extract_text_keeps_plain_text_files_unchanged(tmp_path: Path) -> None:
     text_file.write_text("alpha ![](beta(gamma).png)", encoding="utf-8")
 
     assert extract_text(text_file) == "alpha ![](beta(gamma).png)"
+
+
+def test_custom_content_extensions_are_treated_as_plain_text(tmp_path: Path) -> None:
+    """
+    利用者追加の本文抽出拡張子はプレーンテキストとして扱える。
+    """
+    custom_file = tmp_path / "solver.dat"
+    custom_file.write_text("NODE 1001", encoding="utf-8")
+
+    assert resolve_supported_extension(custom_file, extra_content_extensions=(".dat",)) == ".dat"
+    assert supports_content_extraction(custom_file, extra_content_extensions=(".dat",)) is True
+    assert "NODE 1001" in extract_text(custom_file, extra_content_extensions=(".dat",))
+
+
+def test_normalize_extension_filter_accepts_custom_extension_lists() -> None:
+    """
+    カスタム拡張子を追加した場合も、拡張子フィルタで正規化して扱える。
+    """
+    normalized = normalize_extension_filter(
+        "md py cae",
+        extra_content_extensions=(".py",),
+        extra_filename_extensions=(".cae",),
+    )
+
+    assert normalized == frozenset({".md", ".py", ".cae"})

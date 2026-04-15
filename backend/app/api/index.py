@@ -34,7 +34,12 @@ def update_app_settings(
     """
     アプリ全体で共有する設定を保存し、保存後の値を返す。
     """
-    return service.update_app_settings(exclude_keywords=payload.exclude_keywords).model_dump()
+    return service.update_app_settings(
+        exclude_keywords=payload.exclude_keywords,
+        index_selected_extensions=payload.index_selected_extensions,
+        custom_content_extensions=payload.custom_content_extensions,
+        custom_filename_extensions=payload.custom_filename_extensions,
+    ).model_dump()
 
 
 @router.get("/failed-files")

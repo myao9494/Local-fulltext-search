@@ -47,4 +47,7 @@ export type IndexedTargetListResponse = {
 
 export type AppSettings = {
   exclude_keywords: string;
+  index_selected_extensions: string;
+  custom_content_extensions: string;
+  custom_filename_extensions: string;
 };

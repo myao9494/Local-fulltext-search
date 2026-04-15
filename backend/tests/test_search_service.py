@@ -550,13 +550,16 @@ def test_search_treats_md_and_excalidraw_md_as_distinct_extensions(tmp_path: Pat
 
 def test_search_treats_svg_and_dio_svg_as_distinct_extensions(tmp_path: Path) -> None:
     """
-    `.svg` と `.dio.svg` は別拡張子として検索フィルタできる。
+    `.svg` と `.dio.svg` は別拡張子として検索フィルタでき、`.dio.svg` は埋め込み JSON の値だけを検索する。
     """
     service = SearchService(connection=_create_connection(tmp_path))
     target = tmp_path / "docs"
     target.mkdir()
     (target / "icon.svg").write_bytes(b"<svg/>")
-    (target / "flow.dio.svg").write_text("<svg><text>alpha flow</text></svg>", encoding="utf-8")
+    (target / "flow.dio.svg").write_text(
+        '<svg><metadata>{&quot;label&quot;:&quot;alpha flow&quot;,&quot;steps&quot;:[&quot;review&quot;]}</metadata><text>ignored text</text></svg>',
+        encoding="utf-8",
+    )
 
     svg_result = service.search(
         SearchQueryParams(

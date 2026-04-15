@@ -25,8 +25,9 @@ class SearchService:
 
     def search(self, params: SearchQueryParams) -> SearchResponse:
         normalized_target_path = normalize_path_str(params.full_path) if params.full_path else ""
+        app_settings = self.index_service.get_app_settings()
         effective_exclude_keywords = (
-            params.exclude_keywords if params.exclude_keywords is not None else self.index_service.get_app_settings().exclude_keywords
+            params.exclude_keywords if params.exclude_keywords is not None else app_settings.exclude_keywords
         )
         excluded_keywords = self.index_service._parse_exclude_keywords(effective_exclude_keywords)
         if normalized_target_path:
@@ -43,12 +44,14 @@ class SearchService:
                 params=params,
                 normalized_target_path=normalized_target_path,
                 excluded_keywords=excluded_keywords,
+                app_settings=app_settings,
             )
 
         return self._search_with_fts(
             params=params,
             normalized_target_path=normalized_target_path,
             excluded_keywords=excluded_keywords,
+            app_settings=app_settings,
         )
 
     def _search_with_fts(
@@ -57,6 +60,7 @@ class SearchService:
         params: SearchQueryParams,
         normalized_target_path: str,
         excluded_keywords: list[str],
+        app_settings,
     ) -> SearchResponse:
         """
         通常モードでは既存の FTS5 ベース全文検索を利用する。
@@ -69,6 +73,8 @@ class SearchService:
             date_field=params.date_field,
             created_from=params.created_from,
             created_to=params.created_to,
+            custom_content_extensions=app_settings.custom_content_extensions,
+            custom_filename_extensions=app_settings.custom_filename_extensions,
         )
 
         normalized_query = params.q.strip()
@@ -303,6 +309,7 @@ class SearchService:
         params: SearchQueryParams,
         normalized_target_path: str,
         excluded_keywords: list[str],
+        app_settings,
     ) -> SearchResponse:
         """
         正規表現モードでは Python の re で本文とファイル名を評価する。
@@ -315,6 +322,8 @@ class SearchService:
             date_field=params.date_field,
             created_from=params.created_from,
             created_to=params.created_to,
+            custom_content_extensions=app_settings.custom_content_extensions,
+            custom_filename_extensions=app_settings.custom_filename_extensions,
         )
         pattern = self._compile_regex(params.q)
         cursor = self.connection.execute(
@@ -495,6 +504,8 @@ class SearchService:
         date_field: str = "created",
         created_from: date | None = None,
         created_to: date | None = None,
+        custom_content_extensions: str = "",
+        custom_filename_extensions: str = "",
     ) -> tuple[str, list[object]]:
         """
         検索モード共通のパス・階層・拡張子・日付フィルタを組み立てる。
@@ -514,7 +525,13 @@ class SearchService:
             values.extend([prefix_start, prefix_end, descendant_prefix, descendant_prefix, index_depth])
 
         if types:
-            extensions = sorted(normalize_extension_filter(types))
+            extensions = sorted(
+                normalize_extension_filter(
+                    types,
+                    extra_content_extensions=tuple(self.index_service._parse_extension_entries(custom_content_extensions)),
+                    extra_filename_extensions=tuple(self.index_service._parse_extension_entries(custom_filename_extensions)),
+                )
+            )
             if extensions:
                 placeholders = ", ".join("?" for _ in extensions)
                 filters.append(f"files.file_ext IN ({placeholders})")

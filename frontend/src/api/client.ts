@@ -43,7 +43,12 @@ export async function fetchAppSettings(): Promise<AppSettings> {
   return request<AppSettings>("/api/index/settings");
 }
 
-export async function updateAppSettings(payload: { exclude_keywords?: string }): Promise<AppSettings> {
+export async function updateAppSettings(payload: {
+  exclude_keywords?: string;
+  index_selected_extensions?: string;
+  custom_content_extensions?: string;
+  custom_filename_extensions?: string;
+}): Promise<AppSettings> {
   return request<AppSettings>("/api/index/settings", {
     method: "PUT",
     body: JSON.stringify(payload),

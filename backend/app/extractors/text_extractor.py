@@ -5,9 +5,12 @@
 
 from __future__ import annotations
 
+import html
+import json
 from datetime import date, datetime, time
 from pathlib import Path
 import re
+from xml.etree import ElementTree
 
 
 CONTENT_EXTENSIONS: frozenset[str] = frozenset(
@@ -16,6 +19,7 @@ CONTENT_EXTENSIONS: frozenset[str] = frozenset(
         ".excalidraw.md",
         ".dio.svg",
         ".json",
+        ".xml",
         ".txt",
         ".excalidraw",
         ".dio",
@@ -56,50 +60,36 @@ SUPPORTED_EXTENSIONS: frozenset[str] = CONTENT_EXTENSIONS | FILENAME_ONLY_EXTENS
 SORTED_SUPPORTED_EXTENSIONS: tuple[str, ...] = tuple(sorted(SUPPORTED_EXTENSIONS, key=len, reverse=True))
 
 
-def supports_extension(path: Path) -> bool:
+def get_content_extensions(*, extra_content_extensions: tuple[str, ...] | list[str] | set[str] | frozenset[str] = ()) -> frozenset[str]:
     """
-    検索対象として扱う拡張子かどうかを返す。
+    標準の本文抽出拡張子に、利用者追加分を合成して返す。
     """
-    return resolve_supported_extension(path) is not None
+    return frozenset({*CONTENT_EXTENSIONS, *extra_content_extensions})
 
 
-def supports_content_extraction(path: Path) -> bool:
+def get_filename_only_extensions(
+    *, extra_filename_extensions: tuple[str, ...] | list[str] | set[str] | frozenset[str] = ()
+) -> frozenset[str]:
     """
-    本文抽出に対応する拡張子かどうかを返す。
+    標準のファイル名検索専用拡張子に、利用者追加分を合成して返す。
     """
-    resolved = resolve_supported_extension(path)
-    return resolved in CONTENT_EXTENSIONS
+    return frozenset({*FILENAME_ONLY_EXTENSIONS, *extra_filename_extensions})
 
 
-def resolve_supported_extension(path: Path) -> str | None:
+def get_supported_extensions(
+    *,
+    extra_content_extensions: tuple[str, ...] | list[str] | set[str] | frozenset[str] = (),
+    extra_filename_extensions: tuple[str, ...] | list[str] | set[str] | frozenset[str] = (),
+) -> frozenset[str]:
     """
-    対応拡張子のうち、ファイル名末尾に最長一致するものを返す。
-    `excalidraw.md` のような複合拡張子を `.md` と区別する。
+    標準拡張子と利用者追加拡張子を合わせた全対応拡張子を返す。
     """
-    lower_name = path.name.lower()
-    for extension in SORTED_SUPPORTED_EXTENSIONS:
-        if lower_name.endswith(extension):
-            return extension
-    return None
+    return get_content_extensions(extra_content_extensions=extra_content_extensions) | get_filename_only_extensions(
+        extra_filename_extensions=extra_filename_extensions
+    )
 
 
-def normalize_extension_filter(value: str | None) -> frozenset[str]:
-    """
-    利用者が指定した拡張子一覧を正規化し、未指定時は全対応拡張子を返す。
-    """
-    if value is None or not value.strip():
-        return SUPPORTED_EXTENSIONS
-
-    normalized = {
-        _normalize_extension_token(item)
-        for item in re.split(r"[\s,]+", value.strip())
-        if item.strip()
-    }
-    filtered = {item for item in normalized if item in SUPPORTED_EXTENSIONS}
-    return frozenset(filtered) if filtered else SUPPORTED_EXTENSIONS
-
-
-def _normalize_extension_token(value: str) -> str:
+def normalize_extension_token(value: str) -> str:
     """
     拡張子入力を `.md` 形式へそろえる。ドットなし入力も受け付ける。
     """
@@ -109,20 +99,113 @@ def _normalize_extension_token(value: str) -> str:
     return token if token.startswith(".") else f".{token}"
 
 
-def extract_text(path: Path) -> str:
+def supports_extension(path: Path) -> bool:
+    """
+    検索対象として扱う拡張子かどうかを返す。
+    """
+    return resolve_supported_extension(path) is not None
+
+
+def supports_content_extraction(
+    path: Path,
+    *,
+    extra_content_extensions: tuple[str, ...] | list[str] | set[str] | frozenset[str] = (),
+    extra_filename_extensions: tuple[str, ...] | list[str] | set[str] | frozenset[str] = (),
+) -> bool:
+    """
+    本文抽出に対応する拡張子かどうかを返す。
+    """
+    resolved = resolve_supported_extension(
+        path,
+        extra_content_extensions=extra_content_extensions,
+        extra_filename_extensions=extra_filename_extensions,
+    )
+    return resolved in get_content_extensions(extra_content_extensions=extra_content_extensions)
+
+
+def resolve_supported_extension(
+    path: Path,
+    *,
+    extra_content_extensions: tuple[str, ...] | list[str] | set[str] | frozenset[str] = (),
+    extra_filename_extensions: tuple[str, ...] | list[str] | set[str] | frozenset[str] = (),
+) -> str | None:
+    """
+    対応拡張子のうち、ファイル名末尾に最長一致するものを返す。
+    `excalidraw.md` のような複合拡張子を `.md` と区別する。
+    """
+    lower_name = path.name.lower()
+    sorted_supported_extensions = tuple(
+        sorted(
+            get_supported_extensions(
+                extra_content_extensions=extra_content_extensions,
+                extra_filename_extensions=extra_filename_extensions,
+            ),
+            key=len,
+            reverse=True,
+        )
+    )
+    for extension in sorted_supported_extensions:
+        if lower_name.endswith(extension):
+            return extension
+    return None
+
+
+def normalize_extension_filter(
+    value: str | None,
+    *,
+    extra_content_extensions: tuple[str, ...] | list[str] | set[str] | frozenset[str] = (),
+    extra_filename_extensions: tuple[str, ...] | list[str] | set[str] | frozenset[str] = (),
+) -> frozenset[str]:
+    """
+    利用者が指定した拡張子一覧を正規化し、未指定時は全対応拡張子を返す。
+    """
+    supported_extensions = get_supported_extensions(
+        extra_content_extensions=extra_content_extensions,
+        extra_filename_extensions=extra_filename_extensions,
+    )
+    if value is None or not value.strip():
+        return supported_extensions
+
+    normalized = {
+        normalize_extension_token(item)
+        for item in re.split(r"[\s,]+", value.strip())
+        if item.strip()
+    }
+    filtered = {item for item in normalized if item in supported_extensions}
+    return frozenset(filtered) if filtered else supported_extensions
+
+
+def extract_text(
+    path: Path,
+    *,
+    extra_content_extensions: tuple[str, ...] | list[str] | set[str] | frozenset[str] = (),
+    extra_filename_extensions: tuple[str, ...] | list[str] | set[str] | frozenset[str] = (),
+) -> str:
     """
     ファイル種別に応じて検索用テキストを抽出する。
     Markdown は `![](...)` / `[](...)` を平文化し、Office/PDF/Outlook は平文へ変換する。
     """
     suffix = path.suffix.lower()
-    resolved_extension = resolve_supported_extension(path)
+    resolved_extension = resolve_supported_extension(
+        path,
+        extra_content_extensions=extra_content_extensions,
+        extra_filename_extensions=extra_filename_extensions,
+    )
     if resolved_extension is None:
         raise ValueError(f"Unsupported extension: {suffix}")
 
     if resolved_extension in {".md", ".excalidraw.md"}:
         content = path.read_text(encoding="utf-8", errors="ignore")
         return _flatten_markdown_inline_links(content)
-    if resolved_extension in {".json", ".txt", ".excalidraw", ".dio", ".dio.svg"}:
+    if resolved_extension == ".txt":
+        return path.read_text(encoding="utf-8", errors="ignore")
+    if resolved_extension in {".json", ".excalidraw"}:
+        return _extract_json_values_text(path.read_text(encoding="utf-8", errors="ignore"))
+    if resolved_extension in {".dio", ".dio.svg"}:
+        return _extract_embedded_json_values_text(path.read_text(encoding="utf-8", errors="ignore"))
+    if resolved_extension == ".xml":
+        return _extract_xml_text(path.read_text(encoding="utf-8", errors="ignore"))
+    if resolved_extension in extra_content_extensions:
         return path.read_text(encoding="utf-8", errors="ignore")
     if resolved_extension == ".pdf":
         return _extract_pdf_text(path)
@@ -136,6 +219,145 @@ def extract_text(path: Path) -> str:
         return _extract_msg_text(path)
 
     raise ValueError(f"Unsupported extension: {resolved_extension}")
+
+
+def _extract_json_values_text(content: str) -> str:
+    """
+    JSON 文字列を解析し、キー名や記号を除いた値だけを改行区切りで返す。
+    """
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        return ""
+    return "\n".join(_iter_json_scalar_values(parsed))
+
+
+def _extract_embedded_json_values_text(content: str) -> str:
+    """
+    XML や SVG に埋め込まれた JSON 断片を走査し、見つかった値だけを返す。
+    """
+    fragments = _extract_json_values_text(content)
+    if fragments:
+        return fragments
+
+    values: list[str] = []
+    for fragment in _iter_json_fragments(html.unescape(content)):
+        values.extend(_iter_json_scalar_values(fragment))
+    return "\n".join(values)
+
+
+def _extract_xml_text(content: str) -> str:
+    """
+    XML を解析し、タグや属性を除いたテキストノードだけを改行区切りで返す。
+    """
+    try:
+        root = ElementTree.fromstring(content)
+    except ElementTree.ParseError:
+        return ""
+
+    values = [text.strip() for text in root.itertext() if text.strip()]
+    return "\n".join(values)
+
+
+def _iter_json_scalar_values(value: object) -> list[str]:
+    """
+    JSON オブジェクトを再帰的にたどり、検索対象にしたい末端値だけを抽出する。
+    """
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        values: list[str] = []
+        for nested in value.values():
+            values.extend(_iter_json_scalar_values(nested))
+        return values
+    if isinstance(value, list):
+        values: list[str] = []
+        for nested in value:
+            values.extend(_iter_json_scalar_values(nested))
+        return values
+    if isinstance(value, bool):
+        return ["true" if value else "false"]
+    if isinstance(value, (int, float)):
+        return [str(value)]
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped] if stripped else []
+    return [str(value)]
+
+
+def _iter_json_fragments(content: str) -> list[object]:
+    """
+    テキスト中の JSON オブジェクト・配列断片を抽出して返す。
+    """
+    parsed_fragments: list[object] = []
+    length = len(content)
+    index = 0
+    while index < length:
+        char = content[index]
+        if char not in "{[":
+            index += 1
+            continue
+
+        fragment, next_index = _read_json_fragment(content, index)
+        if fragment is None:
+            index += 1
+            continue
+
+        try:
+            parsed_fragments.append(json.loads(fragment))
+        except json.JSONDecodeError:
+            index += 1
+            continue
+
+        index = next_index
+
+    return parsed_fragments
+
+
+def _read_json_fragment(content: str, start_index: int) -> tuple[str | None, int]:
+    """
+    開始位置から JSON らしい波括弧/角括弧ブロックを切り出す。
+    """
+    opening = content[start_index]
+    closing = "}" if opening == "{" else "]"
+    stack = [closing]
+    index = start_index + 1
+    in_string = False
+    is_escaped = False
+
+    while index < len(content):
+        char = content[index]
+        if in_string:
+            if is_escaped:
+                is_escaped = False
+            elif char == "\\":
+                is_escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if char == "{":
+            stack.append("}")
+            index += 1
+            continue
+        if char == "[":
+            stack.append("]")
+            index += 1
+            continue
+        if stack and char == stack[-1]:
+            stack.pop()
+            index += 1
+            if not stack:
+                return content[start_index:index], index
+            continue
+        index += 1
+
+    return None, start_index
 
 
 def _extract_pdf_text(path: Path) -> str:

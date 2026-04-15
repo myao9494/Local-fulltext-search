@@ -17,18 +17,23 @@ import { SearchBar } from "./components/SearchBar";
 import { parseLaunchParams, shouldAutoSearch } from "./launchParams";
 import type { FailedFile, IndexedTarget, IndexStatus, SearchResult } from "./types";
 
-const SUPPORTED_EXTENSIONS = [
+const BASE_CONTENT_EXTENSIONS = [
   ".md",
   ".json",
   ".txt",
+  ".xml",
   ".excalidraw",
   ".dio",
+  ".excalidraw.md",
+  ".dio.svg",
   ".pdf",
   ".docx",
   ".xlsx",
   ".xlsm",
   ".pptx",
   ".msg",
+];
+const BASE_FILENAME_ONLY_EXTENSIONS = [
   ".png",
   ".jpg",
   ".jpeg",
@@ -49,8 +54,7 @@ const SUPPORTED_EXTENSIONS = [
   ".alac",
   ".m4p",
 ] as const;
-const DEFAULT_INDEX_EXTENSIONS = [...SUPPORTED_EXTENSIONS];
-const LEGACY_ALL_EXTENSIONS_VALUE = SUPPORTED_EXTENSIONS.join(",");
+const DEFAULT_INDEX_EXTENSIONS = [...BASE_CONTENT_EXTENSIONS, ...BASE_FILENAME_ONLY_EXTENSIONS];
 const DEFAULT_EXCLUDE_KEYWORDS = [
   "node_modules",
   ".git",
@@ -96,11 +100,49 @@ function normalizeDefaultSearchPath(value: string): string {
 }
 
 /**
- * 拡張子選択は対応順のまま一意化し、保存値と画面表示の順序を安定させる。
+ * 拡張子入力は `.md` 形式へ正規化し、空値は捨てる。
  */
-function normalizeIndexExtensions(extensions: readonly string[]): string[] {
-  const selected = new Set(extensions);
-  return SUPPORTED_EXTENSIONS.filter((extension) => selected.has(extension));
+function normalizeExtensionToken(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
+}
+
+/**
+ * 拡張子一覧は前後空白除去・ドット補完・重複排除を行う。
+ */
+function normalizeCustomExtensions(extensions: readonly string[]): string[] {
+  const normalized = extensions.map(normalizeExtensionToken).filter(Boolean);
+  return [...new Set(normalized)];
+}
+
+/**
+ * 標準拡張子と利用者追加拡張子を結合し、表示順を安定させる。
+ */
+function buildAvailableExtensions(customContentExtensions: readonly string[], customFilenameExtensions: readonly string[]): string[] {
+  return [
+    ...BASE_CONTENT_EXTENSIONS,
+    ...BASE_FILENAME_ONLY_EXTENSIONS,
+    ...normalizeCustomExtensions(customContentExtensions),
+    ...normalizeCustomExtensions(customFilenameExtensions),
+  ].filter((extension, index, array) => array.indexOf(extension) === index);
+}
+
+/**
+ * 拡張子選択は表示順のまま一意化し、保存値と画面表示の順序を安定させる。
+ */
+function normalizeIndexExtensions(extensions: readonly string[], availableExtensions: readonly string[]): string[] {
+  const selected = new Set(extensions.map(normalizeExtensionToken).filter(Boolean));
+  return availableExtensions.filter((extension) => selected.has(extension));
+}
+
+/**
+ * テキストファイルとの往復用に、改行区切りの拡張子一覧を配列へ変換する。
+ */
+function parseExtensionText(value: string): string[] {
+  return normalizeCustomExtensions(value.split(/[\s,]+/));
 }
 
 function App() {
@@ -121,29 +163,17 @@ function App() {
   const [defaultSearchPathDraft, setDefaultSearchPathDraft] = useState(
     () => localStorage.getItem("default_search_path") ?? DEFAULT_SEARCH_PATH,
   );
-  const [selectedIndexExtensions, setSelectedIndexExtensions] = useState<string[]>(() => {
-    const stored = localStorage.getItem("index_selected_extensions") ?? localStorage.getItem("selected_extensions");
-    if (!stored || stored === LEGACY_ALL_EXTENSIONS_VALUE) {
-      return DEFAULT_INDEX_EXTENSIONS;
-    }
-    const parsed = normalizeIndexExtensions(
-      stored.split(/[\s,]+/).filter((item) => SUPPORTED_EXTENSIONS.includes(item as (typeof SUPPORTED_EXTENSIONS)[number])),
-    );
-    return parsed.length > 0 ? parsed : DEFAULT_INDEX_EXTENSIONS;
-  });
-  const [savedIndexExtensions, setSavedIndexExtensions] = useState<string[]>(() => {
-    const stored = localStorage.getItem("index_selected_extensions") ?? localStorage.getItem("selected_extensions");
-    if (!stored || stored === LEGACY_ALL_EXTENSIONS_VALUE) {
-      return DEFAULT_INDEX_EXTENSIONS;
-    }
-    const parsed = normalizeIndexExtensions(
-      stored.split(/[\s,]+/).filter((item) => SUPPORTED_EXTENSIONS.includes(item as (typeof SUPPORTED_EXTENSIONS)[number])),
-    );
-    return parsed.length > 0 ? parsed : DEFAULT_INDEX_EXTENSIONS;
-  });
+  const [savedCustomContentExtensions, setSavedCustomContentExtensions] = useState<string[]>([]);
+  const [customContentExtensions, setCustomContentExtensions] = useState<string[]>([]);
+  const [savedCustomFilenameExtensions, setSavedCustomFilenameExtensions] = useState<string[]>([]);
+  const [customFilenameExtensions, setCustomFilenameExtensions] = useState<string[]>([]);
+  const [newContentExtension, setNewContentExtension] = useState("");
+  const [newFilenameExtension, setNewFilenameExtension] = useState("");
+  const [selectedIndexExtensions, setSelectedIndexExtensions] = useState<string[]>(DEFAULT_INDEX_EXTENSIONS);
+  const [savedIndexExtensions, setSavedIndexExtensions] = useState<string[]>(DEFAULT_INDEX_EXTENSIONS);
   const [searchFilterText, setSearchFilterText] = useState(() => {
     const stored = localStorage.getItem("search_filter_extensions");
-    if (!stored || stored === LEGACY_ALL_EXTENSIONS_VALUE) {
+    if (!stored) {
       return DEFAULT_SEARCH_FILTER_TEXT;
     }
     return stored;
@@ -168,10 +198,12 @@ function App() {
   const [isLoadingTargets, setIsLoadingTargets] = useState(false);
   const [isDeletingTargets, setIsDeletingTargets] = useState(false);
   const [isSavingExcludeKeywords, setIsSavingExcludeKeywords] = useState(false);
+  const [isSavingIndexExtensions, setIsSavingIndexExtensions] = useState(false);
   const isIndexCancelling = Boolean(indexStatus?.is_running && indexStatus?.cancel_requested);
   const isIndexRunning = Boolean(indexStatus?.is_running && !indexStatus?.cancel_requested);
   const indexStatusLabel = isIndexCancelling ? "インデックス取得を中止中" : isIndexRunning ? "インデックス取得中" : "インデックス待機中";
   const indexStatusTone = isIndexCancelling ? "cancelling" : isIndexRunning ? "running" : "idle";
+  const availableIndexExtensions = buildAvailableExtensions(customContentExtensions, customFilenameExtensions);
 
   const keyword = targetKeyword.trim().toLowerCase();
   const filteredTargets = !keyword
@@ -187,7 +219,10 @@ function App() {
   const hasUnsavedExcludeKeywords = normalizedExcludeKeywordsDraft !== savedExcludeKeywords;
   const normalizedDefaultSearchPath = normalizeDefaultSearchPath(defaultSearchPathDraft);
   const hasUnsavedDefaultSearchPath = normalizedDefaultSearchPath !== savedDefaultSearchPath;
-  const hasUnsavedIndexExtensions = selectedIndexExtensions.join(" ") !== savedIndexExtensions.join(" ");
+  const hasUnsavedIndexExtensions =
+    selectedIndexExtensions.join(" ") !== savedIndexExtensions.join(" ") ||
+    customContentExtensions.join(" ") !== savedCustomContentExtensions.join(" ") ||
+    customFilenameExtensions.join(" ") !== savedCustomFilenameExtensions.join(" ");
 
   async function refreshIndexStatus(): Promise<void> {
     setIndexStatus(await fetchIndexStatus());
@@ -211,8 +246,21 @@ function App() {
     try {
       const appSettings = await fetchAppSettings();
       const normalizedExcludeKeywords = normalizeExcludeKeywords(appSettings.exclude_keywords);
+      const loadedCustomContentExtensions = parseExtensionText(appSettings.custom_content_extensions);
+      const loadedCustomFilenameExtensions = parseExtensionText(appSettings.custom_filename_extensions);
+      const loadedAvailableExtensions = buildAvailableExtensions(loadedCustomContentExtensions, loadedCustomFilenameExtensions);
+      const loadedSelectedIndexExtensions = normalizeIndexExtensions(
+        parseExtensionText(appSettings.index_selected_extensions),
+        loadedAvailableExtensions,
+      );
       setSavedExcludeKeywords(normalizedExcludeKeywords);
       setExcludeKeywordsDraft(normalizedExcludeKeywords);
+      setSavedCustomContentExtensions(loadedCustomContentExtensions);
+      setCustomContentExtensions(loadedCustomContentExtensions);
+      setSavedCustomFilenameExtensions(loadedCustomFilenameExtensions);
+      setCustomFilenameExtensions(loadedCustomFilenameExtensions);
+      setSavedIndexExtensions(loadedSelectedIndexExtensions);
+      setSelectedIndexExtensions(loadedSelectedIndexExtensions);
       await refreshIndexStatus();
     } catch (error) {
       setNoticeMessage("");
@@ -397,7 +445,7 @@ function App() {
   }
 
   function setAllIndexExtensions(): void {
-    setSelectedIndexExtensions([...SUPPORTED_EXTENSIONS]);
+    setSelectedIndexExtensions([...availableIndexExtensions]);
   }
 
   function clearAllIndexExtensions(): void {
@@ -405,17 +453,85 @@ function App() {
   }
 
   /**
-   * インデックス対象拡張子は localStorage へ明示保存し、次回起動時の初期値に使う。
+   * 利用者追加拡張子を下書きへ加え、同時にインデックス対象としても選択状態にする。
    */
-  function handleSaveIndexExtensions(): void {
-    localStorage.setItem("index_selected_extensions", selectedIndexExtensions.join(" "));
-    setSavedIndexExtensions([...selectedIndexExtensions]);
+  function handleAddCustomExtension(kind: "content" | "filename"): void {
+    const nextExtension = normalizeExtensionToken(kind === "content" ? newContentExtension : newFilenameExtension);
+    if (!nextExtension) {
+      setErrorMessage("追加する拡張子を入力してください。");
+      return;
+    }
+    if (availableIndexExtensions.includes(nextExtension)) {
+      setErrorMessage(`拡張子 ${nextExtension} は既に登録されています。`);
+      return;
+    }
+
+    if (kind === "content") {
+      setCustomContentExtensions((current) => [...current, nextExtension]);
+      setNewContentExtension("");
+    } else {
+      setCustomFilenameExtensions((current) => [...current, nextExtension]);
+      setNewFilenameExtension("");
+    }
+    setSelectedIndexExtensions((current) => [...current, nextExtension]);
     setErrorMessage("");
-    setNoticeMessage(
-      selectedIndexExtensions.length > 0
-        ? "インデックス対象の拡張子を保存しました。次回起動時もこの選択を使います。"
-        : "インデックス対象の拡張子をすべて解除した状態で保存しました。",
+    setNoticeMessage("");
+  }
+
+  /**
+   * 追加拡張子を下書きから外し、選択状態にも残さない。
+   */
+  function handleRemoveCustomExtension(extension: string, kind: "content" | "filename"): void {
+    if (kind === "content") {
+      setCustomContentExtensions((current) => current.filter((item) => item !== extension));
+    } else {
+      setCustomFilenameExtensions((current) => current.filter((item) => item !== extension));
+    }
+    setSelectedIndexExtensions((current) => current.filter((item) => item !== extension));
+    setErrorMessage("");
+    setNoticeMessage("");
+  }
+
+  /**
+   * インデックス対象拡張子と追加拡張子一覧をテキストファイル管理の設定として保存する。
+   */
+  async function handleSaveIndexExtensions(): Promise<void> {
+    const normalizedCustomContentExtensions = normalizeCustomExtensions(customContentExtensions);
+    const normalizedCustomFilenameExtensions = normalizeCustomExtensions(customFilenameExtensions);
+    const normalizedAvailableExtensions = buildAvailableExtensions(
+      normalizedCustomContentExtensions,
+      normalizedCustomFilenameExtensions,
     );
+    const normalizedSelectedIndexExtensions = normalizeIndexExtensions(selectedIndexExtensions, normalizedAvailableExtensions);
+    try {
+      setIsSavingIndexExtensions(true);
+      const savedSettings = await updateAppSettings({
+        index_selected_extensions: normalizedSelectedIndexExtensions.join("\n"),
+        custom_content_extensions: normalizedCustomContentExtensions.join("\n"),
+        custom_filename_extensions: normalizedCustomFilenameExtensions.join("\n"),
+      });
+      const savedCustomContent = parseExtensionText(savedSettings.custom_content_extensions);
+      const savedCustomFilename = parseExtensionText(savedSettings.custom_filename_extensions);
+      const savedAvailableExtensions = buildAvailableExtensions(savedCustomContent, savedCustomFilename);
+      const savedSelected = normalizeIndexExtensions(parseExtensionText(savedSettings.index_selected_extensions), savedAvailableExtensions);
+      setSavedCustomContentExtensions(savedCustomContent);
+      setCustomContentExtensions(savedCustomContent);
+      setSavedCustomFilenameExtensions(savedCustomFilename);
+      setCustomFilenameExtensions(savedCustomFilename);
+      setSavedIndexExtensions(savedSelected);
+      setSelectedIndexExtensions(savedSelected);
+      setErrorMessage("");
+      setNoticeMessage(
+        savedSelected.length > 0
+          ? "インデックス対象拡張子を保存しました。テキストファイルを編集した内容もここに反映されます。"
+          : "インデックス対象の拡張子をすべて解除した状態で保存しました。",
+      );
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "インデックス対象拡張子の保存に失敗しました。");
+    } finally {
+      setIsSavingIndexExtensions(false);
+    }
   }
 
   /**
@@ -809,30 +925,116 @@ function App() {
                       </button>
                       <button
                         className="secondary-button settings-save-button"
-                        onClick={handleSaveIndexExtensions}
+                        onClick={() => void handleSaveIndexExtensions()}
                         type="button"
-                        disabled={!hasUnsavedIndexExtensions}
+                        disabled={!hasUnsavedIndexExtensions || isSavingIndexExtensions}
                       >
-                        保存
+                        {isSavingIndexExtensions ? "保存中..." : "保存"}
                       </button>
                     </div>
-                    {SUPPORTED_EXTENSIONS.map((extension) => (
-                      <label className="extension-option" key={extension}>
-                        <input
-                          checked={selectedIndexExtensions.includes(extension)}
-                          onChange={() => toggleIndexExtension(extension)}
-                          type="checkbox"
-                        />
-                        <span>{extension}</span>
-                      </label>
-                    ))}
+
+                    <div className="extension-add-grid">
+                      <div className="extension-add-card">
+                        <div className="form-help">本文を index 化する追加拡張子</div>
+                        <div className="extension-add-row">
+                          <input
+                            className="extension-add-input"
+                            value={newContentExtension}
+                            onChange={(event) => setNewContentExtension(event.target.value)}
+                            placeholder=".py / .dat"
+                          />
+                          <button className="secondary-button" onClick={() => handleAddCustomExtension("content")} type="button">
+                            拡張子を追加
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="extension-add-card">
+                        <div className="form-help">ファイル名だけを index 化する追加拡張子</div>
+                        <div className="extension-add-row">
+                          <input
+                            className="extension-add-input"
+                            value={newFilenameExtension}
+                            onChange={(event) => setNewFilenameExtension(event.target.value)}
+                            placeholder=".cae / .mesh"
+                          />
+                          <button className="secondary-button" onClick={() => handleAddCustomExtension("filename")} type="button">
+                            拡張子を追加
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="extension-group">
+                      <div className="form-help">標準拡張子</div>
+                      {DEFAULT_INDEX_EXTENSIONS.map((extension) => (
+                        <label className="extension-option" key={extension}>
+                          <input
+                            checked={selectedIndexExtensions.includes(extension)}
+                            onChange={() => toggleIndexExtension(extension)}
+                            type="checkbox"
+                          />
+                          <span>{extension}</span>
+                        </label>
+                      ))}
+                    </div>
+
+                    {customContentExtensions.length > 0 ? (
+                      <div className="extension-group">
+                        <div className="form-help">追加した本文 index 用拡張子</div>
+                        {customContentExtensions.map((extension) => (
+                          <div className="extension-custom-row" key={extension}>
+                            <label className="extension-option">
+                              <input
+                                checked={selectedIndexExtensions.includes(extension)}
+                                onChange={() => toggleIndexExtension(extension)}
+                                type="checkbox"
+                              />
+                              <span>{extension}</span>
+                            </label>
+                            <button
+                              className="secondary-button extension-remove-button"
+                              onClick={() => handleRemoveCustomExtension(extension, "content")}
+                              type="button"
+                            >
+                              削除
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {customFilenameExtensions.length > 0 ? (
+                      <div className="extension-group">
+                        <div className="form-help">追加したファイル名のみ拡張子</div>
+                        {customFilenameExtensions.map((extension) => (
+                          <div className="extension-custom-row" key={extension}>
+                            <label className="extension-option">
+                              <input
+                                checked={selectedIndexExtensions.includes(extension)}
+                                onChange={() => toggleIndexExtension(extension)}
+                                type="checkbox"
+                              />
+                              <span>{extension}</span>
+                            </label>
+                            <button
+                              className="secondary-button extension-remove-button"
+                              onClick={() => handleRemoveCustomExtension(extension, "filename")}
+                              type="button"
+                            >
+                              削除
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
                 <div className={`settings-save-status ${hasUnsavedIndexExtensions ? "dirty" : "saved"}`}>
                   {hasUnsavedIndexExtensions ? "未保存の変更があります" : "保存済み"}
                 </div>
                 <div className="form-help">
-                  インデックス作成対象です。検索フィルタ側の拡張子選択とは独立しています。
+                  インデックス作成対象です。追加拡張子は backend のテキストファイルへ保存され、検索フィルタ側の拡張子選択とは独立しています。
                 </div>
               </div>
 
