@@ -2,6 +2,8 @@
 検索API エンドポイント。リクエスト単位のDB接続を依存性注入で受け取る。
 """
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_search_service
@@ -21,6 +23,9 @@ def search(
     index_types: str | None = None,
     types: str | None = None,
     exclude_keywords: str | None = None,
+    date_field: str = Query(default="created"),
+    created_from: date | None = None,
+    created_to: date | None = None,
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     service: SearchService = Depends(get_search_service),
@@ -34,6 +39,9 @@ def search(
         index_types=index_types,
         types=types,
         exclude_keywords=exclude_keywords,
+        date_field=date_field,
+        created_from=created_from,
+        created_to=created_to,
         limit=limit,
         offset=offset,
     )

@@ -94,6 +94,9 @@ export async function search(params: {
   regex_enabled?: boolean;
   index_types?: string;
   types?: string;
+  date_field?: "created" | "modified";
+  created_from?: string;
+  created_to?: string;
 }): Promise<SearchResponse> {
   return request<SearchResponse>("/api/search", {
     method: "POST",

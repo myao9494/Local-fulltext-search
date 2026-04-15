@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from html import escape
 import re
 from sqlite3 import Connection
@@ -66,6 +66,9 @@ class SearchService:
             normalized_target_path=normalized_target_path,
             index_depth=params.index_depth,
             types=params.types,
+            date_field=params.date_field,
+            created_from=params.created_from,
+            created_to=params.created_to,
         )
 
         normalized_query = params.q.strip()
@@ -183,6 +186,7 @@ class SearchService:
                     files.file_name,
                     files.normalized_path,
                     files.file_ext,
+                    files.created_at,
                     files.mtime,
                     filtered.snippet,
                     filtered.segment_type,
@@ -201,6 +205,7 @@ class SearchService:
                     file_name=str(row["file_name"]),
                     full_path=str(row["normalized_path"]),
                     file_ext=str(row["file_ext"]),
+                    created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
                     mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
                     snippet=self._resolve_snippet(
                         snippet=row["snippet"],
@@ -234,6 +239,7 @@ class SearchService:
                     files.file_name,
                     files.normalized_path,
                     files.file_ext,
+                    files.created_at,
                     files.mtime,
                     filtered.snippet,
                     filtered.segment_type,
@@ -250,6 +256,7 @@ class SearchService:
                 paged_matches.file_name,
                 paged_matches.normalized_path,
                 paged_matches.file_ext,
+                paged_matches.created_at,
                 paged_matches.mtime,
                 paged_matches.snippet,
                 paged_matches.segment_type,
@@ -270,6 +277,7 @@ class SearchService:
                 file_name=str(row["file_name"]),
                 full_path=str(row["normalized_path"]),
                 file_ext=str(row["file_ext"]),
+                created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
                 mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
                 snippet=self._resolve_snippet(
                     snippet=row["snippet"],
@@ -304,6 +312,9 @@ class SearchService:
             normalized_target_path=normalized_target_path,
             index_depth=params.index_depth,
             types=params.types,
+            date_field=params.date_field,
+            created_from=params.created_from,
+            created_to=params.created_to,
         )
         pattern = self._compile_regex(params.q)
         cursor = self.connection.execute(
@@ -313,6 +324,7 @@ class SearchService:
                 files.file_name,
                 files.normalized_path,
                 files.file_ext,
+                files.created_at,
                 files.mtime,
                 file_segments.content
             FROM files
@@ -354,6 +366,7 @@ class SearchService:
                     file_name=file_name,
                     full_path=normalized_path,
                     file_ext=str(row["file_ext"]),
+                    created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
                     mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
                     snippet=self._build_regex_snippet(
                         content=content,
@@ -479,12 +492,16 @@ class SearchService:
         normalized_target_path: str,
         index_depth: int,
         types: str | None,
+        date_field: str = "created",
+        created_from: date | None = None,
+        created_to: date | None = None,
     ) -> tuple[str, list[object]]:
         """
-        検索モード共通のパス・階層・拡張子フィルタを組み立てる。
+        検索モード共通のパス・階層・拡張子・日付フィルタを組み立てる。
         """
         filters: list[str] = []
         values: list[object] = []
+        date_column = "files.created_at" if date_field == "created" else "files.mtime"
 
         if normalized_target_path:
             prefix_start, prefix_end = get_descendant_path_range(normalized_target_path)
@@ -503,10 +520,31 @@ class SearchService:
                 filters.append(f"files.file_ext IN ({placeholders})")
                 values.extend(extensions)
 
+        if created_from is not None:
+            filters.append(f"{date_column} >= ?")
+            values.append(self._resolve_local_day_start_timestamp(created_from))
+
+        if created_to is not None:
+            filters.append(f"{date_column} < ?")
+            values.append(self._resolve_local_day_end_exclusive_timestamp(created_to))
+
         if not filters:
             return "1 = 1", values
 
         return " AND ".join(filters), values
+
+    def _resolve_local_day_start_timestamp(self, value: date) -> float:
+        """
+        日付フィルタの開始境界はローカルタイムゾーンの 00:00:00 を使う。
+        """
+        return datetime.combine(value, time.min).astimezone().timestamp()
+
+    def _resolve_local_day_end_exclusive_timestamp(self, value: date) -> float:
+        """
+        終了日はその翌日の 00:00:00 未満として inclusive に扱う。
+        """
+        next_day = value + timedelta(days=1)
+        return datetime.combine(next_day, time.min).astimezone().timestamp()
 
     def _compile_regex(self, pattern: str) -> re.Pattern[str]:
         """

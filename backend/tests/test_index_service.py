@@ -91,14 +91,15 @@ def test_needs_refresh_when_japanese_bigram_segment_is_missing(tmp_path: Path) -
     cursor = connection.execute(
         """
         INSERT INTO files(
-            full_path, normalized_path, file_name, file_ext, mtime, size, indexed_at, last_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            full_path, normalized_path, file_name, file_ext, created_at, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
         (
             note_path.as_posix(),
             note_path.as_posix(),
             note_path.name,
             note_path.suffix.lower(),
+            note_path.stat().st_ctime,
             note_path.stat().st_mtime,
             note_path.stat().st_size,
             indexed_at,
@@ -776,10 +777,10 @@ def test_root_path_range_query_handles_filesystem_root(tmp_path: Path) -> None:
     connection.execute(
         """
         INSERT INTO files(
-            full_path, normalized_path, file_name, file_ext, mtime, size, indexed_at, last_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            full_path, normalized_path, file_name, file_ext, created_at, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
-        ("/tmp/example.md", "/tmp/example.md", "example.md", ".md", 0.0, 10, "2026-04-13T00:00:00+00:00"),
+        ("/tmp/example.md", "/tmp/example.md", "example.md", ".md", 0.0, 0.0, 10, "2026-04-13T00:00:00+00:00"),
     )
     connection.commit()
 

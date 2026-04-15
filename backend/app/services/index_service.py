@@ -59,6 +59,7 @@ class IndexedFileCandidate:
 
     path: Path
     normalized_path: str
+    created_at: float
     mtime: float
     size: int
     existing_id: int | None
@@ -495,6 +496,7 @@ class IndexService:
                 candidate = IndexedFileCandidate(
                     path=path,
                     normalized_path=normalized_path,
+                    created_at=self._resolve_created_at(stat),
                     mtime=stat.st_mtime,
                     size=stat.st_size,
                     existing_id=int(existing["id"]) if existing is not None else None,
@@ -708,13 +710,14 @@ class IndexService:
                 """
                 UPDATE files
                 SET full_path = ?, file_name = ?, file_ext = ?,
-                    mtime = ?, size = ?, indexed_at = ?, last_error = NULL
+                    created_at = ?, mtime = ?, size = ?, indexed_at = ?, last_error = NULL
                 WHERE id = ?
                 """,
                 (
                     candidate.normalized_path,
                     candidate.path.name,
                     resolve_supported_extension(candidate.path) or candidate.path.suffix.lower(),
+                    candidate.created_at,
                     candidate.mtime,
                     candidate.size,
                     indexed_at,
@@ -728,14 +731,15 @@ class IndexService:
                 """
                 INSERT INTO files(
                     full_path, normalized_path,
-                    file_name, file_ext, mtime, size, indexed_at, last_error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+                    file_name, file_ext, created_at, mtime, size, indexed_at, last_error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 """,
                 (
                     candidate.normalized_path,
                     candidate.normalized_path,
                     candidate.path.name,
                     resolve_supported_extension(candidate.path) or candidate.path.suffix.lower(),
+                    candidate.created_at,
                     candidate.mtime,
                     candidate.size,
                     indexed_at,
@@ -760,6 +764,16 @@ class IndexService:
                     """,
                     (file_id, "cjk_bigram", candidate.normalized_path, cjk_bigram_content),
                 )
+
+    def _resolve_created_at(self, stat: os.stat_result) -> float:
+        """
+        作成日時が取得できる環境では birth time を優先し、未対応環境では ctime へフォールバックする。
+        Linux では ctime が inode 変更時刻のため厳密な作成日ではないが、列を常に埋めて検索条件を維持する。
+        """
+        birth_time = getattr(stat, "st_birthtime", None)
+        if isinstance(birth_time, (int, float)):
+            return float(birth_time)
+        return float(stat.st_ctime)
 
     def _needs_cjk_bigram_backfill(self, root_path: str) -> bool:
         """

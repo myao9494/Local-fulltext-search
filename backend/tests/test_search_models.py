@@ -1,8 +1,9 @@
 """
 検索リクエストモデルの入力制約を検証する。
-検索対象の full_path が絶対パス前提で扱われることを担保する。
+検索対象パスと作成日フィルタが安全な形で受理されることを担保する。
 """
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -63,3 +64,49 @@ def test_search_query_params_accepts_empty_full_path_for_global_search() -> None
     )
 
     assert params.full_path == ""
+
+
+def test_search_query_params_accepts_created_date_range() -> None:
+    """
+    作成日の開始日と終了日は日付型として受け付ける。
+    """
+    params = SearchQueryParams(
+        q="alpha",
+        full_path="",
+        index_depth=5,
+        date_field="created",
+        created_from=date(2026, 4, 1),
+        created_to=date(2026, 4, 30),
+    )
+
+    assert params.created_from == date(2026, 4, 1)
+    assert params.created_to == date(2026, 4, 30)
+
+
+def test_search_query_params_rejects_reversed_created_date_range() -> None:
+    """
+    作成日終了が開始日より前の逆転範囲は受け付けない。
+    """
+    with pytest.raises(ValidationError):
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            index_depth=5,
+            date_field="modified",
+            created_from=date(2026, 4, 30),
+            created_to=date(2026, 4, 1),
+        )
+
+
+def test_search_query_params_accepts_modified_date_field() -> None:
+    """
+    日付フィルタ種別は編集日指定も受け付ける。
+    """
+    params = SearchQueryParams(
+        q="alpha",
+        full_path="",
+        index_depth=5,
+        date_field="modified",
+    )
+
+    assert params.date_field == "modified"

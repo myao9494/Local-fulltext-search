@@ -4,6 +4,7 @@ export type SearchResult = {
   file_name: string;
   full_path: string;
   file_ext: string;
+  created_at: string;
   mtime: string;
   snippet: string;
 };

@@ -3,7 +3,7 @@
 特殊文字を含む検索語でも internal error にせず、本文検索できることを担保する。
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from sqlite3 import Connection
 
@@ -242,14 +242,15 @@ def test_search_matches_windows_unc_target_path(tmp_path: Path) -> None:
         """
         INSERT INTO files(
             full_path, normalized_path,
-            file_name, file_ext, mtime, size, indexed_at, last_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            file_name, file_ext, created_at, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
         (
             "//hikoka/sss/日報/2026-04-13.md",
             "//hikoka/sss/日報/2026-04-13.md",
             "2026-04-13.md",
             ".md",
+            datetime(2026, 4, 13, tzinfo=UTC).timestamp(),
             datetime(2026, 4, 13, tzinfo=UTC).timestamp(),
             12,
             indexed_at,
@@ -322,6 +323,142 @@ def test_search_matches_filename_only_image_in_regex_mode(tmp_path: Path) -> Non
 
     assert result.total == 1
     assert [item.file_name for item in result.items] == ["architecture-overview.png"]
+
+
+def test_search_filters_results_by_created_date_range(tmp_path: Path) -> None:
+    """
+    作成日フィルタを指定すると、その日付範囲に入るファイルだけを返す。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
+    rows = [
+        (
+            "/docs/old.md",
+            "/docs/old.md",
+            "old.md",
+            ".md",
+            datetime(2026, 4, 10, 9, 0).astimezone().timestamp(),
+            datetime(2026, 4, 13, tzinfo=UTC).timestamp(),
+            12,
+            indexed_at,
+        ),
+        (
+            "/docs/new.md",
+            "/docs/new.md",
+            "new.md",
+            ".md",
+            datetime(2026, 4, 15, 12, 0).astimezone().timestamp(),
+            datetime(2026, 4, 13, tzinfo=UTC).timestamp(),
+            12,
+            indexed_at,
+        ),
+    ]
+    connection.executemany(
+        """
+        INSERT INTO files(
+            full_path, normalized_path,
+            file_name, file_ext, created_at, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        """,
+        rows,
+    )
+    connection.executemany(
+        """
+        INSERT INTO file_segments(file_id, segment_type, segment_label, content)
+        VALUES (?, 'body', ?, ?)
+        """,
+        [
+            (1, "/docs/old.md", "alpha old memo"),
+            (2, "/docs/new.md", "alpha new memo"),
+        ],
+    )
+    connection.commit()
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            index_depth=5,
+            refresh_window_minutes=60,
+            created_from=date(2026, 4, 12),
+            created_to=date(2026, 4, 16),
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["new.md"]
+
+
+def test_search_filters_results_by_modified_date_range(tmp_path: Path) -> None:
+    """
+    編集日モードでは mtime を使って日付範囲を絞り込む。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
+    rows = [
+        (
+            "/docs/old.md",
+            "/docs/old.md",
+            "old.md",
+            ".md",
+            datetime(2026, 4, 1, 9, 0).astimezone().timestamp(),
+            datetime(2026, 4, 10, 9, 0).astimezone().timestamp(),
+            12,
+            indexed_at,
+        ),
+        (
+            "/docs/new.md",
+            "/docs/new.md",
+            "new.md",
+            ".md",
+            datetime(2026, 4, 1, 9, 0).astimezone().timestamp(),
+            datetime(2026, 4, 15, 12, 0).astimezone().timestamp(),
+            12,
+            indexed_at,
+        ),
+    ]
+    connection.executemany(
+        """
+        INSERT INTO files(
+            full_path, normalized_path,
+            file_name, file_ext, created_at, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        """,
+        rows,
+    )
+    connection.executemany(
+        """
+        INSERT INTO file_segments(file_id, segment_type, segment_label, content)
+        VALUES (?, 'body', ?, ?)
+        """,
+        [
+            (1, "/docs/old.md", "alpha old memo"),
+            (2, "/docs/new.md", "alpha new memo"),
+        ],
+    )
+    connection.commit()
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            index_depth=5,
+            refresh_window_minutes=60,
+            date_field="modified",
+            created_from=date(2026, 4, 12),
+            created_to=date(2026, 4, 16),
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["new.md"]
+    assert result.items[0].created_at == datetime.fromtimestamp(rows[1][4], tz=UTC)
 
 
 def test_search_uses_independent_index_types_for_refresh_target(tmp_path: Path) -> None:
@@ -458,19 +595,19 @@ def test_search_root_target_respects_depth_filter(tmp_path: Path) -> None:
         """
         INSERT INTO files(
             full_path, normalized_path,
-            file_name, file_ext, mtime, size, indexed_at, last_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            file_name, file_ext, created_at, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
-        ("/match-root.md", "/match-root.md", "match-root.md", ".md", timestamp, 12, indexed_at),
+        ("/match-root.md", "/match-root.md", "match-root.md", ".md", timestamp, timestamp, 12, indexed_at),
     )
     connection.execute(
         """
         INSERT INTO files(
             full_path, normalized_path,
-            file_name, file_ext, mtime, size, indexed_at, last_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            file_name, file_ext, created_at, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
-        ("/tmp/match-nested.md", "/tmp/match-nested.md", "match-nested.md", ".md", timestamp, 12, indexed_at),
+        ("/tmp/match-nested.md", "/tmp/match-nested.md", "match-nested.md", ".md", timestamp, timestamp, 12, indexed_at),
     )
     connection.commit()
 
@@ -524,15 +661,15 @@ def test_search_without_full_path_matches_across_entire_database(tmp_path: Path)
     indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
     timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
     rows = [
-        ("/docs/alpha.md", "/docs/alpha.md", "alpha.md", ".md", timestamp, 12, indexed_at),
-        ("/archive/alpha-notes.md", "/archive/alpha-notes.md", "alpha-notes.md", ".md", timestamp, 12, indexed_at),
+        ("/docs/alpha.md", "/docs/alpha.md", "alpha.md", ".md", timestamp, timestamp, 12, indexed_at),
+        ("/archive/alpha-notes.md", "/archive/alpha-notes.md", "alpha-notes.md", ".md", timestamp, timestamp, 12, indexed_at),
     ]
     connection.executemany(
         """
         INSERT INTO files(
             full_path, normalized_path,
-            file_name, file_ext, mtime, size, indexed_at, last_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            file_name, file_ext, created_at, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
         rows,
     )
@@ -573,15 +710,15 @@ def test_search_without_full_path_applies_exclude_keywords_to_entire_database(tm
     indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
     timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
     rows = [
-        ("/docs/alpha.md", "/docs/alpha.md", "alpha.md", ".md", timestamp, 12, indexed_at),
-        ("/archive/alpha-notes.md", "/archive/alpha-notes.md", "alpha-notes.md", ".md", timestamp, 12, indexed_at),
+        ("/docs/alpha.md", "/docs/alpha.md", "alpha.md", ".md", timestamp, timestamp, 12, indexed_at),
+        ("/archive/alpha-notes.md", "/archive/alpha-notes.md", "alpha-notes.md", ".md", timestamp, timestamp, 12, indexed_at),
     ]
     connection.executemany(
         """
         INSERT INTO files(
             full_path, normalized_path,
-            file_name, file_ext, mtime, size, indexed_at, last_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            file_name, file_ext, created_at, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
         rows,
     )
@@ -628,6 +765,7 @@ def test_search_without_full_path_excludes_relative_nested_directory_path(tmp_pa
             "secret.md",
             ".md",
             timestamp,
+            timestamp,
             12,
             indexed_at,
         ),
@@ -637,6 +775,7 @@ def test_search_without_full_path_excludes_relative_nested_directory_path(tmp_pa
             "keep.md",
             ".md",
             timestamp,
+            timestamp,
             12,
             indexed_at,
         ),
@@ -645,8 +784,8 @@ def test_search_without_full_path_excludes_relative_nested_directory_path(tmp_pa
         """
         INSERT INTO files(
             full_path, normalized_path,
-            file_name, file_ext, mtime, size, indexed_at, last_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            file_name, file_ext, created_at, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
         rows,
     )
@@ -687,15 +826,15 @@ def test_search_without_full_path_excludes_dot_prefixed_directory_keyword(tmp_pa
     indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
     timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
     rows = [
-        ("/workspace/docs/alpha.md", "/workspace/docs/alpha.md", "alpha.md", ".md", timestamp, 12, indexed_at),
-        ("/workspace/.gemini/secret.md", "/workspace/.gemini/secret.md", "secret.md", ".md", timestamp, 12, indexed_at),
+        ("/workspace/docs/alpha.md", "/workspace/docs/alpha.md", "alpha.md", ".md", timestamp, timestamp, 12, indexed_at),
+        ("/workspace/.gemini/secret.md", "/workspace/.gemini/secret.md", "secret.md", ".md", timestamp, timestamp, 12, indexed_at),
     ]
     connection.executemany(
         """
         INSERT INTO files(
             full_path, normalized_path,
-            file_name, file_ext, mtime, size, indexed_at, last_error
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            file_name, file_ext, created_at, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
         rows,
     )

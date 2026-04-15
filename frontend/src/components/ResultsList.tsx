@@ -3,6 +3,7 @@ import type { SearchResult } from "../types";
 
 type ResultsListProps = {
   items: SearchResult[];
+  dateField: "created" | "modified";
 };
 
 function fallbackCopyTextToClipboard(text: string): boolean {
@@ -31,7 +32,7 @@ function fallbackCopyTextToClipboard(text: string): boolean {
   return didCopy;
 }
 
-export function ResultsList({ items }: ResultsListProps) {
+export function ResultsList({ items, dateField }: ResultsListProps) {
   const [copiedFileId, setCopiedFileId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -106,7 +107,7 @@ export function ResultsList({ items }: ResultsListProps) {
                 </a>
               </h3>
               <div className="result-meta">
-                <span>{new Date(item.mtime).toLocaleString()}</span>
+                <span>{dateField === "created" ? "作成" : "編集"}: {new Date(dateField === "created" ? item.created_at : item.mtime).toLocaleString()}</span>
               </div>
             </div>
             <p

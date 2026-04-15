@@ -5,6 +5,9 @@ type SearchBarProps = {
   fullPath: string;
   indexDepth: string;
   searchFilterText: string;
+  dateField: "created" | "modified";
+  createdFrom: string;
+  createdTo: string;
   isSearching: boolean;
   isRegexEnabled: boolean;
   isSearchAllEnabled: boolean;
@@ -16,6 +19,10 @@ type SearchBarProps = {
   onFullPathChange: (value: string) => void;
   onIndexDepthChange: (value: string) => void;
   onSearchFilterTextChange: (value: string) => void;
+  onDateFieldChange: (value: "created" | "modified") => void;
+  onCreatedFromChange: (value: string) => void;
+  onCreatedToChange: (value: string) => void;
+  onClearCreatedDateFilter: () => void;
   onCancelIndexing: () => void;
   onRegexToggle: () => void;
   onSearchAllToggle: () => void;
@@ -29,6 +36,9 @@ export function SearchBar({
   fullPath,
   indexDepth,
   searchFilterText,
+  dateField,
+  createdFrom,
+  createdTo,
   isSearching,
   isRegexEnabled,
   isSearchAllEnabled,
@@ -40,6 +50,10 @@ export function SearchBar({
   onFullPathChange,
   onIndexDepthChange,
   onSearchFilterTextChange,
+  onDateFieldChange,
+  onCreatedFromChange,
+  onCreatedToChange,
+  onClearCreatedDateFilter,
   onCancelIndexing,
   onRegexToggle,
   onSearchAllToggle,
@@ -149,6 +163,61 @@ export function SearchBar({
             <path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path>
           </svg>
         </button>
+      </div>
+
+      <div className="search-subfilters">
+        <div className="date-filter-panel">
+          <div className="date-filter-group">
+            <label className="date-filter-label" htmlFor="date-field-select">日付種別</label>
+            <select
+              id="date-field-select"
+              className="small-input date-field-select"
+              value={dateField}
+              onChange={(event) => onDateFieldChange(event.target.value as "created" | "modified")}
+              aria-label="日付種別"
+            >
+              <option value="created">ファイル作成日</option>
+              <option value="modified">ファイル編集日</option>
+            </select>
+            <label className="visually-hidden" htmlFor="created-from-input">
+              {dateField === "created" ? "作成日以降" : "編集日以降"}
+            </label>
+            <input
+              id="created-from-input"
+              className="small-input date-filter-input"
+              value={createdFrom}
+              onChange={(event) => onCreatedFromChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.nativeEvent.isComposing && !isSearching) {
+                  onSubmit();
+                }
+              }}
+              type="date"
+              aria-label={dateField === "created" ? "作成日以降" : "編集日以降"}
+            />
+            <span className="date-filter-separator">-</span>
+            <label className="visually-hidden" htmlFor="created-to-input">
+              {dateField === "created" ? "作成日以前" : "編集日以前"}
+            </label>
+            <input
+              id="created-to-input"
+              className="small-input date-filter-input"
+              value={createdTo}
+              onChange={(event) => onCreatedToChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.nativeEvent.isComposing && !isSearching) {
+                  onSubmit();
+                }
+              }}
+              type="date"
+              aria-label={dateField === "created" ? "作成日以前" : "編集日以前"}
+            />
+            <button className="secondary-button date-filter-cancel-button" onClick={onClearCreatedDateFilter} type="button">
+              日付指定をキャンセル
+            </button>
+            <div className="date-filter-hint">未入力は指定なし。片側だけ指定すると、選択した日付種別の「以降」「以前」として扱います。</div>
+          </div>
+        </div>
       </div>
     </div>
   );

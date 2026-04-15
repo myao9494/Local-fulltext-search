@@ -148,6 +148,9 @@ function App() {
     }
     return stored;
   });
+  const [dateField, setDateField] = useState<"created" | "modified">("created");
+  const [createdFrom, setCreatedFrom] = useState("");
+  const [createdTo, setCreatedTo] = useState("");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isIndexExtensionMenuOpen, setIsIndexExtensionMenuOpen] = useState(false);
   const [isFailedFilesOpen, setIsFailedFilesOpen] = useState(false);
@@ -284,6 +287,10 @@ function App() {
       setIsMenuOpen(true);
       return;
     }
+    if (createdFrom && createdTo && createdFrom > createdTo) {
+      setErrorMessage("作成日の終了日は開始日以降で入力してください。");
+      return;
+    }
     if (selectedIndexExtensions.length === 0) {
       setErrorMessage("インデックス対象の拡張子を 1 つ以上選択してください。");
       setIsMenuOpen(true);
@@ -301,6 +308,9 @@ function App() {
         regex_enabled: isRegexEnabled,
         index_types: selectedIndexExtensions.join(" "),
         types: searchFilterText,
+        date_field: dateField,
+        created_from: createdFrom || undefined,
+        created_to: createdTo || undefined,
       });
       setResults(response.items);
       await refreshIndexStatus();
@@ -369,6 +379,15 @@ function App() {
     if (value.trim()) {
       setLastFolderPath(value);
     }
+  }
+
+  /**
+   * 作成日フィルタは 2 項目まとめて解除し、未指定検索へ戻す。
+   */
+  function handleClearCreatedDateFilter(): void {
+    setCreatedFrom("");
+    setCreatedTo("");
+    setErrorMessage("");
   }
 
   function toggleIndexExtension(extension: string): void {
@@ -608,6 +627,9 @@ function App() {
             fullPath={fullPath}
             indexDepth={indexDepth}
             searchFilterText={searchFilterText}
+            dateField={dateField}
+            createdFrom={createdFrom}
+            createdTo={createdTo}
             isSearching={isSearching}
             isRegexEnabled={isRegexEnabled}
             isSearchAllEnabled={isSearchAllEnabled}
@@ -619,6 +641,10 @@ function App() {
             onFullPathChange={handleFullPathChange}
             onIndexDepthChange={setIndexDepth}
             onSearchFilterTextChange={setSearchFilterText}
+            onDateFieldChange={setDateField}
+            onCreatedFromChange={setCreatedFrom}
+            onCreatedToChange={setCreatedTo}
+            onClearCreatedDateFilter={handleClearCreatedDateFilter}
             onCancelIndexing={() => void handleCancelIndexing()}
             onRegexToggle={() => setIsRegexEnabled((value) => !value)}
             onSearchAllToggle={handleToggleSearchAll}
@@ -639,7 +665,7 @@ function App() {
               <h2>Search Results</h2>
               <span>{results.length}件</span>
             </div>
-            <ResultsList items={results} />
+            <ResultsList items={results} dateField={dateField} />
           </section>
         ) : (
           <section className="indexed-targets-panel">
