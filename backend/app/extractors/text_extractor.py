@@ -40,6 +40,15 @@ FILENAME_ONLY_EXTENSIONS: frozenset[str] = frozenset(
         ".bmp",
         ".tif",
         ".tiff",
+        ".mp3",
+        ".m4a",
+        ".aac",
+        ".wav",
+        ".flac",
+        ".aif",
+        ".aiff",
+        ".alac",
+        ".m4p",
     }
 )
 

@@ -43,3 +43,7 @@ export type IndexedTarget = {
 export type IndexedTargetListResponse = {
   items: IndexedTarget[];
 };
+
+export type AppSettings = {
+  exclude_keywords: string;
+};

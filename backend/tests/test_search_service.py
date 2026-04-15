@@ -104,6 +104,30 @@ def test_search_requires_all_whitespace_separated_terms(tmp_path: Path) -> None:
     assert [item.file_name for item in result.items] == ["match.md"]
 
 
+def test_search_allows_terms_to_be_satisfied_across_filename_and_body(tmp_path: Path) -> None:
+    """
+    空白区切りの複数語は、ファイル名と本文に分散していても同一ファイルならヒットする。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "クラリネット.md").write_text("木管楽器のメモです。", encoding="utf-8")
+    (target / "楽器まとめ.md").write_text("弦楽器のメモです。", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="クラリネット 楽器",
+            full_path=str(target),
+            index_depth=5,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["クラリネット.md"]
+    assert "<mark>クラリネット</mark>" in result.items[0].snippet or "<mark>楽器</mark>" in result.items[0].snippet
+
+
 def test_search_preserves_total_when_offset_page_is_empty(tmp_path: Path) -> None:
     """
     OFFSET で結果ページが空になっても、総件数は失われない。
@@ -585,6 +609,71 @@ def test_search_without_full_path_applies_exclude_keywords_to_entire_database(tm
 
     assert result.total == 1
     assert [item.file_name for item in result.items] == ["alpha.md"]
+
+
+def test_search_without_full_path_excludes_relative_nested_directory_path(tmp_path: Path) -> None:
+    """
+    全 DB 検索では相対ディレクトリパス形式の除外キーワードも絶対パス結果へ適用できる。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
+    timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
+    rows = [
+        (
+            "/workspace/Agent_Skills/.roo/secret.md",
+            "/workspace/Agent_Skills/.roo/secret.md",
+            "secret.md",
+            ".md",
+            timestamp,
+            12,
+            indexed_at,
+        ),
+        (
+            "/workspace/Agent_SkillsX/.roo/keep.md",
+            "/workspace/Agent_SkillsX/.roo/keep.md",
+            "keep.md",
+            ".md",
+            timestamp,
+            12,
+            indexed_at,
+        ),
+    ]
+    connection.executemany(
+        """
+        INSERT INTO files(
+            full_path, normalized_path,
+            file_name, file_ext, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+        """,
+        rows,
+    )
+    connection.executemany(
+        """
+        INSERT INTO file_segments(file_id, segment_type, segment_label, content)
+        VALUES (?, 'body', ?, ?)
+        """,
+        [
+            (1, "/workspace/Agent_Skills/.roo/secret.md", "agent secret"),
+            (2, "/workspace/Agent_SkillsX/.roo/keep.md", "agent keep"),
+        ],
+    )
+    connection.commit()
+
+    result = service.search(
+        SearchQueryParams(
+            q="agent",
+            full_path="",
+            index_depth=5,
+            refresh_window_minutes=60,
+            exclude_keywords="Agent_Skills/.roo",
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["keep.md"]
 
 
 def test_search_without_full_path_excludes_dot_prefixed_directory_keyword(tmp_path: Path) -> None:

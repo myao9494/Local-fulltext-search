@@ -21,6 +21,57 @@ test("設定メニューにデータベース初期化ボタンを表示する",
 });
 
 /**
+ * 除外キーワードは自動保存せず、保存ボタンで明示的に確定できるようにする。
+ */
+test("設定メニューの除外キーワードに保存ボタンと保存状態表示を置く", () => {
+  const source = readFileSync(appPath, "utf-8");
+  const styleSource = readFileSync(appStylesPath, "utf-8");
+  const clientSource = readFileSync(clientPath, "utf-8");
+
+  assert.match(source, /savedExcludeKeywords/);
+  assert.match(source, /excludeKeywordsDraft/);
+  assert.match(source, /handleSaveExcludeKeywords/);
+  assert.match(source, /className="secondary-button settings-save-button"/);
+  assert.match(source, /未保存の変更があります/);
+  assert.match(source, /保存済み/);
+  assert.match(source, /fetchAppSettings/);
+  assert.match(source, /updateAppSettings/);
+  assert.doesNotMatch(source, /localStorage\.setItem\("exclude_keywords"/);
+  assert.doesNotMatch(source, /localStorage\.getItem\("exclude_keywords"/);
+  assert.doesNotMatch(source, /exclude_keywords: savedExcludeKeywords/);
+  assert.match(clientSource, /export async function fetchAppSettings/);
+  assert.match(clientSource, /export async function updateAppSettings/);
+  assert.match(clientSource, /"\/api\/index\/settings"/);
+  assert.match(styleSource, /\.settings-action-row\s*\{/);
+  assert.match(styleSource, /\.settings-save-status\.dirty\s*\{/);
+});
+
+/**
+ * パス未入力検索で使う既定フォルダを設定メニューから保存できる。
+ */
+test("設定メニューに既定の検索フォルダ入力を表示し localStorage に保存する", () => {
+  const source = readFileSync(appPath, "utf-8");
+
+  assert.match(source, /savedDefaultSearchPath/);
+  assert.match(source, /defaultSearchPathDraft/);
+  assert.match(source, /localStorage\.getItem\("default_search_path"\)/);
+  assert.match(source, /localStorage\.setItem\("default_search_path", normalizedDefaultSearchPath\)/);
+  assert.match(source, /検索既定フォルダ/);
+  assert.match(source, /パス未入力で検索したとき、このフォルダを使います。/);
+});
+
+/**
+ * 検索欄のパスが空でも、保存済みの既定フォルダがあれば検索時に自動利用する。
+ */
+test("検索時は入力パスが空なら保存済みの既定検索フォルダへフォールバックする", () => {
+  const source = readFileSync(appPath, "utf-8");
+
+  assert.match(source, /const resolvedSearchPath = fullPath\.trim\(\) \|\| savedDefaultSearchPath;/);
+  assert.match(source, /if \(!isSearchAllEnabled && !resolvedSearchPath\) \{/);
+  assert.match(source, /full_path: isSearchAllEnabled \? "" : resolvedSearchPath,/);
+});
+
+/**
  * 検索バー横にインデックス状態表示と中止ボタンを置き、操作状態を見やすくする。
  */
 test("検索バー横にインデックス状態表示と中止ボタンを表示する", () => {
@@ -147,6 +198,31 @@ test("インデックス済みフォルダ管理ページの UI を表示する"
   assert.match(source, /すべて選択/);
   assert.match(source, /選択したフォルダのインデックスを削除/);
   assert.match(source, /handleDeleteIndexedTargets/);
+});
+
+/**
+ * インデックス済みフォルダ画面でも設定ドロワーを開けるよう、同じハンバーガーメニュー導線を置く。
+ */
+test("インデックス済みフォルダ画面にもハンバーガーメニューを表示する", () => {
+  const source = readFileSync(appPath, "utf-8");
+
+  assert.match(source, /pageView === "indexed-targets"[\s\S]*className="menu-button"/);
+  assert.match(source, /<aside className=\{`settings-drawer \$\{isMenuOpen \? "open" : ""\}`\} aria-hidden=\{!isMenuOpen\}>/);
+});
+
+/**
+ * インデックス済みフォルダ画面では、操作ヘッダーを固定したまま一覧だけをスクロールできる。
+ */
+test("インデックス済みフォルダ画面は操作エリアを固定し一覧だけスクロールする", () => {
+  const appSource = readFileSync(appPath, "utf-8");
+  const styleSource = readFileSync(appStylesPath, "utf-8");
+
+  assert.match(appSource, /className="indexed-targets-panel-header"/);
+  assert.match(appSource, /className="form-help indexed-targets-selection-status"/);
+  assert.match(styleSource, /\.indexed-targets-panel\s*\{/);
+  assert.match(styleSource, /\.indexed-targets-panel-header\s*\{/);
+  assert.match(styleSource, /\.indexed-targets-list\s*\{[\s\S]*overflow-y:\s*auto/);
+  assert.match(styleSource, /\.indexed-targets-list\s*\{[\s\S]*min-height:\s*0/);
 });
 
 /**

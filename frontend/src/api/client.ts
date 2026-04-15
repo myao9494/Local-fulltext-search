@@ -1,4 +1,4 @@
-import type { FailedFileListResponse, IndexedTargetListResponse, IndexStatus, SearchResponse } from "../types";
+import type { AppSettings, FailedFileListResponse, IndexedTargetListResponse, IndexStatus, SearchResponse } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
@@ -37,6 +37,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function fetchIndexStatus(): Promise<IndexStatus> {
   return request<IndexStatus>("/api/index/status");
+}
+
+export async function fetchAppSettings(): Promise<AppSettings> {
+  return request<AppSettings>("/api/index/settings");
+}
+
+export async function updateAppSettings(payload: { exclude_keywords?: string }): Promise<AppSettings> {
+  return request<AppSettings>("/api/index/settings", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function fetchFailedFiles(): Promise<FailedFileListResponse> {
@@ -83,7 +94,6 @@ export async function search(params: {
   regex_enabled?: boolean;
   index_types?: string;
   types?: string;
-  exclude_keywords?: string;
 }): Promise<SearchResponse> {
   return request<SearchResponse>("/api/search", {
     method: "POST",

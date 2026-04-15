@@ -7,7 +7,7 @@
 from fastapi import APIRouter, Depends
 
 from app.api.deps import get_index_service
-from app.models.indexing import DeleteIndexedFoldersRequest
+from app.models.indexing import AppSettingsUpdateRequest, DeleteIndexedFoldersRequest
 from app.services.index_service import IndexService
 
 router = APIRouter(prefix="/api/index", tags=["index"])
@@ -16,6 +16,25 @@ router = APIRouter(prefix="/api/index", tags=["index"])
 @router.get("/status")
 def get_status(service: IndexService = Depends(get_index_service)) -> dict[str, object]:
     return service.get_status().model_dump()
+
+
+@router.get("/settings")
+def get_app_settings(service: IndexService = Depends(get_index_service)) -> dict[str, object]:
+    """
+    端末ごとの localStorage ではなく、アプリ全体で共有する設定を返す。
+    """
+    return service.get_app_settings().model_dump()
+
+
+@router.put("/settings")
+def update_app_settings(
+    payload: AppSettingsUpdateRequest,
+    service: IndexService = Depends(get_index_service),
+) -> dict[str, object]:
+    """
+    アプリ全体で共有する設定を保存し、保存後の値を返す。
+    """
+    return service.update_app_settings(exclude_keywords=payload.exclude_keywords).model_dump()
 
 
 @router.get("/failed-files")

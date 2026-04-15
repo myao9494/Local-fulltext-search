@@ -2,6 +2,29 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+DEFAULT_EXCLUDE_KEYWORDS = "\n".join(
+    [
+        "node_modules",
+        ".git",
+        "old",
+        "旧",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".tox",
+        ".venv",
+        "venv",
+        "env",
+        "dist",
+        "build",
+        "coverage",
+        ".next",
+        ".turbo",
+        ".parcel-cache",
+    ]
+)
+
 
 class DeleteIndexedFoldersRequest(BaseModel):
     """
@@ -52,3 +75,19 @@ class IndexedTargetListResponse(BaseModel):
 
 class DeleteIndexedFoldersResponse(BaseModel):
     deleted_count: int
+
+
+class AppSettingsResponse(BaseModel):
+    """
+    アプリ全体で共有する設定値を返す。
+    """
+
+    exclude_keywords: str
+
+
+class AppSettingsUpdateRequest(BaseModel):
+    """
+    利用者が保存したいアプリ設定値を受け取る。
+    """
+
+    exclude_keywords: str | None = None

@@ -344,6 +344,12 @@ h1, h2, h3 {
   font-weight: 600;
 }
 
+.section-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .results-list,
 .settings-panel,
 .empty-panel,
@@ -382,6 +388,18 @@ h1, h2, h3 {
 .empty-panel,
 .indexed-targets-panel {
   padding: 20px 24px;
+}
+
+.indexed-targets-panel {
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: calc(100dvh - 208px);
+  max-height: calc(100dvh - 208px);
+  overflow: hidden;
+}
+
+.indexed-targets-panel-header {
+  display: grid;
+  gap: 12px;
 }
 
 .settings-panel {
@@ -509,11 +527,21 @@ h1, h2, h3 {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 12px;
 }
 
 .indexed-targets-search {
   min-width: min(360px, 100%);
+}
+
+.indexed-targets-selection-status {
+  margin-top: 0;
+}
+
+.indexed-targets-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+  align-content: start;
 }
 
 .target-list-item {
@@ -627,6 +655,38 @@ h1, h2, h3 {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
+.settings-action-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-save-button {
+  min-width: 120px;
+}
+
+.settings-save-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-light);
+  background: rgba(15, 23, 42, 0.65);
+  font-size: 0.9rem;
+}
+
+.settings-save-status.saved {
+  color: #bfdbfe;
+}
+
+.settings-save-status.dirty {
+  color: #fde68a;
+  border-color: rgba(251, 191, 36, 0.35);
+  background: rgba(120, 53, 15, 0.28);
+}
+
 .extension-menu {
   display: grid;
   gap: 12px;
@@ -733,6 +793,15 @@ h1, h2, h3 {
   }
   .indexed-targets-toolbar {
     flex-direction: column;
+  }
+  .indexed-targets-panel {
+    min-height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+  .indexed-targets-list {
+    overflow: visible;
+    padding-right: 0;
   }
   .index-status-pill,
   .index-cancel-button,

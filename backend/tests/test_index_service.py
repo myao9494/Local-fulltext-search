@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
+from app.config import settings
 from app.db.schema import initialize_schema
 from app.services.index_service import IndexService
 
@@ -214,6 +215,78 @@ def test_exclude_keywords_skip_matching_file_names(tmp_path: Path) -> None:
     assert remaining["file_name"] == "readme.md"
 
 
+def test_exclude_keywords_skip_relative_nested_directory_path(tmp_path: Path) -> None:
+    """
+    除外キーワードに相対ディレクトリパスを指定した場合、その配下だけを除外する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "project"
+    target.mkdir()
+
+    keep_dir = target / "Agent_SkillsX" / ".roo"
+    keep_dir.mkdir(parents=True)
+    (keep_dir / "keep.md").write_text("should stay indexed", encoding="utf-8")
+
+    excluded_dir = target / "Agent_Skills" / ".roo"
+    excluded_dir.mkdir(parents=True)
+    (excluded_dir / "secret.md").write_text("should be excluded", encoding="utf-8")
+
+    service.ensure_fresh_target(
+        full_path=str(target),
+        refresh_window_minutes=0,
+        exclude_keywords="Agent_Skills/.roo",
+        index_depth=3,
+    )
+
+    indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
+    assert [row["file_name"] for row in indexed_files] == ["keep.md"]
+
+
+def test_exclude_keywords_treat_case_distinct_relative_directory_paths_separately(tmp_path: Path) -> None:
+    """
+    相対ディレクトリパス形式の除外キーワードは大文字小文字違いを別パスとして扱う。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    assert service._should_exclude_path(
+        Path("/workspace/Agent_Skills/.roo/upper.md"),
+        ["Agent_Skills/.roo"],
+    ) is True
+    assert service._should_exclude_path(
+        Path("/workspace/agent_skills/.roo/lower.md"),
+        ["Agent_Skills/.roo"],
+    ) is False
+
+
+def test_exclude_keywords_skip_dot_prefixed_children_under_relative_directory_prefix(tmp_path: Path) -> None:
+    """
+    `Agent_Skills/.` は Agent_Skills 配下のドット始まりディレクトリ/ファイルをまとめて除外する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "project"
+    target.mkdir()
+
+    excluded_dir = target / "Agent_Skills" / ".clinerules" / "workflows"
+    excluded_dir.mkdir(parents=True)
+    (excluded_dir / "secret.md").write_text("should be excluded", encoding="utf-8")
+
+    keep_dir = target / "Agent_SkillsX" / ".clinerules" / "workflows"
+    keep_dir.mkdir(parents=True)
+    (keep_dir / "keep.md").write_text("should stay indexed", encoding="utf-8")
+
+    service.ensure_fresh_target(
+        full_path=str(target),
+        refresh_window_minutes=0,
+        exclude_keywords="Agent_Skills/.",
+        index_depth=4,
+    )
+
+    indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
+    assert [row["file_name"] for row in indexed_files] == ["keep.md"]
+
+
 def test_index_stores_compound_extension_distinctly_from_md(tmp_path: Path) -> None:
     """
     `.excalidraw.md` は `.md` と区別した file_ext で保存する。
@@ -330,6 +403,32 @@ def test_index_keeps_encrypted_pdf_as_filename_only_record(tmp_path: Path) -> No
 
     assert [(row["file_name"], row["file_ext"], row["last_error"]) for row in indexed_files] == [
         ("secret.pdf", ".pdf", None)
+    ]
+    assert segments["count"] == 0
+    assert failed_files["count"] == 0
+
+
+def test_index_records_audio_files_as_filename_only_entries(tmp_path: Path) -> None:
+    """
+    音声ファイルは本文抽出せず、ファイル名検索専用のレコードとして登録する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "music"
+    target.mkdir()
+    audio_file = target / "favorite-song.mp3"
+    audio_file.write_bytes(b"ID3")
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+
+    indexed_files = connection.execute(
+        "SELECT file_name, file_ext, last_error FROM files ORDER BY file_name"
+    ).fetchall()
+    segments = connection.execute("SELECT COUNT(*) AS count FROM file_segments").fetchone()
+    failed_files = connection.execute("SELECT COUNT(*) AS count FROM failed_files").fetchone()
+
+    assert [(row["file_name"], row["file_ext"], row["last_error"]) for row in indexed_files] == [
+        ("favorite-song.mp3", ".mp3", None)
     ]
     assert segments["count"] == 0
     assert failed_files["count"] == 0
@@ -579,7 +678,92 @@ def test_network_error_path_is_added_to_exclude_keywords_and_skipped_on_retry(tm
 
     assert [row["file_name"] for row in indexed_files] == ["ok.md"]
     assert restricted_hits == 1
-    assert restricted.as_posix().lower() in str(target_row["exclude_keywords"]).splitlines()
+    assert restricted.as_posix() in str(target_row["exclude_keywords"]).splitlines()
+
+
+def test_app_settings_can_store_exclude_keywords(tmp_path: Path, monkeypatch) -> None:
+    """
+    アプリ設定として保存した除外キーワードはテキストファイルへ正規化して保持される。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    exclude_keywords_path = tmp_path / "exclude_keywords.txt"
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "exclude_keywords_name", "exclude_keywords.txt")
+
+    saved_settings = service.update_app_settings(exclude_keywords="dist\n\n build \n.dist\nbuild")
+
+    assert saved_settings.exclude_keywords == "dist\nbuild\n.dist"
+    assert exclude_keywords_path.read_text(encoding="utf-8") == "dist\nbuild\n.dist"
+
+
+def test_app_settings_preserve_distinct_path_keyword_letter_case_variants(tmp_path: Path, monkeypatch) -> None:
+    """
+    パス形式の除外キーワードは大文字小文字違いを別物として保持する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    exclude_keywords_path = tmp_path / "exclude_keywords.txt"
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "exclude_keywords_name", "exclude_keywords.txt")
+
+    saved_settings = service.update_app_settings(
+        exclude_keywords="Agent_Skills/.\nagent_skills/.\n Build \nbuild"
+    )
+
+    assert saved_settings.exclude_keywords == "Agent_Skills/.\nagent_skills/.\nBuild"
+    assert exclude_keywords_path.read_text(encoding="utf-8") == "Agent_Skills/.\nagent_skills/.\nBuild"
+
+
+def test_reset_database_keeps_app_settings(tmp_path: Path, monkeypatch) -> None:
+    """
+    データベース初期化後もアプリ設定の除外キーワードは保持する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    exclude_keywords_path = tmp_path / "exclude_keywords.txt"
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "exclude_keywords_name", "exclude_keywords.txt")
+
+    service.update_app_settings(exclude_keywords=".cache\ndist")
+    service.reset_database()
+
+    loaded_settings = service.get_app_settings()
+    assert loaded_settings.exclude_keywords == ".cache\ndist"
+
+
+def test_app_settings_migrates_legacy_sqlite_value_to_text_file(tmp_path: Path, monkeypatch) -> None:
+    """
+    旧 SQLite 保存値がありテキストファイル未作成なら、初回読込時にファイルへ移行する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    exclude_keywords_path = tmp_path / "exclude_keywords.txt"
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "exclude_keywords_name", "exclude_keywords.txt")
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            exclude_keywords TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO app_settings (id, exclude_keywords, created_at, updated_at)
+        VALUES (1, '.cache\nlegacy', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """
+    )
+    connection.commit()
+
+    loaded = service.get_app_settings()
+
+    assert loaded.exclude_keywords == ".cache\nlegacy"
+    assert exclude_keywords_path.read_text(encoding="utf-8") == ".cache\nlegacy"
 
 
 def test_root_path_range_query_handles_filesystem_root(tmp_path: Path) -> None:

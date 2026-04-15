@@ -164,8 +164,10 @@ def _needs_schema_reset(connection: Connection) -> bool:
 
 def _drop_managed_schema_objects(connection: Connection) -> None:
     """
-    アプリが管理するテーブル・FTS・旧テーブルをまとめて削除する。
+    アプリが管理する検索用テーブル・FTS・旧テーブルをまとめて削除する。
+    旧 app_settings テーブルが残っていても、設定保存先は現在テキストファイルなので削除してよい。
     """
+    connection.execute("DROP TABLE IF EXISTS app_settings;")
     connection.execute("DROP TABLE IF EXISTS file_segments_fts;")
     connection.execute("DROP TABLE IF EXISTS file_segments;")
     connection.execute("DROP TABLE IF EXISTS files;")

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import {
   cancelIndexing,
+  fetchAppSettings,
   deleteIndexedTargets,
   fetchFailedFiles,
   fetchIndexedTargets,
@@ -9,6 +10,7 @@ import {
   pickFolder,
   resetDatabase,
   search,
+  updateAppSettings,
 } from "./api/client";
 import { ResultsList } from "./components/ResultsList";
 import { SearchBar } from "./components/SearchBar";
@@ -37,6 +39,15 @@ const SUPPORTED_EXTENSIONS = [
   ".bmp",
   ".tif",
   ".tiff",
+  ".mp3",
+  ".m4a",
+  ".aac",
+  ".wav",
+  ".flac",
+  ".aif",
+  ".aiff",
+  ".alac",
+  ".m4p",
 ] as const;
 const DEFAULT_INDEX_EXTENSIONS = [...SUPPORTED_EXTENSIONS];
 const LEGACY_ALL_EXTENSIONS_VALUE = SUPPORTED_EXTENSIONS.join(",");
@@ -61,6 +72,7 @@ const DEFAULT_EXCLUDE_KEYWORDS = [
   ".parcel-cache",
 ].join("\n");
 const DEFAULT_SEARCH_FILTER_TEXT = "";
+const DEFAULT_SEARCH_PATH = "";
 
 type PageView = "search" | "indexed-targets";
 
@@ -68,6 +80,20 @@ type PageView = "search" | "indexed-targets";
  * React Strict Mode の開発時二重実行でも初回 URL 検索を重複発火させない。
  */
 let lastAutoSearchKey = "";
+
+/**
+ * 除外キーワードは空行除去・前後空白除去・重複排除を行い、保存形式を安定化する。
+ */
+function normalizeExcludeKeywords(value: string): string {
+  return [...new Set(value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean))].join("\n");
+}
+
+/**
+ * 既定検索フォルダは前後空白だけ落として保存し、空文字なら未設定として扱う。
+ */
+function normalizeDefaultSearchPath(value: string): string {
+  return value.trim();
+}
 
 function App() {
   const [launchParams] = useState(() => parseLaunchParams(window.location.search));
@@ -79,8 +105,13 @@ function App() {
   const [isSearchAllEnabled, setIsSearchAllEnabled] = useState(() => launchParams.searchAll);
   const [isRegexEnabled, setIsRegexEnabled] = useState(() => localStorage.getItem("regex_enabled") === "true");
   const [refreshWindowMinutes, setRefreshWindowMinutes] = useState(() => localStorage.getItem("refresh_window_minutes") ?? "60");
-  const [excludeKeywords, setExcludeKeywords] = useState(
-    () => localStorage.getItem("exclude_keywords") ?? DEFAULT_EXCLUDE_KEYWORDS,
+  const [savedExcludeKeywords, setSavedExcludeKeywords] = useState(DEFAULT_EXCLUDE_KEYWORDS);
+  const [excludeKeywordsDraft, setExcludeKeywordsDraft] = useState(DEFAULT_EXCLUDE_KEYWORDS);
+  const [savedDefaultSearchPath, setSavedDefaultSearchPath] = useState(
+    () => localStorage.getItem("default_search_path") ?? DEFAULT_SEARCH_PATH,
+  );
+  const [defaultSearchPathDraft, setDefaultSearchPathDraft] = useState(
+    () => localStorage.getItem("default_search_path") ?? DEFAULT_SEARCH_PATH,
   );
   const [selectedIndexExtensions, setSelectedIndexExtensions] = useState<string[]>(() => {
     const stored = localStorage.getItem("index_selected_extensions") ?? localStorage.getItem("selected_extensions");
@@ -113,6 +144,7 @@ function App() {
   const [isCancellingIndex, setIsCancellingIndex] = useState(false);
   const [isLoadingTargets, setIsLoadingTargets] = useState(false);
   const [isDeletingTargets, setIsDeletingTargets] = useState(false);
+  const [isSavingExcludeKeywords, setIsSavingExcludeKeywords] = useState(false);
   const isIndexCancelling = Boolean(indexStatus?.is_running && indexStatus?.cancel_requested);
   const isIndexRunning = Boolean(indexStatus?.is_running && !indexStatus?.cancel_requested);
   const indexStatusLabel = isIndexCancelling ? "インデックス取得を中止中" : isIndexRunning ? "インデックス取得中" : "インデックス待機中";
@@ -128,6 +160,11 @@ function App() {
   const selectedTargetPathSet = new Set(selectedTargetPaths);
   const selectedFilteredCount = filteredTargetPaths.filter((path) => selectedTargetPathSet.has(path)).length;
   const isAllFilteredSelected = filteredTargetPaths.length > 0 && selectedFilteredCount === filteredTargetPaths.length;
+  const normalizedExcludeKeywordsDraft = normalizeExcludeKeywords(excludeKeywordsDraft);
+  const hasUnsavedExcludeKeywords = normalizedExcludeKeywordsDraft !== savedExcludeKeywords;
+  const normalizedDefaultSearchPath = normalizeDefaultSearchPath(defaultSearchPathDraft);
+  const hasUnsavedDefaultSearchPath = normalizedDefaultSearchPath !== savedDefaultSearchPath;
+
   async function refreshIndexStatus(): Promise<void> {
     setIndexStatus(await fetchIndexStatus());
   }
@@ -148,6 +185,10 @@ function App() {
 
   async function loadInitialData(): Promise<void> {
     try {
+      const appSettings = await fetchAppSettings();
+      const normalizedExcludeKeywords = normalizeExcludeKeywords(appSettings.exclude_keywords);
+      setSavedExcludeKeywords(normalizedExcludeKeywords);
+      setExcludeKeywordsDraft(normalizedExcludeKeywords);
       await refreshIndexStatus();
     } catch (error) {
       setNoticeMessage("");
@@ -198,12 +239,13 @@ function App() {
     if (isSearching) {
       return;
     }
+    const resolvedSearchPath = fullPath.trim() || savedDefaultSearchPath;
     if (!query.trim()) {
       setErrorMessage("検索語を入力してください。");
       return;
     }
-    if (!isSearchAllEnabled && !fullPath.trim()) {
-      setErrorMessage("検索対象フォルダのフルパスを入力してください。（※上の検索バーで設定可能です）");
+    if (!isSearchAllEnabled && !resolvedSearchPath) {
+      setErrorMessage("検索対象フォルダのフルパスを入力してください。（※上の検索バーか設定メニューで指定可能です）");
       return;
     }
     if (!indexDepth.trim()) {
@@ -232,13 +274,12 @@ function App() {
       setNoticeMessage("");
       const response = await search({
         q: query,
-        full_path: isSearchAllEnabled ? "" : fullPath,
+        full_path: isSearchAllEnabled ? "" : resolvedSearchPath,
         index_depth: parsedDepth,
         refresh_window_minutes: parsedWindow,
         regex_enabled: isRegexEnabled,
         index_types: selectedIndexExtensions.join(" "),
         types: searchFilterText,
-        exclude_keywords: excludeKeywords,
       });
       setResults(response.items);
       await refreshIndexStatus();
@@ -249,7 +290,9 @@ function App() {
       localStorage.setItem("refresh_window_minutes", String(parsedWindow));
       localStorage.setItem("index_selected_extensions", selectedIndexExtensions.join(" "));
       localStorage.setItem("search_filter_extensions", searchFilterText);
-      localStorage.setItem("exclude_keywords", excludeKeywords);
+      if (hasUnsavedExcludeKeywords) {
+        setNoticeMessage("未保存の除外キーワードは今回の検索に反映していません。保存後に再検索してください。");
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "検索に失敗しました。";
       if (message === "Indexing was cancelled.") {
@@ -316,6 +359,42 @@ function App() {
 
   function setAllIndexExtensions(): void {
     setSelectedIndexExtensions([...SUPPORTED_EXTENSIONS]);
+  }
+
+  /**
+   * 除外キーワードは明示的な保存ボタンでだけ確定し、次回検索から必ず同じ値を使う。
+   */
+  async function handleSaveExcludeKeywords(): Promise<void> {
+    const normalized = normalizeExcludeKeywords(excludeKeywordsDraft);
+    try {
+      setIsSavingExcludeKeywords(true);
+      const savedSettings = await updateAppSettings({ exclude_keywords: normalized });
+      const savedValue = normalizeExcludeKeywords(savedSettings.exclude_keywords);
+      setSavedExcludeKeywords(savedValue);
+      setExcludeKeywordsDraft(savedValue);
+      setErrorMessage("");
+      setNoticeMessage("除外キーワードを保存しました。次回検索から反映されます。");
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "除外キーワードの保存に失敗しました。");
+    } finally {
+      setIsSavingExcludeKeywords(false);
+    }
+  }
+
+  /**
+   * パス未入力検索で使う既定フォルダを localStorage に保存する。
+   */
+  function handleSaveDefaultSearchPath(): void {
+    localStorage.setItem("default_search_path", normalizedDefaultSearchPath);
+    setSavedDefaultSearchPath(normalizedDefaultSearchPath);
+    setDefaultSearchPathDraft(normalizedDefaultSearchPath);
+    setErrorMessage("");
+    setNoticeMessage(
+      normalizedDefaultSearchPath
+        ? "検索既定フォルダを保存しました。パス未入力の検索で利用します。"
+        : "検索既定フォルダをクリアしました。",
+    );
   }
 
   async function handleToggleFailedFiles(): Promise<void> {
@@ -517,170 +596,59 @@ function App() {
 
       <main className="content-grid">
         {pageView === "search" ? (
-          <>
-            <section>
-              <div className="section-header">
-                <h2>Search Results</h2>
-                <span>{results.length}件</span>
-              </div>
-              <ResultsList items={results} />
-            </section>
-
-            <aside className={`settings-drawer ${isMenuOpen ? "open" : ""}`} aria-hidden={!isMenuOpen}>
-              <div className="settings-panel">
-                <div className="settings-header">
-                  <h2>設定</h2>
-                  <button className="secondary-button" onClick={() => setIsMenuOpen(false)} type="button">
-                    閉じる
-                  </button>
-                </div>
-
-                <div className="folder-form">
-                  <label className="form-help" htmlFor="refresh-window">
-                    インデックス更新間隔(分)
-                  </label>
-                  <input
-                    id="refresh-window"
-                    value={refreshWindowMinutes}
-                    onChange={(event) => setRefreshWindowMinutes(event.target.value)}
-                    type="number"
-                    min={0}
-                  />
-                  <div className="form-help">
-                    同じフルパスと階層数の組み合わせで、この分数以内に更新済みなら再走査しません。既定は 60 分です。
-                  </div>
-
-                  <div className="extension-panel">
-                    <button
-                      className="secondary-button"
-                      onClick={() => setIsIndexExtensionMenuOpen((value) => !value)}
-                      type="button"
-                    >
-                      対象拡張子
-                    </button>
-                    {isIndexExtensionMenuOpen ? (
-                      <div className="extension-menu">
-                        <button className="secondary-button" onClick={setAllIndexExtensions} type="button">
-                          すべて選択
-                        </button>
-                        {SUPPORTED_EXTENSIONS.map((extension) => (
-                          <label className="extension-option" key={extension}>
-                            <input
-                              checked={selectedIndexExtensions.includes(extension)}
-                              onChange={() => toggleIndexExtension(extension)}
-                              type="checkbox"
-                            />
-                            <span>{extension}</span>
-                          </label>
-                        ))}
-                      </div>
-                    ) : null}
-                    <div className="form-help">
-                      インデックス作成対象です。検索フィルタ側の拡張子選択とは独立しています。
-                    </div>
-                  </div>
-
-                  <div className="extension-panel">
-                    <button className="secondary-button" onClick={() => void handleToggleFailedFiles()} type="button">
-                      失敗したファイル
-                    </button>
-                    {isFailedFilesOpen ? (
-                      <div className="extension-menu">
-                        {failedFiles.length === 0 ? (
-                          <div className="form-help">現在、記録されている失敗ファイルはありません。</div>
-                        ) : (
-                          failedFiles.map((item) => (
-                            <div className="failed-file-item" key={item.normalized_path}>
-                              <div className="failed-file-name">{item.file_name}</div>
-                              <div className="failed-file-path">{item.normalized_path}</div>
-                              <div className="failed-file-error">{item.error_message}</div>
-                              <div className="form-help">{new Date(item.last_failed_at).toLocaleString()}</div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <label className="form-help" htmlFor="exclude-keywords">
-                    除外キーワード
-                  </label>
-                  <textarea
-                    id="exclude-keywords"
-                    className="settings-textarea"
-                    value={excludeKeywords}
-                    onChange={(event) => setExcludeKeywords(event.target.value)}
-                    placeholder=".git&#10;node_modules&#10;old"
-                    rows={12}
-                  />
-                  <div className="form-help">
-                    1行1キーワードで入力します。`.git` や `node_modules`、`old`、`旧`、Python / React 開発で不要になりやすい
-                    キャッシュやビルド成果物を既定で除外します。
-                  </div>
-
-                  <div className="extension-panel">
-                    <button
-                      className="secondary-button danger"
-                      onClick={() => void handleResetDatabase()}
-                      type="button"
-                      disabled={isResettingDatabase}
-                    >
-                      {isResettingDatabase ? "初期化中..." : "データベースを初期化"}
-                    </button>
-                    <div className="form-help">
-                      検索インデックス、対象キャッシュ、失敗履歴を空に戻します。次回検索時に必要な範囲だけ再作成します。
-                    </div>
-                  </div>
-
-                  <hr className="divider" />
-
-                  <div className="status-card">
-                    <div>最終完了: {indexStatus?.last_finished_at ? new Date(indexStatus.last_finished_at).toLocaleString() : "-"}</div>
-                    <div>総ファイル数: {indexStatus?.total_files ?? 0}</div>
-                    <div>エラー件数: {indexStatus?.error_count ?? 0}</div>
-                    <div>状態: {indexStatusLabel}</div>
-                  </div>
-                </div>
-              </div>
-            </aside>
-          </>
+          <section>
+            <div className="section-header">
+              <h2>Search Results</h2>
+              <span>{results.length}件</span>
+            </div>
+            <ResultsList items={results} />
+          </section>
         ) : (
           <section className="indexed-targets-panel">
-            <div className="section-header">
-              <div>
-                <h2>インデックス済みフォルダ</h2>
-                <div className="form-help">どのフォルダがインデックスされているか確認し、選択して削除できます。</div>
+            <div className="indexed-targets-panel-header">
+              <div className="section-header">
+                <div>
+                  <h2>インデックス済みフォルダ</h2>
+                  <div className="form-help">どのフォルダがインデックスされているか確認し、選択して削除できます。</div>
+                </div>
+                <div className="section-header-actions">
+                  <span>{filteredTargets.length}件</span>
+                  <button className="menu-button" onClick={() => setIsMenuOpen((value) => !value)} type="button" aria-label="設定">
+                    <svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24">
+                      <path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path>
+                    </svg>
+                  </button>
+                </div>
               </div>
-              <span>{filteredTargets.length}件</span>
-            </div>
 
-            <div className="indexed-targets-toolbar">
-              <input
-                className="search-input indexed-targets-search"
-                value={targetKeyword}
-                onChange={(event) => setTargetKeyword(event.target.value)}
-                placeholder="キーワードで絞り込み"
-              />
-              <button className="secondary-button" onClick={handleToggleAllIndexedTargets} type="button">
-                {isAllFilteredSelected ? "選択解除" : "すべて選択"}
-              </button>
-              <button className="secondary-button" onClick={() => void refreshIndexedTargets()} type="button" disabled={isLoadingTargets}>
-                {isLoadingTargets ? "再読込中..." : "再読込"}
-              </button>
-              <button
-                className="secondary-button danger"
-                onClick={() => void handleDeleteIndexedTargets()}
-                type="button"
-                disabled={selectedTargetPaths.length === 0 || isDeletingTargets}
-              >
-                {isDeletingTargets ? "削除中..." : "選択したフォルダのインデックスを削除"}
-              </button>
-            </div>
+              <div className="indexed-targets-toolbar">
+                <input
+                  className="search-input indexed-targets-search"
+                  value={targetKeyword}
+                  onChange={(event) => setTargetKeyword(event.target.value)}
+                  placeholder="キーワードで絞り込み"
+                />
+                <button className="secondary-button" onClick={handleToggleAllIndexedTargets} type="button">
+                  {isAllFilteredSelected ? "選択解除" : "すべて選択"}
+                </button>
+                <button className="secondary-button" onClick={() => void refreshIndexedTargets()} type="button" disabled={isLoadingTargets}>
+                  {isLoadingTargets ? "再読込中..." : "再読込"}
+                </button>
+                <button
+                  className="secondary-button danger"
+                  onClick={() => void handleDeleteIndexedTargets()}
+                  type="button"
+                  disabled={selectedTargetPaths.length === 0 || isDeletingTargets}
+                >
+                  {isDeletingTargets ? "削除中..." : "選択したフォルダのインデックスを削除"}
+                </button>
+              </div>
 
-            <div className="form-help">選択中: {selectedTargetPaths.length}件</div>
+              <div className="form-help indexed-targets-selection-status">選択中: {selectedTargetPaths.length}件</div>
+            </div>
 
             <div className="indexed-targets-list">
-                {filteredTargets.length === 0 ? (
+              {filteredTargets.length === 0 ? (
                 <div className="empty-panel">
                   <div>{indexedTargets.length === 0 ? "まだインデックス済みフォルダはありません。" : "条件に一致するフォルダはありません。"}</div>
                 </div>
@@ -709,6 +677,161 @@ function App() {
             </div>
           </section>
         )}
+
+        <aside className={`settings-drawer ${isMenuOpen ? "open" : ""}`} aria-hidden={!isMenuOpen}>
+          <div className="settings-panel">
+            <div className="settings-header">
+              <h2>設定</h2>
+              <button className="secondary-button" onClick={() => setIsMenuOpen(false)} type="button">
+                閉じる
+              </button>
+            </div>
+
+            <div className="folder-form">
+              <label className="form-help" htmlFor="refresh-window">
+                インデックス更新間隔(分)
+              </label>
+              <input
+                id="refresh-window"
+                value={refreshWindowMinutes}
+                onChange={(event) => setRefreshWindowMinutes(event.target.value)}
+                type="number"
+                min={0}
+              />
+              <div className="form-help">
+                同じフルパスと階層数の組み合わせで、この分数以内に更新済みなら再走査しません。既定は 60 分です。
+              </div>
+
+              <label className="form-help" htmlFor="default-search-path">
+                検索既定フォルダ
+              </label>
+              <input
+                id="default-search-path"
+                value={defaultSearchPathDraft}
+                onChange={(event) => setDefaultSearchPathDraft(event.target.value)}
+                placeholder="/Users/name/Documents"
+              />
+              <div className="settings-action-row">
+                <button
+                  className="secondary-button settings-save-button"
+                  onClick={handleSaveDefaultSearchPath}
+                  type="button"
+                  disabled={!hasUnsavedDefaultSearchPath}
+                >
+                  保存
+                </button>
+                <div className={`settings-save-status ${hasUnsavedDefaultSearchPath ? "dirty" : "saved"}`}>
+                  {hasUnsavedDefaultSearchPath ? "未保存の変更があります" : "保存済み"}
+                </div>
+              </div>
+              <div className="form-help">パス未入力で検索したとき、このフォルダを使います。</div>
+
+              <div className="extension-panel">
+                <button
+                  className="secondary-button"
+                  onClick={() => setIsIndexExtensionMenuOpen((value) => !value)}
+                  type="button"
+                >
+                  対象拡張子
+                </button>
+                {isIndexExtensionMenuOpen ? (
+                  <div className="extension-menu">
+                    <button className="secondary-button" onClick={setAllIndexExtensions} type="button">
+                      すべて選択
+                    </button>
+                    {SUPPORTED_EXTENSIONS.map((extension) => (
+                      <label className="extension-option" key={extension}>
+                        <input
+                          checked={selectedIndexExtensions.includes(extension)}
+                          onChange={() => toggleIndexExtension(extension)}
+                          type="checkbox"
+                        />
+                        <span>{extension}</span>
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="form-help">
+                  インデックス作成対象です。検索フィルタ側の拡張子選択とは独立しています。
+                </div>
+              </div>
+
+              <div className="extension-panel">
+                <button className="secondary-button" onClick={() => void handleToggleFailedFiles()} type="button">
+                  失敗したファイル
+                </button>
+                {isFailedFilesOpen ? (
+                  <div className="extension-menu">
+                    {failedFiles.length === 0 ? (
+                      <div className="form-help">現在、記録されている失敗ファイルはありません。</div>
+                    ) : (
+                      failedFiles.map((item) => (
+                        <div className="failed-file-item" key={item.normalized_path}>
+                          <div className="failed-file-name">{item.file_name}</div>
+                          <div className="failed-file-path">{item.normalized_path}</div>
+                          <div className="failed-file-error">{item.error_message}</div>
+                          <div className="form-help">{new Date(item.last_failed_at).toLocaleString()}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : null}
+              </div>
+
+              <label className="form-help" htmlFor="exclude-keywords">
+                除外キーワード
+              </label>
+              <textarea
+                id="exclude-keywords"
+                className="settings-textarea"
+                value={excludeKeywordsDraft}
+                onChange={(event) => setExcludeKeywordsDraft(event.target.value)}
+                placeholder=".git&#10;node_modules&#10;old"
+                rows={12}
+              />
+              <div className="settings-action-row">
+                <button
+                  className="secondary-button settings-save-button"
+                  onClick={() => void handleSaveExcludeKeywords()}
+                  type="button"
+                  disabled={!hasUnsavedExcludeKeywords || isSavingExcludeKeywords}
+                >
+                  {isSavingExcludeKeywords ? "保存中..." : "保存"}
+                </button>
+                <div className={`settings-save-status ${hasUnsavedExcludeKeywords ? "dirty" : "saved"}`}>
+                  {hasUnsavedExcludeKeywords ? "未保存の変更があります" : "保存済み"}
+                </div>
+              </div>
+              <div className="form-help">
+                1行1キーワードで入力します。`.git` や `node_modules`、`old`、`旧`、Python / React 開発で不要になりやすい
+                キャッシュやビルド成果物を既定で除外します。
+              </div>
+
+              <div className="extension-panel">
+                <button
+                  className="secondary-button danger"
+                  onClick={() => void handleResetDatabase()}
+                  type="button"
+                  disabled={isResettingDatabase}
+                >
+                  {isResettingDatabase ? "初期化中..." : "データベースを初期化"}
+                </button>
+                <div className="form-help">
+                  検索インデックス、対象キャッシュ、失敗履歴を空に戻します。次回検索時に必要な範囲だけ再作成します。
+                </div>
+              </div>
+
+              <hr className="divider" />
+
+              <div className="status-card">
+                <div>最終完了: {indexStatus?.last_finished_at ? new Date(indexStatus.last_finished_at).toLocaleString() : "-"}</div>
+                <div>総ファイル数: {indexStatus?.total_files ?? 0}</div>
+                <div>エラー件数: {indexStatus?.error_count ?? 0}</div>
+                <div>状態: {indexStatusLabel}</div>
+              </div>
+            </div>
+          </div>
+        </aside>
       </main>
     </div>
   );

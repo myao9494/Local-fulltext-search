@@ -18,6 +18,7 @@ class Settings(BaseModel):
     bind_port: int = int(os.getenv("SEARCH_APP_PORT", "8079"))
     data_dir: Path = Path(os.getenv("SEARCH_APP_DATA_DIR", str(BACKEND_DIR / "data")))
     database_name: str = os.getenv("SEARCH_APP_DB_NAME", "search.db")
+    exclude_keywords_name: str = os.getenv("SEARCH_APP_EXCLUDE_KEYWORDS_NAME", "exclude_keywords.txt")
     frontend_dist_dir: Path = Path(os.getenv("SEARCH_APP_FRONTEND_DIST_DIR", str(PROJECT_ROOT_DIR / "frontend" / "dist")))
 
     @field_validator("data_dir", "frontend_dist_dir", mode="before")
@@ -34,19 +35,23 @@ class Settings(BaseModel):
         base_dir = BACKEND_DIR if info.field_name == "data_dir" else PROJECT_ROOT_DIR
         return (base_dir / path).resolve()
 
-    @field_validator("database_name")
+    @field_validator("database_name", "exclude_keywords_name")
     @classmethod
-    def _validate_database_name(cls, value: str) -> str:
+    def _validate_file_name(cls, value: str) -> str:
         """
-        database_name はファイル名のみを受け付け、パス区切りや親ディレクトリ指定を混入させない。
+        database_name / exclude_keywords_name はファイル名のみを受け付け、パス区切りや親ディレクトリ指定を混入させない。
         """
         if "/" in value or "\\" in value or Path(value).name != value or value in {"", ".", ".."}:
-            raise ValueError("database_name must be a file name without path separators.")
+            raise ValueError("configured file names must not include path separators.")
         return value
 
     @property
     def database_path(self) -> Path:
         return (self.data_dir / self.database_name).resolve()
+
+    @property
+    def exclude_keywords_path(self) -> Path:
+        return (self.data_dir / self.exclude_keywords_name).resolve()
 
 
 settings = Settings()

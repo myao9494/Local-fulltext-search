@@ -48,6 +48,15 @@
 - `.bmp`
 - `.tif`
 - `.tiff`
+- `.mp3`
+- `.m4a`
+- `.aac`
+- `.wav`
+- `.flac`
+- `.aif`
+- `.aiff`
+- `.alac`
+- `.m4p`
 
 ### 将来対応
 - `.excalidraw`
@@ -82,7 +91,7 @@
 現時点では、以下を実装しています。
 
 - 対象ファイルは `.md` / `.json` / `.txt` / `.pdf` / `.docx` / `.xlsx` / `.pptx` / `.msg`
-- 画像ファイルはファイル名のみ検索対象にできる
+- 画像・音声ファイルはファイル名のみ検索対象にできる
 - FastAPI バックエンド
 - React + Vite フロントエンド
 - SQLite FTS5 による全文検索
@@ -302,7 +311,7 @@ VITE_API_BASE_URL=http://mac-mini:8079 npm run build
 
 `対象拡張子` について:
 
-- 現在選択できるのは `.md`, `.json`, `.txt`, `.pdf`, `.docx`, `.xlsx`, `.xlsm`, `.pptx`, `.msg` と画像系拡張子
+- 現在選択できるのは `.md`, `.json`, `.txt`, `.pdf`, `.docx`, `.xlsx`, `.xlsm`, `.pptx`, `.msg` と画像・音声系拡張子
 - デフォルトはすべて選択
 - ハンバーガーメニュー内で変更できる
 
@@ -396,7 +405,7 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
   "index_depth": 2,
   "refresh_window_minutes": 60,
   "regex_enabled": false,
-  "types": ".md,.json,.txt,.pdf,.docx,.xlsx,.pptx,.msg",
+  "types": ".md,.json,.txt,.pdf,.docx,.xlsx,.pptx,.msg,.mp3,.m4a",
   "exclude_keywords": "node_modules\n.git",
   "limit": 20,
   "offset": 0
@@ -482,7 +491,7 @@ await fetch("http://127.0.0.1:8079/api/search", {
     index_depth: 2,
     refresh_window_minutes: 60,
     regex_enabled: false,
-    types: ".md,.json,.txt,.pdf,.docx,.xlsx,.pptx,.msg",
+    types: ".md,.json,.txt,.pdf,.docx,.xlsx,.pptx,.msg,.mp3,.m4a",
     exclude_keywords: "node_modules\n.git",
     limit: 20,
     offset: 0,
@@ -499,7 +508,7 @@ $body = @{
   index_depth = 2
   refresh_window_minutes = 60
   regex_enabled = $false
-  types = ".md,.json,.txt,.pdf,.docx,.xlsx,.pptx,.msg"
+  types = ".md,.json,.txt,.pdf,.docx,.xlsx,.pptx,.msg,.mp3,.m4a"
   exclude_keywords = "node_modules`n.git"
   limit = 20
   offset = 0

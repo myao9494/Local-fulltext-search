@@ -25,12 +25,15 @@ class SearchService:
 
     def search(self, params: SearchQueryParams) -> SearchResponse:
         normalized_target_path = normalize_path_str(params.full_path) if params.full_path else ""
-        excluded_keywords = self.index_service._parse_exclude_keywords(params.exclude_keywords)
+        effective_exclude_keywords = (
+            params.exclude_keywords if params.exclude_keywords is not None else self.index_service.get_app_settings().exclude_keywords
+        )
+        excluded_keywords = self.index_service._parse_exclude_keywords(effective_exclude_keywords)
         if normalized_target_path:
             self.index_service.ensure_fresh_target(
                 full_path=normalized_target_path,
                 refresh_window_minutes=params.refresh_window_minutes,
-                exclude_keywords=params.exclude_keywords,
+                exclude_keywords=effective_exclude_keywords,
                 index_depth=params.index_depth,
                 types=params.index_types,
             )
@@ -66,14 +69,17 @@ class SearchService:
         )
 
         normalized_query = params.q.strip()
-        escaped_query = self._escape_like_pattern(normalized_query.lower())
-        body_fts_query = self._build_fts_match_query(normalized_query)
-        cjk_bigram_query = build_cjk_bigram_match_query(normalized_query)
+        terms = self._split_search_terms(normalized_query)
 
-        matched_queries = [
-            f"""
+        matched_queries: list[str] = []
+        query_values: list[object] = []
+        for term_index, term in enumerate(terms):
+            body_fts_query = self._quote_fts_term(term)
+            matched_queries.append(
+                f"""
                 SELECT
                     files.id AS file_id,
+                    {term_index} AS term_index,
                     0 AS match_rank,
                     bm25(file_segments_fts) AS score,
                     snippet(file_segments_fts, 0, '<mark>', '</mark>', ' ... ', 36) AS snippet,
@@ -85,37 +91,41 @@ class SearchService:
                 WHERE {where_clause}
                   AND file_segments.segment_type = 'body'
                   AND file_segments_fts MATCH ?
-            """,
-        ]
-        query_values: list[object] = [*values, body_fts_query]
+                """
+            )
+            query_values.extend([*values, body_fts_query])
 
-        if cjk_bigram_query is not None:
+            cjk_bigram_query = build_cjk_bigram_match_query(term)
+            if cjk_bigram_query is not None:
+                matched_queries.append(
+                    f"""
+                    SELECT
+                        files.id AS file_id,
+                        {term_index} AS term_index,
+                        1 AS match_rank,
+                        bm25(file_segments_fts) AS score,
+                        NULL AS snippet,
+                        file_segments.segment_type AS segment_type,
+                        body_segments.content AS body_content
+                    FROM file_segments_fts
+                    JOIN file_segments ON file_segments.id = file_segments_fts.rowid
+                    JOIN files ON files.id = file_segments.file_id
+                    JOIN file_segments AS body_segments
+                      ON body_segments.file_id = files.id
+                     AND body_segments.segment_type = 'body'
+                    WHERE {where_clause}
+                      AND file_segments.segment_type = 'cjk_bigram'
+                      AND file_segments_fts MATCH ?
+                    """
+                )
+                query_values.extend([*values, cjk_bigram_query])
+
+            escaped_term = self._escape_like_pattern(term.lower())
             matched_queries.append(
                 f"""
                 SELECT
                     files.id AS file_id,
-                    1 AS match_rank,
-                    bm25(file_segments_fts) AS score,
-                    NULL AS snippet,
-                    file_segments.segment_type AS segment_type,
-                    body_segments.content AS body_content
-                FROM file_segments_fts
-                JOIN file_segments ON file_segments.id = file_segments_fts.rowid
-                JOIN files ON files.id = file_segments.file_id
-                JOIN file_segments AS body_segments
-                  ON body_segments.file_id = files.id
-                 AND body_segments.segment_type = 'body'
-                WHERE {where_clause}
-                  AND file_segments.segment_type = 'cjk_bigram'
-                  AND file_segments_fts MATCH ?
-                """
-            )
-            query_values.extend([*values, cjk_bigram_query])
-
-        matched_queries.append(
-            f"""
-                SELECT
-                    files.id AS file_id,
+                    {term_index} AS term_index,
                     2 AS match_rank,
                     1000000.0 AS score,
                     NULL AS snippet,
@@ -123,30 +133,51 @@ class SearchService:
                     NULL AS body_content
                 FROM files
                 WHERE {where_clause} AND lower(files.file_name) LIKE ? ESCAPE '\\'
-            """
-        )
-        query_values.extend([*values, f"%{escaped_query}%"])
+                """
+            )
+            query_values.extend([*values, f"%{escaped_term}%"])
+
+        matched_files_cte = f"""
+            WITH matched_terms AS (
+                {" UNION ALL ".join(matched_queries)}
+            ),
+            matched_file_terms AS (
+                SELECT
+                    file_id,
+                    term_index
+                FROM matched_terms
+                GROUP BY file_id, term_index
+            ),
+            matching_files AS (
+                SELECT file_id
+                FROM matched_file_terms
+                GROUP BY file_id
+                HAVING COUNT(*) = {len(terms)}
+            ),
+            ranked_matches AS (
+                SELECT
+                    matched_terms.file_id,
+                    matched_terms.match_rank,
+                    matched_terms.score,
+                    matched_terms.snippet,
+                    matched_terms.segment_type,
+                    matched_terms.body_content,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY matched_terms.file_id
+                        ORDER BY matched_terms.match_rank, matched_terms.score, matched_terms.file_id
+                    ) AS rn
+                FROM matched_terms
+                JOIN matching_files ON matching_files.file_id = matched_terms.file_id
+            ),
+            filtered AS (
+                SELECT * FROM ranked_matches WHERE rn = 1
+            )
+        """
 
         if not normalized_target_path and excluded_keywords:
             rows = self.connection.execute(
                 f"""
-                WITH matched_files AS (
-                    {" UNION ALL ".join(matched_queries)}
-                ),
-                ranked_matches AS (
-                    SELECT
-                        file_id,
-                        match_rank,
-                        score,
-                        snippet,
-                        segment_type,
-                        body_content,
-                        ROW_NUMBER() OVER (PARTITION BY file_id ORDER BY match_rank, score, file_id) AS rn
-                    FROM matched_files
-                ),
-                filtered AS (
-                    SELECT * FROM ranked_matches WHERE rn = 1
-                )
+                {matched_files_cte}
                 SELECT
                     files.id AS file_id,
                     files.file_name,
@@ -192,23 +223,7 @@ class SearchService:
 
         rows = self.connection.execute(
             f"""
-            WITH matched_files AS (
-                {" UNION ALL ".join(matched_queries)}
-            ),
-            ranked_matches AS (
-                SELECT
-                    file_id,
-                    match_rank,
-                    score,
-                    snippet,
-                    segment_type,
-                    body_content,
-                    ROW_NUMBER() OVER (PARTITION BY file_id ORDER BY match_rank, score, file_id) AS rn
-                FROM matched_files
-            ),
-            filtered AS (
-                SELECT * FROM ranked_matches WHERE rn = 1
-            ),
+            {matched_files_cte},
             total_count AS (
                 SELECT COUNT(*) AS total
                 FROM filtered
@@ -443,10 +458,16 @@ class SearchService:
         """
         FTS5 の構文文字を無害化しつつ、空白区切りは AND 検索として扱う。
         """
-        terms = [term for term in value.split() if term]
+        terms = self._split_search_terms(value)
         if not terms:
             return '""'
         return " AND ".join(self._quote_fts_term(term) for term in terms)
+
+    def _split_search_terms(self, value: str) -> list[str]:
+        """
+        利用者入力を空白で区切り、順序を保った検索語の配列へ正規化する。
+        """
+        return [term for term in value.split() if term]
 
     def _quote_fts_term(self, term: str) -> str:
         escaped_term = term.replace('"', '""')

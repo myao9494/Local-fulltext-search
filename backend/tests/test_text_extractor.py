@@ -12,7 +12,7 @@ from app.extractors.text_extractor import extract_text, normalize_extension_filt
 
 def test_supports_extension_includes_office_pdf_and_images() -> None:
     """
-    対応拡張子には Office/PDF/Outlook と作図系テキスト、画像のファイル名検索対象が含まれる。
+    対応拡張子には Office/PDF/Outlook と作図系テキスト、画像・音声のファイル名検索対象が含まれる。
     """
     assert supports_extension(Path("report.docx")) is True
     assert supports_extension(Path("sheet.xlsx")) is True
@@ -25,6 +25,9 @@ def test_supports_extension_includes_office_pdf_and_images() -> None:
     assert supports_extension(Path("flow.dio")) is True
     assert supports_extension(Path("flow.dio.svg")) is True
     assert supports_extension(Path("photo.png")) is True
+    assert supports_extension(Path("song.mp3")) is True
+    assert supports_extension(Path("voice.m4a")) is True
+    assert supports_extension(Path("recording.wav")) is True
     assert supports_extension(Path("archive.zip")) is False
 
 

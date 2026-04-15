@@ -22,6 +22,8 @@ from sqlite3 import Connection
 
 from fastapi import HTTPException, status
 
+from app.config import settings
+from app.db.connection import ensure_data_dir
 from app.db.connection import get_connection
 from app.db.schema import reset_schema
 from app.extractors.text_extractor import (
@@ -31,6 +33,8 @@ from app.extractors.text_extractor import (
     supports_content_extraction,
 )
 from app.models.indexing import (
+    AppSettingsResponse,
+    DEFAULT_EXCLUDE_KEYWORDS,
     DeleteIndexedFoldersResponse,
     FailedFileItem,
     FailedFileListResponse,
@@ -209,6 +213,67 @@ class IndexService:
         if row is None:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Index status unavailable.")
         return IndexStatusResponse.model_validate(dict(row))
+
+    def get_app_settings(self) -> AppSettingsResponse:
+        """
+        アプリ全体で共有する設定値を返す。
+        """
+        return AppSettingsResponse(exclude_keywords=self._read_persisted_exclude_keywords())
+
+    def update_app_settings(self, *, exclude_keywords: str | None = None) -> AppSettingsResponse:
+        """
+        アプリ全体で共有する設定値を更新し、保存後の値を返す。
+        """
+        current = self.get_app_settings()
+        normalized_exclude_keywords = (
+            self._normalize_exclude_keywords(exclude_keywords) if exclude_keywords is not None else current.exclude_keywords
+        )
+        self._write_persisted_exclude_keywords(normalized_exclude_keywords)
+        return AppSettingsResponse(exclude_keywords=normalized_exclude_keywords)
+
+    def _read_persisted_exclude_keywords(self) -> str:
+        """
+        除外キーワードは人が直接編集しやすいテキストファイルから読み込む。
+        旧 SQLite 保存値が残っている場合は初回だけテキストへ移行する。
+        """
+        ensure_data_dir()
+        path = settings.exclude_keywords_path
+        if path.exists():
+            return self._normalize_exclude_keywords(path.read_text(encoding="utf-8"))
+
+        legacy_keywords = self._read_legacy_exclude_keywords_from_db()
+        initial_value = self._normalize_exclude_keywords(legacy_keywords or DEFAULT_EXCLUDE_KEYWORDS)
+        self._write_persisted_exclude_keywords(initial_value)
+        return initial_value
+
+    def _write_persisted_exclude_keywords(self, value: str) -> None:
+        """
+        除外キーワードを改行区切りのプレーンテキストとして保存する。
+        """
+        ensure_data_dir()
+        path = settings.exclude_keywords_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._normalize_exclude_keywords(value), encoding="utf-8")
+
+    def _read_legacy_exclude_keywords_from_db(self) -> str | None:
+        """
+        以前の SQLite 保存方式から 1 回だけ値を移行するための後方互換読み込み。
+        """
+        table_exists = self.connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'app_settings'"
+        ).fetchone()
+        if table_exists is None:
+            return None
+        row = self.connection.execute(
+            """
+            SELECT exclude_keywords
+            FROM app_settings
+            WHERE id = 1
+            """
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["exclude_keywords"])
 
     def get_failed_files(self) -> FailedFileListResponse:
         """
@@ -973,10 +1038,13 @@ class IndexService:
         seen: set[str] = set()
         keywords: list[str] = []
         for line in (value or "").splitlines():
-            keyword = line.strip().lower()
-            if not keyword or keyword in seen:
+            keyword = line.strip()
+            normalized_keyword = (
+                keyword if self._normalize_excluded_path_prefix(keyword) is not None else keyword.lower()
+            )
+            if not keyword or normalized_keyword in seen:
                 continue
-            seen.add(keyword)
+            seen.add(normalized_keyword)
             keywords.append(keyword)
         return keywords
 
@@ -1016,15 +1084,16 @@ class IndexService:
                 path_prefixes.append(normalized_path)
                 continue
             name_keywords.append(keyword)
-        keyword_set = frozenset(name_keywords)
-        non_ascii_keywords = [kw for kw in name_keywords if any(ord(c) > 127 for c in kw)]
+        normalized_name_keywords = [keyword.lower() for keyword in name_keywords]
+        keyword_set = frozenset(normalized_name_keywords)
+        non_ascii_keywords = [kw for kw in normalized_name_keywords if any(ord(c) > 127 for c in kw)]
         return keyword_set, non_ascii_keywords, tuple(path_prefixes)
 
     def _normalize_excluded_path_prefix(self, value: str | os.PathLike[str] | Path) -> str | None:
         """
         除外キーワードがフルパス形式なら比較しやすい表記へ正規化する。
         """
-        raw_value = os.fspath(value).strip().lower()
+        raw_value = os.fspath(value).strip()
         if "/" not in raw_value and "\\" not in raw_value:
             return None
         normalized = raw_value.replace("\\", "/")
@@ -1034,12 +1103,55 @@ class IndexService:
 
     def _is_excluded_path_prefix(self, normalized_path: str, excluded_path_prefixes: tuple[str, ...]) -> bool:
         """
-        パス全体またはその祖先がフルパス除外キーワードに一致するか判定する。
+        パス全体またはその祖先が除外パスキーワードに一致するか判定する。
+        絶対パス指定は先頭一致、相対パス指定は祖先の途中一致を許可する。
         """
         for prefix in excluded_path_prefixes:
+            if self._is_hidden_child_path_prefix(prefix):
+                if self._matches_hidden_child_path_prefix(normalized_path, prefix):
+                    return True
+                continue
+
+            if self._is_absolute_excluded_path_prefix(prefix):
+                if normalized_path == prefix or normalized_path.startswith(f"{prefix}/"):
+                    return True
+                continue
+
             if normalized_path == prefix or normalized_path.startswith(f"{prefix}/"):
                 return True
+
+            bounded_prefix = f"/{prefix}"
+            if normalized_path.endswith(bounded_prefix) or f"{bounded_prefix}/" in normalized_path:
+                return True
         return False
+
+    def _is_hidden_child_path_prefix(self, prefix: str) -> bool:
+        """
+        `foo/.` 形式は、foo 配下のドット始まり要素をまとめて除外するショートハンドとして扱う。
+        """
+        return prefix.endswith("/.")
+
+    def _matches_hidden_child_path_prefix(self, normalized_path: str, prefix: str) -> bool:
+        """
+        `foo/.` 形式の除外キーワードが、foo 配下の `.bar` や `.baz/...` に一致するか判定する。
+        """
+        if normalized_path.startswith(prefix):
+            return True
+
+        if self._is_absolute_excluded_path_prefix(prefix):
+            return False
+
+        bounded_prefix = f"/{prefix}"
+        return normalized_path.endswith(bounded_prefix) or bounded_prefix in normalized_path
+
+    def _is_absolute_excluded_path_prefix(self, prefix: str) -> bool:
+        """
+        除外パスキーワードが絶対パスかどうかを判定する。
+        `/foo/bar` と `c:/foo/bar` の両方を受け付ける。
+        """
+        if prefix.startswith("/"):
+            return True
+        return len(prefix) >= 3 and prefix[1] == ":" and prefix[2] == "/"
 
     def _is_unexpected_network_error(self, error: OSError) -> bool:
         """

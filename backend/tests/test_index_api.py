@@ -1,16 +1,23 @@
 """
-インデックス API の初期化系エンドポイントを検証する。
-DB 初期化ボタンから安全に空スキーマへ戻せることを担保する。
+インデックス API の初期化系とアプリ設定系エンドポイントを検証する。
+DB 初期化ボタンと設定保存が安全に機能することを担保する。
 """
 
 from pathlib import Path
 
 from starlette.routing import Match
 
-from app.api.index import cancel_indexing, delete_indexed_targets, get_indexed_targets, reset_database
+from app.api.index import (
+    cancel_indexing,
+    delete_indexed_targets,
+    get_app_settings,
+    get_indexed_targets,
+    reset_database,
+    update_app_settings,
+)
 from app.config import settings
 from app.main import create_app
-from app.models.indexing import DeleteIndexedFoldersRequest
+from app.models.indexing import AppSettingsUpdateRequest, DeleteIndexedFoldersRequest
 
 
 class StubIndexService:
@@ -22,6 +29,7 @@ class StubIndexService:
         self.did_reset = False
         self.did_cancel = False
         self.deleted_target_ids: list[int] = []
+        self.saved_exclude_keywords = ".git\nnode_modules"
 
     def reset_database(self) -> None:
         self.did_reset = True
@@ -67,6 +75,21 @@ class StubIndexService:
                 return {"deleted_count": len(folder_paths)}
 
         return DeleteResult()
+
+    def get_app_settings(self) -> object:
+        class AppSettings:
+            def __init__(self, exclude_keywords: str) -> None:
+                self.exclude_keywords = exclude_keywords
+
+            def model_dump(self) -> dict[str, object]:
+                return {"exclude_keywords": self.exclude_keywords}
+
+        return AppSettings(self.saved_exclude_keywords)
+
+    def update_app_settings(self, *, exclude_keywords: str | None = None) -> object:
+        if exclude_keywords is not None:
+            self.saved_exclude_keywords = exclude_keywords
+        return self.get_app_settings()
 
 
 def test_reset_database_endpoint_returns_status_payload() -> None:
@@ -120,6 +143,29 @@ def test_delete_indexed_targets_endpoint_returns_deleted_count() -> None:
     payload = delete_indexed_targets(DeleteIndexedFoldersRequest(folder_paths=["/tmp/a", "/tmp/b"]), service)
 
     assert payload["deleted_count"] == 2
+
+
+def test_get_app_settings_endpoint_returns_saved_settings() -> None:
+    """
+    ルート関数は保存済みのアプリ設定をそのまま返す。
+    """
+    service = StubIndexService()
+
+    payload = get_app_settings(service)
+
+    assert payload["exclude_keywords"] == ".git\nnode_modules"
+
+
+def test_update_app_settings_endpoint_returns_updated_settings() -> None:
+    """
+    ルート関数は除外キーワード更新をサービスへ渡し、保存後の値を返す。
+    """
+    service = StubIndexService()
+
+    payload = update_app_settings(AppSettingsUpdateRequest(exclude_keywords="dist\nbuild"), service)
+
+    assert payload["exclude_keywords"] == "dist\nbuild"
+    assert service.saved_exclude_keywords == "dist\nbuild"
 
 
 def test_reset_database_route_is_registered(tmp_path: Path, monkeypatch) -> None:
@@ -182,3 +228,23 @@ def test_indexed_targets_routes_are_registered(tmp_path: Path, monkeypatch) -> N
 
     assert first_get_match.path == "/api/index/targets"
     assert first_delete_match.path == "/api/index/targets"
+
+
+def test_app_settings_routes_are_registered(tmp_path: Path, monkeypatch) -> None:
+    """
+    create_app 後のルータにアプリ設定の取得・更新 API が登録される。
+    """
+    frontend_dist = tmp_path / "dist"
+    frontend_dist.mkdir()
+    (frontend_dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    monkeypatch.setattr(settings, "frontend_dist_dir", frontend_dist)
+
+    app = create_app()
+    get_scope = {"type": "http", "path": "/api/index/settings", "method": "GET"}
+    put_scope = {"type": "http", "path": "/api/index/settings", "method": "PUT"}
+
+    first_get_match = next(route for route in app.router.routes if route.matches(get_scope)[0] == Match.FULL)
+    first_put_match = next(route for route in app.router.routes if route.matches(put_scope)[0] == Match.FULL)
+
+    assert first_get_match.path == "/api/index/settings"
+    assert first_put_match.path == "/api/index/settings"
