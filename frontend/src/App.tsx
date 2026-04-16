@@ -9,6 +9,7 @@ import {
   fetchIndexStatus,
   pickFolder,
   resetDatabase,
+  recordSearchClick,
   search,
   updateAppSettings,
 } from "./api/client";
@@ -75,6 +76,7 @@ const DEFAULT_EXCLUDE_KEYWORDS = [
   ".turbo",
   ".parcel-cache",
 ].join("\n");
+const DEFAULT_SYNONYM_GROUPS = "";
 const DEFAULT_SEARCH_FILTER_TEXT = "";
 const DEFAULT_SEARCH_PATH = "";
 
@@ -90,6 +92,30 @@ let lastAutoSearchKey = "";
  */
 function normalizeExcludeKeywords(value: string): string {
   return [...new Set(value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean))].join("\n");
+}
+
+/**
+ * 同義語リストは 1 行を 1 グループとして扱い、カンマ区切りの語を整形して重複を除く。
+ */
+function normalizeSynonymGroups(value: string | null | undefined): string {
+  return (value ?? "")
+    .split(/\r?\n/)
+    .map((line) => {
+      const normalizedTokens = [...new Set(line.split(/[，,]/).map((item) => item.trim()).filter(Boolean).map((item) => item.toLowerCase()))];
+      const originalTokens: string[] = [];
+      for (const token of line.split(/[，,]/).map((item) => item.trim()).filter(Boolean)) {
+        if (!normalizedTokens.includes(token.toLowerCase())) {
+          continue;
+        }
+        if (originalTokens.some((item) => item.toLowerCase() === token.toLowerCase())) {
+          continue;
+        }
+        originalTokens.push(token);
+      }
+      return originalTokens.join(",");
+    })
+    .filter(Boolean)
+    .join("\n");
 }
 
 /**
@@ -145,18 +171,60 @@ function parseExtensionText(value: string): string[] {
   return normalizeCustomExtensions(value.split(/[\s,]+/));
 }
 
+/**
+ * 検索結果は再検索せずに、現在の UI 指定だけで安定した並び替えを行う。
+ */
+function sortSearchResults(
+  items: readonly SearchResult[],
+  {
+    sortBy,
+    sortOrder,
+  }: {
+    sortBy: "created" | "modified" | "click_count",
+    sortOrder: "asc" | "desc",
+  },
+): SearchResult[] {
+  const direction = sortOrder === "asc" ? 1 : -1;
+
+  return [...items].sort((left, right) => {
+    const leftValue = getSortableValue(left, sortBy);
+    const rightValue = getSortableValue(right, sortBy);
+    if (leftValue < rightValue) {
+      return -1 * direction;
+    }
+    if (leftValue > rightValue) {
+      return 1 * direction;
+    }
+    return left.file_id - right.file_id;
+  });
+}
+
+/**
+ * 並び替えキーごとの比較値を数値へ正規化する。
+ */
+function getSortableValue(item: SearchResult, sortBy: "created" | "modified" | "click_count"): number {
+  if (sortBy === "click_count") {
+    return item.click_count;
+  }
+  if (sortBy === "created") {
+    return new Date(item.created_at).getTime();
+  }
+  return new Date(item.mtime).getTime();
+}
+
 function App() {
   const [launchParams] = useState(() => parseLaunchParams(window.location.search));
   const [pageView, setPageView] = useState<PageView>("search");
   const [query, setQuery] = useState(() => launchParams.q);
   const [fullPath, setFullPath] = useState(() => launchParams.fullPath);
-  const [lastFolderPath, setLastFolderPath] = useState(() => launchParams.fullPath);
   const [indexDepth, setIndexDepth] = useState(() => launchParams.indexDepth);
   const [isSearchAllEnabled, setIsSearchAllEnabled] = useState(() => launchParams.searchAll);
   const [isRegexEnabled, setIsRegexEnabled] = useState(() => localStorage.getItem("regex_enabled") === "true");
   const [refreshWindowMinutes, setRefreshWindowMinutes] = useState(() => localStorage.getItem("refresh_window_minutes") ?? "60");
   const [savedExcludeKeywords, setSavedExcludeKeywords] = useState(DEFAULT_EXCLUDE_KEYWORDS);
   const [excludeKeywordsDraft, setExcludeKeywordsDraft] = useState(DEFAULT_EXCLUDE_KEYWORDS);
+  const [savedSynonymGroups, setSavedSynonymGroups] = useState(DEFAULT_SYNONYM_GROUPS);
+  const [synonymGroupsDraft, setSynonymGroupsDraft] = useState(DEFAULT_SYNONYM_GROUPS);
   const [savedDefaultSearchPath, setSavedDefaultSearchPath] = useState(
     () => localStorage.getItem("default_search_path") ?? DEFAULT_SEARCH_PATH,
   );
@@ -179,6 +247,8 @@ function App() {
     return stored;
   });
   const [dateField, setDateField] = useState<"created" | "modified">("modified");
+  const [sortBy, setSortBy] = useState<"created" | "modified" | "click_count">("modified");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -198,6 +268,7 @@ function App() {
   const [isLoadingTargets, setIsLoadingTargets] = useState(false);
   const [isDeletingTargets, setIsDeletingTargets] = useState(false);
   const [isSavingExcludeKeywords, setIsSavingExcludeKeywords] = useState(false);
+  const [isSavingSynonymGroups, setIsSavingSynonymGroups] = useState(false);
   const [isSavingIndexExtensions, setIsSavingIndexExtensions] = useState(false);
   const isIndexCancelling = Boolean(indexStatus?.is_running && indexStatus?.cancel_requested);
   const isIndexRunning = Boolean(indexStatus?.is_running && !indexStatus?.cancel_requested);
@@ -217,12 +288,15 @@ function App() {
   const isAllFilteredSelected = filteredTargetPaths.length > 0 && selectedFilteredCount === filteredTargetPaths.length;
   const normalizedExcludeKeywordsDraft = normalizeExcludeKeywords(excludeKeywordsDraft);
   const hasUnsavedExcludeKeywords = normalizedExcludeKeywordsDraft !== savedExcludeKeywords;
+  const normalizedSynonymGroupsDraft = normalizeSynonymGroups(synonymGroupsDraft);
+  const hasUnsavedSynonymGroups = normalizedSynonymGroupsDraft !== savedSynonymGroups;
   const normalizedDefaultSearchPath = normalizeDefaultSearchPath(defaultSearchPathDraft);
   const hasUnsavedDefaultSearchPath = normalizedDefaultSearchPath !== savedDefaultSearchPath;
   const hasUnsavedIndexExtensions =
     selectedIndexExtensions.join(" ") !== savedIndexExtensions.join(" ") ||
     customContentExtensions.join(" ") !== savedCustomContentExtensions.join(" ") ||
     customFilenameExtensions.join(" ") !== savedCustomFilenameExtensions.join(" ");
+  const sortedResults = sortSearchResults(results, { sortBy, sortOrder });
 
   async function refreshIndexStatus(): Promise<void> {
     setIndexStatus(await fetchIndexStatus());
@@ -246,6 +320,7 @@ function App() {
     try {
       const appSettings = await fetchAppSettings();
       const normalizedExcludeKeywords = normalizeExcludeKeywords(appSettings.exclude_keywords);
+      const normalizedSynonymGroups = normalizeSynonymGroups(appSettings.synonym_groups);
       const loadedCustomContentExtensions = parseExtensionText(appSettings.custom_content_extensions);
       const loadedCustomFilenameExtensions = parseExtensionText(appSettings.custom_filename_extensions);
       const loadedAvailableExtensions = buildAvailableExtensions(loadedCustomContentExtensions, loadedCustomFilenameExtensions);
@@ -255,6 +330,8 @@ function App() {
       );
       setSavedExcludeKeywords(normalizedExcludeKeywords);
       setExcludeKeywordsDraft(normalizedExcludeKeywords);
+      setSavedSynonymGroups(normalizedSynonymGroups);
+      setSynonymGroupsDraft(normalizedSynonymGroups);
       setSavedCustomContentExtensions(loadedCustomContentExtensions);
       setCustomContentExtensions(loadedCustomContentExtensions);
       setSavedCustomFilenameExtensions(loadedCustomFilenameExtensions);
@@ -350,13 +427,16 @@ function App() {
       setNoticeMessage("");
       const response = await search({
         q: query,
-        full_path: isSearchAllEnabled ? "" : resolvedSearchPath,
+        full_path: resolvedSearchPath,
+        search_all_enabled: isSearchAllEnabled,
         index_depth: parsedDepth,
         refresh_window_minutes: parsedWindow,
         regex_enabled: isRegexEnabled,
         index_types: selectedIndexExtensions.join(" "),
         types: searchFilterText,
         date_field: dateField,
+        sort_by: sortBy,
+        sort_order: sortOrder,
         created_from: createdFrom || undefined,
         created_to: createdTo || undefined,
       });
@@ -370,6 +450,8 @@ function App() {
       localStorage.setItem("search_filter_extensions", searchFilterText);
       if (hasUnsavedExcludeKeywords) {
         setNoticeMessage("未保存の除外キーワードは今回の検索に反映していません。保存後に再検索してください。");
+      } else if (hasUnsavedSynonymGroups) {
+        setNoticeMessage("未保存の同義語リストは今回の検索に反映していません。保存後に再検索してください。");
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "検索に失敗しました。";
@@ -388,8 +470,6 @@ function App() {
   async function handlePickFolder(): Promise<void> {
     try {
       const payload = await pickFolder();
-      setLastFolderPath(payload.full_path ?? "");
-      setIsSearchAllEnabled(false);
       setFullPath(payload.full_path ?? "");
       setErrorMessage("");
       setNoticeMessage("");
@@ -400,33 +480,19 @@ function App() {
   }
 
   /**
-   * フォルダ指定検索と全 DB 検索を切り替え、最後に使ったフォルダ入力は戻せるよう保持する。
+   * 全 DB 検索の切り替えでは入力済みパスを保持し、後でフォルダ検索へ戻りやすくする。
    */
   function handleToggleSearchAll(): void {
-    setIsSearchAllEnabled((current) => {
-      if (!current && fullPath.trim()) {
-        setLastFolderPath(fullPath);
-      }
-      if (current) {
-        setFullPath(lastFolderPath);
-      } else {
-        setFullPath("");
-      }
-      setErrorMessage("");
-      setNoticeMessage("");
-      return !current;
-    });
+    setIsSearchAllEnabled((current) => !current);
+    setErrorMessage("");
+    setNoticeMessage("");
   }
 
   /**
-   * フォルダ入力を始めたら全 DB 検索を外し、通常のフォルダ指定検索へ自然に戻す。
+   * フォルダ入力は全 DB 検索中でも保持し、次回のフォルダ限定検索へそのまま使えるようにする。
    */
   function handleFullPathChange(value: string): void {
-    setIsSearchAllEnabled(false);
     setFullPath(value);
-    if (value.trim()) {
-      setLastFolderPath(value);
-    }
   }
 
   /**
@@ -436,6 +502,21 @@ function App() {
     setCreatedFrom("");
     setCreatedTo("");
     setErrorMessage("");
+  }
+
+  /**
+   * 検索結果を開いた回数を記録し、次回以降のアクセス数順ソートへ反映する。
+   */
+  function handleResultOpen(fileId: number): void {
+    void recordSearchClick(fileId)
+      .then((response) => {
+        setResults((current) =>
+          current.map((item) =>
+            item.file_id === response.file_id ? { ...item, click_count: response.click_count } : item,
+          ),
+        );
+      })
+      .catch(() => undefined);
   }
 
   function toggleIndexExtension(extension: string): void {
@@ -552,6 +633,27 @@ function App() {
       setErrorMessage(error instanceof Error ? error.message : "除外キーワードの保存に失敗しました。");
     } finally {
       setIsSavingExcludeKeywords(false);
+    }
+  }
+
+  /**
+   * 同義語リストは明示的な保存ボタンでだけ確定し、通常検索の表記ゆれ対応へ反映する。
+   */
+  async function handleSaveSynonymGroups(): Promise<void> {
+    const normalized = normalizeSynonymGroups(synonymGroupsDraft);
+    try {
+      setIsSavingSynonymGroups(true);
+      const savedSettings = await updateAppSettings({ synonym_groups: normalized });
+      const savedValue = normalizeSynonymGroups(savedSettings.synonym_groups);
+      setSavedSynonymGroups(savedValue);
+      setSynonymGroupsDraft(savedValue);
+      setErrorMessage("");
+      setNoticeMessage("同義語リストを保存しました。次回検索から反映されます。");
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "同義語リストの保存に失敗しました。");
+    } finally {
+      setIsSavingSynonymGroups(false);
     }
   }
 
@@ -744,6 +846,8 @@ function App() {
             indexDepth={indexDepth}
             searchFilterText={searchFilterText}
             dateField={dateField}
+            sortBy={sortBy}
+            sortOrder={sortOrder}
             createdFrom={createdFrom}
             createdTo={createdTo}
             isSearching={isSearching}
@@ -758,6 +862,8 @@ function App() {
             onIndexDepthChange={setIndexDepth}
             onSearchFilterTextChange={setSearchFilterText}
             onDateFieldChange={setDateField}
+            onSortByChange={setSortBy}
+            onSortOrderChange={setSortOrder}
             onCreatedFromChange={setCreatedFrom}
             onCreatedToChange={setCreatedTo}
             onClearCreatedDateFilter={handleClearCreatedDateFilter}
@@ -779,9 +885,9 @@ function App() {
           <section>
             <div className="section-header">
               <h2>Search Results</h2>
-              <span>{results.length}件</span>
+              <span>{sortedResults.length}件</span>
             </div>
-            <ResultsList items={results} dateField={dateField} />
+            <ResultsList items={sortedResults} dateField={dateField} onResultOpen={handleResultOpen} />
           </section>
         ) : (
           <section className="indexed-targets-panel">
@@ -1087,6 +1193,34 @@ function App() {
               <div className="form-help">
                 1行1キーワードで入力します。`.git` や `node_modules`、`old`、`旧`、Python / React 開発で不要になりやすい
                 キャッシュやビルド成果物を既定で除外します。
+              </div>
+
+              <label className="form-help" htmlFor="synonym-groups">
+                同義語リスト
+              </label>
+              <textarea
+                id="synonym-groups"
+                className="settings-textarea"
+                value={synonymGroupsDraft}
+                onChange={(event) => setSynonymGroupsDraft(event.target.value)}
+                placeholder="スマートフォン,スマホ,モバイル&#10;ノートPC,ラップトップ"
+                rows={8}
+              />
+              <div className="settings-action-row">
+                <button
+                  className="secondary-button settings-save-button"
+                  onClick={() => void handleSaveSynonymGroups()}
+                  type="button"
+                  disabled={!hasUnsavedSynonymGroups || isSavingSynonymGroups}
+                >
+                  {isSavingSynonymGroups ? "保存中..." : "保存"}
+                </button>
+                <div className={`settings-save-status ${hasUnsavedSynonymGroups ? "dirty" : "saved"}`}>
+                  {hasUnsavedSynonymGroups ? "未保存の変更があります" : "保存済み"}
+                </div>
+              </div>
+              <div className="form-help">
+                1行を1グループとして、カンマ区切りで入力します。通常検索で同じ意味の表記ゆれを同一キーワードとして扱います。
               </div>
 
               <div className="extension-panel">

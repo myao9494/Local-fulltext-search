@@ -363,6 +363,46 @@ def test_extract_text_returns_empty_string_when_msg_decode_fails(tmp_path: Path)
     assert extracted == ""
 
 
+def test_extract_text_reads_msg_body_when_optional_headers_fail_to_decode(tmp_path: Path) -> None:
+    """
+    MSG の任意ヘッダ取得で文字コード例外が出ても、件名と本文を優先して抽出し続ける。
+    """
+    msg_file = tmp_path / "partial.msg"
+    msg_file.write_bytes(b"msg")
+
+    class FakeMessage:
+        subject = "障害連絡"
+        body = "本文だけでも検索できれば十分です。"
+
+        @property
+        def sender(self) -> str:
+            raise UnicodeDecodeError("cp932", b"from", 0, 1, "invalid start byte")
+
+        @property
+        def to(self) -> str:
+            raise UnicodeDecodeError("cp932", b"to", 0, 1, "invalid start byte")
+
+        cc = None
+        date = None
+
+        def close(self) -> None:
+            return None
+
+    def fake_open_msg(path: str, **kwargs) -> FakeMessage:
+        assert path.endswith("partial.msg")
+        return FakeMessage()
+
+    with patch.dict("sys.modules", {"extract_msg": SimpleNamespace(openMsg=fake_open_msg)}):
+        extracted = extract_text(msg_file)
+
+    assert "Subject: 障害連絡" in extracted
+    assert "From: -" in extracted
+    assert "To: -" in extracted
+    assert "Cc: -" in extracted
+    assert "Date: -" in extracted
+    assert "本文だけでも検索できれば十分です。" in extracted
+
+
 def test_extract_text_returns_empty_string_when_pptx_package_is_broken(tmp_path: Path) -> None:
     """
     壊れた PPTX は空文字へフォールバックし、全体のインデックス処理を止めない。

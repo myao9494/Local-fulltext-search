@@ -539,6 +539,7 @@ def _extract_pptx_table_text(table) -> str:
 def _extract_msg_text(path: Path) -> str:
     """
     Outlook の MSG から件名・差出人・宛先・本文を抽出する。
+    件名と本文を優先し、任意ヘッダが壊れていても本文検索を継続できるようにする。
     """
     try:
         import extract_msg
@@ -551,21 +552,49 @@ def _extract_msg_text(path: Path) -> str:
         return ""
     try:
         headers = [
-            ("Subject", getattr(message, "subject", None)),
-            ("From", getattr(message, "sender", None)),
-            ("To", getattr(message, "to", None)),
-            ("Cc", getattr(message, "cc", None)),
-            ("Date", getattr(message, "date", None)),
+            ("Subject", _safe_msg_value(message, "subject", required=True)),
+            ("From", _safe_msg_value(message, "sender")),
+            ("To", _safe_msg_value(message, "to")),
+            ("Cc", _safe_msg_value(message, "cc")),
+            ("Date", _safe_msg_value(message, "date")),
         ]
-        parts = [f"{label}: {value}".strip() for label, value in headers if value]
-        body = str(getattr(message, "body", "") or "").strip()
-        if body:
-            parts.append(body)
+        body = _safe_msg_value(message, "body", required=True)
+        if not body:
+            return ""
+
+        parts = [f"{label}: {value}" for label, value in headers]
+        parts.append(body)
         return "\n".join(parts)
     finally:
         close = getattr(message, "close", None)
         if callable(close):
             close()
+
+
+def _safe_msg_value(message, attribute_name: str, *, required: bool = False) -> str:
+    """
+    MSG 属性ごとの文字コード失敗を吸収し、必須項目以外は `-` へ寄せる。
+    """
+    try:
+        value = getattr(message, attribute_name, None)
+    except UnicodeDecodeError:
+        return "" if required else "-"
+    except Exception:
+        return "" if required else "-"
+
+    if value is None:
+        return "" if required else "-"
+
+    try:
+        text = str(value).strip()
+    except UnicodeDecodeError:
+        return "" if required else "-"
+    except Exception:
+        return "" if required else "-"
+
+    if text:
+        return text
+    return "" if required else "-"
 
 
 def _is_recoverable_pptx_error(error: Exception) -> bool:

@@ -24,13 +24,15 @@ class SearchService:
         self.index_service = IndexService(connection=self.connection)
 
     def search(self, params: SearchQueryParams) -> SearchResponse:
-        normalized_target_path = normalize_path_str(params.full_path) if params.full_path else ""
+        normalized_target_path = ""
+        if params.full_path:
+            normalized_target_path = normalize_path_str(params.full_path)
         app_settings = self.index_service.get_app_settings()
         effective_exclude_keywords = (
             params.exclude_keywords if params.exclude_keywords is not None else app_settings.exclude_keywords
         )
         excluded_keywords = self.index_service._parse_exclude_keywords(effective_exclude_keywords)
-        if normalized_target_path:
+        if normalized_target_path and not params.search_all_enabled:
             self.index_service.ensure_fresh_target(
                 full_path=normalized_target_path,
                 refresh_window_minutes=params.refresh_window_minutes,
@@ -53,6 +55,25 @@ class SearchService:
             excluded_keywords=excluded_keywords,
             app_settings=app_settings,
         )
+
+    def record_click(self, file_id: int) -> int:
+        """
+        検索結果オープン時のアクセス数を 1 件加算して返す。
+        """
+        cursor = self.connection.execute(
+            """
+            UPDATE files
+            SET click_count = click_count + 1
+            WHERE id = ?
+            RETURNING click_count
+            """,
+            (file_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="検索結果が見つかりません。")
+        self.connection.commit()
+        return int(row["click_count"])
 
     def _search_with_fts(
         self,
@@ -78,73 +99,98 @@ class SearchService:
         )
 
         normalized_query = params.q.strip()
-        terms = self._split_search_terms(normalized_query)
+        include_terms, exclude_terms = self._split_search_terms(normalized_query)
+        expanded_include_terms = self._expand_include_terms_with_synonyms(include_terms, app_settings.synonym_groups)
 
         matched_queries: list[str] = []
         query_values: list[object] = []
-        for term_index, term in enumerate(terms):
-            body_fts_query = self._quote_fts_term(term)
-            matched_queries.append(
-                f"""
-                SELECT
-                    files.id AS file_id,
-                    {term_index} AS term_index,
-                    0 AS match_rank,
-                    bm25(file_segments_fts) AS score,
-                    snippet(file_segments_fts, 0, '<mark>', '</mark>', ' ... ', 36) AS snippet,
-                    file_segments.segment_type AS segment_type,
-                    file_segments.content AS body_content
-                FROM file_segments_fts
-                JOIN file_segments ON file_segments.id = file_segments_fts.rowid
-                JOIN files ON files.id = file_segments.file_id
-                WHERE {where_clause}
-                  AND file_segments.segment_type = 'body'
-                  AND file_segments_fts MATCH ?
-                """
-            )
-            query_values.extend([*values, body_fts_query])
+        for term_index, term_group in enumerate(expanded_include_terms):
+            for term in term_group:
+                escaped_term = self._escape_like_pattern(term.lower())
+                if self._should_use_literal_term_search(term):
+                    matched_queries.append(
+                        f"""
+                        SELECT
+                            files.id AS file_id,
+                            {term_index} AS term_index,
+                            0 AS match_rank,
+                            0.0 AS score,
+                            NULL AS snippet,
+                            file_segments.segment_type AS segment_type,
+                            file_segments.content AS body_content
+                        FROM file_segments
+                        JOIN files ON files.id = file_segments.file_id
+                        WHERE {where_clause}
+                          AND file_segments.segment_type = 'body'
+                          AND lower(file_segments.content) LIKE ? ESCAPE '\\'
+                        """
+                    )
+                    query_values.extend([*values, f"%{escaped_term}%"])
+                else:
+                    body_fts_query = self._quote_fts_term(term)
+                    matched_queries.append(
+                        f"""
+                        SELECT
+                            files.id AS file_id,
+                            {term_index} AS term_index,
+                            0 AS match_rank,
+                            bm25(file_segments_fts) AS score,
+                            snippet(file_segments_fts, 0, '<mark>', '</mark>', ' ... ', 36) AS snippet,
+                            file_segments.segment_type AS segment_type,
+                            file_segments.content AS body_content
+                        FROM file_segments_fts
+                        JOIN file_segments ON file_segments.id = file_segments_fts.rowid
+                        JOIN files ON files.id = file_segments.file_id
+                        WHERE {where_clause}
+                          AND file_segments.segment_type = 'body'
+                          AND file_segments_fts MATCH ?
+                        """
+                    )
+                    query_values.extend([*values, body_fts_query])
 
-            cjk_bigram_query = build_cjk_bigram_match_query(term)
-            if cjk_bigram_query is not None:
+                    cjk_bigram_query = build_cjk_bigram_match_query(term)
+                    if cjk_bigram_query is not None:
+                        matched_queries.append(
+                            f"""
+                            SELECT
+                                files.id AS file_id,
+                                {term_index} AS term_index,
+                                1 AS match_rank,
+                                bm25(file_segments_fts) AS score,
+                                NULL AS snippet,
+                                file_segments.segment_type AS segment_type,
+                                body_segments.content AS body_content
+                            FROM file_segments_fts
+                            JOIN file_segments ON file_segments.id = file_segments_fts.rowid
+                            JOIN files ON files.id = file_segments.file_id
+                            JOIN file_segments AS body_segments
+                              ON body_segments.file_id = files.id
+                             AND body_segments.segment_type = 'body'
+                            WHERE {where_clause}
+                              AND file_segments.segment_type = 'cjk_bigram'
+                              AND file_segments_fts MATCH ?
+                            """
+                        )
+                        query_values.extend([*values, cjk_bigram_query])
+
                 matched_queries.append(
                     f"""
                     SELECT
                         files.id AS file_id,
                         {term_index} AS term_index,
-                        1 AS match_rank,
-                        bm25(file_segments_fts) AS score,
+                        2 AS match_rank,
+                        1000000.0 AS score,
                         NULL AS snippet,
-                        file_segments.segment_type AS segment_type,
+                        'filename' AS segment_type,
                         body_segments.content AS body_content
-                    FROM file_segments_fts
-                    JOIN file_segments ON file_segments.id = file_segments_fts.rowid
-                    JOIN files ON files.id = file_segments.file_id
-                    JOIN file_segments AS body_segments
+                    FROM files
+                    LEFT JOIN file_segments AS body_segments
                       ON body_segments.file_id = files.id
                      AND body_segments.segment_type = 'body'
-                    WHERE {where_clause}
-                      AND file_segments.segment_type = 'cjk_bigram'
-                      AND file_segments_fts MATCH ?
+                    WHERE {where_clause} AND lower(files.file_name) LIKE ? ESCAPE '\\'
                     """
                 )
-                query_values.extend([*values, cjk_bigram_query])
-
-            escaped_term = self._escape_like_pattern(term.lower())
-            matched_queries.append(
-                f"""
-                SELECT
-                    files.id AS file_id,
-                    {term_index} AS term_index,
-                    2 AS match_rank,
-                    1000000.0 AS score,
-                    NULL AS snippet,
-                    'filename' AS segment_type,
-                    NULL AS body_content
-                FROM files
-                WHERE {where_clause} AND lower(files.file_name) LIKE ? ESCAPE '\\'
-                """
-            )
-            query_values.extend([*values, f"%{escaped_term}%"])
+                query_values.extend([*values, f"%{escaped_term}%"])
 
         matched_files_cte = f"""
             WITH matched_terms AS (
@@ -161,7 +207,7 @@ class SearchService:
                 SELECT file_id
                 FROM matched_file_terms
                 GROUP BY file_id
-                HAVING COUNT(*) = {len(terms)}
+                HAVING COUNT(*) = {len(expanded_include_terms)}
             ),
             ranked_matches AS (
                 SELECT
@@ -183,7 +229,9 @@ class SearchService:
             )
         """
 
-        if not normalized_target_path and excluded_keywords:
+        order_by_clause = self._build_order_by_clause(sort_by=params.sort_by, sort_order=params.sort_order)
+
+        if exclude_terms or (not normalized_target_path and excluded_keywords):
             rows = self.connection.execute(
                 f"""
                 {matched_files_cte}
@@ -194,12 +242,13 @@ class SearchService:
                     files.file_ext,
                     files.created_at,
                     files.mtime,
+                    files.click_count,
                     filtered.snippet,
                     filtered.segment_type,
                     filtered.body_content
                 FROM filtered
                 JOIN files ON files.id = filtered.file_id
-                ORDER BY filtered.match_rank, filtered.score, files.mtime DESC
+                ORDER BY {order_by_clause}
                 """,
                 tuple(query_values),
             ).fetchall()
@@ -213,19 +262,25 @@ class SearchService:
                     file_ext=str(row["file_ext"]),
                     created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
                     mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
-                    snippet=self._resolve_snippet(
-                        snippet=row["snippet"],
-                        file_name=str(row["file_name"]),
-                        segment_type=str(row["segment_type"] or "filename"),
-                        body_content=row["body_content"],
-                        query=normalized_query,
-                    ),
+                    click_count=int(row["click_count"] or 0),
+                        snippet=self._resolve_snippet(
+                            snippet=row["snippet"],
+                            file_name=str(row["file_name"]),
+                            segment_type=str(row["segment_type"] or "filename"),
+                            body_content=row["body_content"],
+                            highlight_terms=self._flatten_highlight_terms(expanded_include_terms),
+                        ),
                 )
                 for row in rows
                 if not self._should_exclude_search_result(
                     target_path=normalized_target_path,
                     candidate_path=str(row["normalized_path"]),
                     excluded_keywords=excluded_keywords,
+                )
+                and not self._matches_excluded_search_terms(
+                    file_name=str(row["file_name"]),
+                    body_content=str(row["body_content"] or ""),
+                    exclude_terms=exclude_terms,
                 )
             ]
             return SearchResponse(total=len(visible_items), items=visible_items[params.offset : params.offset + params.limit])
@@ -247,6 +302,7 @@ class SearchService:
                     files.file_ext,
                     files.created_at,
                     files.mtime,
+                    files.click_count,
                     filtered.snippet,
                     filtered.segment_type,
                     filtered.body_content,
@@ -254,7 +310,7 @@ class SearchService:
                     filtered.score
                 FROM filtered
                 JOIN files ON files.id = filtered.file_id
-                ORDER BY filtered.match_rank, filtered.score, files.mtime DESC
+                ORDER BY {order_by_clause}
                 LIMIT ? OFFSET ?
             )
             SELECT
@@ -264,6 +320,7 @@ class SearchService:
                 paged_matches.file_ext,
                 paged_matches.created_at,
                 paged_matches.mtime,
+                paged_matches.click_count,
                 paged_matches.snippet,
                 paged_matches.segment_type,
                 paged_matches.body_content,
@@ -285,12 +342,13 @@ class SearchService:
                 file_ext=str(row["file_ext"]),
                 created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
                 mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
+                click_count=int(row["click_count"] or 0),
                 snippet=self._resolve_snippet(
                     snippet=row["snippet"],
                     file_name=str(row["file_name"]),
                     segment_type=str(row["segment_type"] or "filename"),
                     body_content=row["body_content"],
-                    query=normalized_query,
+                    highlight_terms=self._flatten_highlight_terms(expanded_include_terms),
                 ),
             )
             for row in rows
@@ -299,6 +357,11 @@ class SearchService:
                 target_path=normalized_target_path,
                 candidate_path=str(row["normalized_path"]),
                 excluded_keywords=excluded_keywords,
+            )
+            and not self._matches_excluded_search_terms(
+                file_name=str(row["file_name"]),
+                body_content=str(row["body_content"] or ""),
+                exclude_terms=exclude_terms,
             )
         ]
         return SearchResponse(total=total, items=items)
@@ -325,7 +388,9 @@ class SearchService:
             custom_content_extensions=app_settings.custom_content_extensions,
             custom_filename_extensions=app_settings.custom_filename_extensions,
         )
-        pattern = self._compile_regex(params.q)
+        normalized_query = params.q.strip()
+        include_terms, exclude_terms = self._split_search_terms(normalized_query)
+        pattern = self._compile_regex(" ".join(include_terms))
         cursor = self.connection.execute(
             f"""
             SELECT
@@ -335,13 +400,14 @@ class SearchService:
                 files.file_ext,
                 files.created_at,
                 files.mtime,
+                files.click_count,
                 file_segments.content
             FROM files
             LEFT JOIN file_segments
                 ON file_segments.file_id = files.id
                AND file_segments.segment_type = 'body'
             WHERE {where_clause}
-            ORDER BY files.mtime DESC, files.id DESC
+            ORDER BY {self._build_regex_order_by_clause(sort_by=params.sort_by, sort_order=params.sort_order)}
             """,
             tuple(values),
         )
@@ -358,6 +424,12 @@ class SearchService:
             content_match = pattern.search(content)
             file_name_match = pattern.search(file_name)
             if content_match is None and file_name_match is None:
+                continue
+            if self._matches_excluded_search_terms(
+                file_name=file_name,
+                body_content=content,
+                exclude_terms=exclude_terms,
+            ):
                 continue
 
             matched_count += 1
@@ -377,6 +449,7 @@ class SearchService:
                     file_ext=str(row["file_ext"]),
                     created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
                     mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
+                    click_count=int(row["click_count"] or 0),
                     snippet=self._build_regex_snippet(
                         content=content,
                         file_name=file_name,
@@ -396,13 +469,20 @@ class SearchService:
         segment_type: str = "filename",
         body_content: object = None,
         query: str = "",
+        highlight_terms: list[str] | None = None,
     ) -> str:
         if segment_type == "body":
-            literal_snippet = self._build_literal_snippet(content=str(body_content or ""), query=query)
+            literal_snippet = self._build_literal_snippet(
+                content=str(body_content or ""),
+                highlight_terms=highlight_terms or self._split_search_terms(query)[0],
+            )
             if literal_snippet is not None:
                 return literal_snippet
         if segment_type == "cjk_bigram":
-            literal_snippet = self._build_literal_snippet(content=str(body_content or ""), query=query)
+            literal_snippet = self._build_literal_snippet(
+                content=str(body_content or ""),
+                highlight_terms=highlight_terms or self._split_search_terms(query)[0],
+            )
             if literal_snippet is not None:
                 return literal_snippet
         if isinstance(snippet, str) and snippet.strip():
@@ -414,16 +494,16 @@ class SearchService:
             "ファイル名ベースの候補として表示しています。"
         )
 
-    def _build_literal_snippet(self, *, content: str, query: str) -> str | None:
+    def _build_literal_snippet(self, *, content: str, highlight_terms: list[str]) -> str | None:
         """
         本文ヒットでは、検索語をなるべく同じ抜粋に含めてハイライト表示する。
         """
-        if not content or not query.strip():
+        if not content or not highlight_terms:
             return None
 
         lowered_content = content.lower()
         term_ranges: list[tuple[int, int]] = []
-        for term in (item for item in query.split() if item):
+        for term in highlight_terms:
             start = lowered_content.find(term.lower())
             if start < 0:
                 continue
@@ -440,7 +520,7 @@ class SearchService:
         suffix = "..." if snippet_end < len(content) else ""
         snippet_text = content[snippet_start:snippet_end]
         highlighted = escape(snippet_text)
-        for term in sorted({item for item in query.split() if item}, key=len, reverse=True):
+        for term in sorted(set(highlight_terms), key=len, reverse=True):
             highlighted = re.sub(
                 re.escape(escape(term)),
                 lambda match: f"<mark>{match.group(0)}</mark>",
@@ -448,6 +528,49 @@ class SearchService:
                 flags=re.IGNORECASE,
             )
         return f"{prefix}{highlighted}{suffix}"
+
+    def _expand_include_terms_with_synonyms(self, include_terms: list[str], synonym_groups_text: str) -> list[list[str]]:
+        """
+        同義語リストに含まれる語は OR 条件の候補へ展開し、各入力語は「同じキーワード」として扱う。
+        """
+        synonym_groups = self.index_service._parse_synonym_groups(synonym_groups_text)
+        expanded_terms: list[list[str]] = []
+        for term in include_terms:
+            normalized_term = term.casefold()
+            matched_group = next(
+                (group for group in synonym_groups if any(candidate.casefold() == normalized_term for candidate in group)),
+                None,
+            )
+            if matched_group is None:
+                expanded_terms.append([term])
+                continue
+
+            ordered_group = [term, *matched_group]
+            seen: set[str] = set()
+            unique_group: list[str] = []
+            for candidate in ordered_group:
+                normalized_candidate = candidate.casefold()
+                if normalized_candidate in seen:
+                    continue
+                seen.add(normalized_candidate)
+                unique_group.append(candidate)
+            expanded_terms.append(unique_group)
+        return expanded_terms
+
+    def _flatten_highlight_terms(self, expanded_include_terms: list[list[str]]) -> list[str]:
+        """
+        スニペット生成では、入力語だけでなく同義語展開後の候補もまとめてハイライト対象にする。
+        """
+        seen: set[str] = set()
+        highlight_terms: list[str] = []
+        for group in expanded_include_terms:
+            for term in group:
+                normalized_term = term.casefold()
+                if normalized_term in seen:
+                    continue
+                seen.add(normalized_term)
+                highlight_terms.append(term)
+        return highlight_terms
 
     def _escape_like_pattern(self, value: str) -> str:
         return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -476,20 +599,55 @@ class SearchService:
             relative_path = result_path
         return self.index_service._should_exclude_path(relative_path, excluded_keywords)
 
-    def _build_fts_match_query(self, value: str) -> str:
+    def _split_search_terms(self, value: str) -> tuple[list[str], list[str]]:
         """
-        FTS5 の構文文字を無害化しつつ、空白区切りは AND 検索として扱う。
+        利用者入力を空白で区切り、通常語と `-keyword` の除外語へ分離する。
+        `\\-keyword` は先頭ハイフンを含む通常語として扱う。
+        ただし全語が `-` 始まりのときは従来互換のため通常語として扱う。
         """
-        terms = self._split_search_terms(value)
-        if not terms:
-            return '""'
-        return " AND ".join(self._quote_fts_term(term) for term in terms)
+        include_terms: list[str] = []
+        exclude_terms: list[str] = []
+        for term in (item for item in value.split() if item):
+            if term.startswith("\\-"):
+                include_terms.append(term[1:])
+                continue
+            if term.startswith("-") and len(term) > 1:
+                exclude_terms.append(term[1:])
+                continue
+            include_terms.append(term)
 
-    def _split_search_terms(self, value: str) -> list[str]:
+        if include_terms:
+            return include_terms, exclude_terms
+
+        fallback_terms = [term for term in value.split() if term]
+        return fallback_terms, []
+
+    def _matches_excluded_search_terms(
+        self,
+        *,
+        file_name: str,
+        body_content: str,
+        exclude_terms: list[str],
+    ) -> bool:
         """
-        利用者入力を空白で区切り、順序を保った検索語の配列へ正規化する。
+        `-keyword` 指定の語がファイル名または本文に含まれる候補は除外する。
         """
-        return [term for term in value.split() if term]
+        if not exclude_terms:
+            return False
+
+        lowered_file_name = file_name.lower()
+        lowered_body_content = body_content.lower()
+        for term in exclude_terms:
+            lowered_term = term.lower()
+            if lowered_term in lowered_file_name or lowered_term in lowered_body_content:
+                return True
+        return False
+
+    def _should_use_literal_term_search(self, term: str) -> bool:
+        """
+        先頭が `-` の語は FTS5 MATCH では壊れやすいため、LIKE ベースの文字列検索へ切り替える。
+        """
+        return term.startswith("-")
 
     def _quote_fts_term(self, term: str) -> str:
         escaped_term = term.replace('"', '""')
@@ -549,6 +707,32 @@ class SearchService:
             return "1 = 1", values
 
         return " AND ".join(filters), values
+
+    def _build_order_by_clause(self, *, sort_by: str, sort_order: str) -> str:
+        """
+        FTS 検索は一致品質を優先しつつ、同順位内で指定列へ並び替える。
+        """
+        direction = "ASC" if sort_order == "asc" else "DESC"
+        sort_column = self._resolve_sort_column(sort_by)
+        return f"filtered.match_rank, filtered.score, {sort_column} {direction}, files.id DESC"
+
+    def _build_regex_order_by_clause(self, *, sort_by: str, sort_order: str) -> str:
+        """
+        正規表現検索は DB 側で指定列順に走査し、結果の表示順と一致させる。
+        """
+        direction = "ASC" if sort_order == "asc" else "DESC"
+        sort_column = self._resolve_sort_column(sort_by)
+        return f"{sort_column} {direction}, files.id DESC"
+
+    def _resolve_sort_column(self, sort_by: str) -> str:
+        """
+        並び替えキーを SQL の安全な固定列へ解決する。
+        """
+        if sort_by == "created":
+            return "files.created_at"
+        if sort_by == "click_count":
+            return "files.click_count"
+        return "files.mtime"
 
     def _resolve_local_day_start_timestamp(self, value: date) -> float:
         """

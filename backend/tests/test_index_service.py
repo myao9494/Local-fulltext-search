@@ -815,6 +815,24 @@ def test_app_settings_can_store_exclude_keywords(tmp_path: Path, monkeypatch) ->
     assert exclude_keywords_path.read_text(encoding="utf-8") == "dist\nbuild\n.dist"
 
 
+def test_app_settings_can_store_synonym_groups(tmp_path: Path, monkeypatch) -> None:
+    """
+    アプリ設定として保存した同義語リストは、CSV 風 1 行 1 グループのテキストへ正規化して保持される。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    synonym_groups_path = tmp_path / "synonym_groups.txt"
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "synonym_groups_name", "synonym_groups.txt")
+
+    saved_settings = service.update_app_settings(
+        synonym_groups="スマートフォン, スマホ, モバイル\nノートPC， ラップトップ, ノートpc\n単語"
+    )
+
+    assert saved_settings.synonym_groups == "スマートフォン,スマホ,モバイル\nノートPC,ラップトップ\n単語"
+    assert synonym_groups_path.read_text(encoding="utf-8") == "スマートフォン,スマホ,モバイル\nノートPC,ラップトップ\n単語"
+
+
 def test_app_settings_can_store_extension_files(tmp_path: Path, monkeypatch) -> None:
     """
     アプリ設定として保存した拡張子一覧は、役割ごとのテキストファイルへ正規化して保持される。
@@ -867,12 +885,14 @@ def test_reset_database_keeps_app_settings(tmp_path: Path, monkeypatch) -> None:
     exclude_keywords_path = tmp_path / "exclude_keywords.txt"
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     monkeypatch.setattr(settings, "exclude_keywords_name", "exclude_keywords.txt")
+    monkeypatch.setattr(settings, "synonym_groups_name", "synonym_groups.txt")
     monkeypatch.setattr(settings, "index_selected_extensions_name", "index_selected_extensions.txt")
     monkeypatch.setattr(settings, "custom_content_extensions_name", "custom_content_extensions.txt")
     monkeypatch.setattr(settings, "custom_filename_extensions_name", "custom_filename_extensions.txt")
 
     service.update_app_settings(
         exclude_keywords=".cache\ndist",
+        synonym_groups="スマートフォン,スマホ,モバイル",
         index_selected_extensions=".md\n.py",
         custom_content_extensions=".py",
         custom_filename_extensions=".cae",
@@ -881,6 +901,7 @@ def test_reset_database_keeps_app_settings(tmp_path: Path, monkeypatch) -> None:
 
     loaded_settings = service.get_app_settings()
     assert loaded_settings.exclude_keywords == ".cache\ndist"
+    assert loaded_settings.synonym_groups == "スマートフォン,スマホ,モバイル"
     assert loaded_settings.index_selected_extensions == ".md\n.py"
     assert loaded_settings.custom_content_extensions == ".py"
     assert loaded_settings.custom_filename_extensions == ".cae"

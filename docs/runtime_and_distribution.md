@@ -85,6 +85,7 @@ cd backend
 
 - `http://127.0.0.1:8079/?q=見積&full_path=%2FUsers%2Fmine%2FDocuments&index_depth=2`
 - `q` と `full_path` の両方があると初回表示時に自動検索する
+- `search_all=1` を付けると、`full_path` が空でも初回に全 DB 検索を実行できる
 - `index_depth` を省略した場合は `1`
 - `full_path` は絶対パス、または Windows の UNC パスを使う
 
@@ -113,6 +114,19 @@ $env:SEARCH_APP_PORT="8079"
 - Host: `127.0.0.1`
 - Port: `8079`
 - DB 保存先: 起動ディレクトリに依存せず `backend/data/search.db`
+
+## 保存されるファイル
+
+既定では `backend/data/` 配下に次のファイルを保存する。
+
+- `search.db`
+- `exclude_keywords.txt`
+- `synonym_groups.txt`
+- `index_selected_extensions.txt`
+- `custom_content_extensions.txt`
+- `custom_filename_extensions.txt`
+
+保存先ディレクトリは `SEARCH_APP_DATA_DIR` で、各ファイル名は `SEARCH_APP_*_NAME` 系の環境変数で上書きできる。
 
 ## Git 管理方針
 

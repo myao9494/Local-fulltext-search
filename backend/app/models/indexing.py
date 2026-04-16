@@ -83,6 +83,7 @@ class AppSettingsResponse(BaseModel):
     """
 
     exclude_keywords: str
+    synonym_groups: str
     index_selected_extensions: str
     custom_content_extensions: str
     custom_filename_extensions: str
@@ -94,6 +95,7 @@ class AppSettingsUpdateRequest(BaseModel):
     """
 
     exclude_keywords: str | None = None
+    synonym_groups: str | None = None
     index_selected_extensions: str | None = None
     custom_content_extensions: str | None = None
     custom_filename_extensions: str | None = None

@@ -30,6 +30,7 @@ class StubIndexService:
         self.did_cancel = False
         self.deleted_target_ids: list[int] = []
         self.saved_exclude_keywords = ".git\nnode_modules"
+        self.saved_synonym_groups = "スマートフォン,スマホ,モバイル"
         self.saved_index_selected_extensions = ".md\n.json"
         self.saved_custom_content_extensions = ".py\n.dat"
         self.saved_custom_filename_extensions = ".CAE"
@@ -84,11 +85,13 @@ class StubIndexService:
             def __init__(
                 self,
                 exclude_keywords: str,
+                synonym_groups: str,
                 index_selected_extensions: str,
                 custom_content_extensions: str,
                 custom_filename_extensions: str,
             ) -> None:
                 self.exclude_keywords = exclude_keywords
+                self.synonym_groups = synonym_groups
                 self.index_selected_extensions = index_selected_extensions
                 self.custom_content_extensions = custom_content_extensions
                 self.custom_filename_extensions = custom_filename_extensions
@@ -96,6 +99,7 @@ class StubIndexService:
             def model_dump(self) -> dict[str, object]:
                 return {
                     "exclude_keywords": self.exclude_keywords,
+                    "synonym_groups": self.synonym_groups,
                     "index_selected_extensions": self.index_selected_extensions,
                     "custom_content_extensions": self.custom_content_extensions,
                     "custom_filename_extensions": self.custom_filename_extensions,
@@ -103,6 +107,7 @@ class StubIndexService:
 
         return AppSettings(
             self.saved_exclude_keywords,
+            self.saved_synonym_groups,
             self.saved_index_selected_extensions,
             self.saved_custom_content_extensions,
             self.saved_custom_filename_extensions,
@@ -112,12 +117,15 @@ class StubIndexService:
         self,
         *,
         exclude_keywords: str | None = None,
+        synonym_groups: str | None = None,
         index_selected_extensions: str | None = None,
         custom_content_extensions: str | None = None,
         custom_filename_extensions: str | None = None,
     ) -> object:
         if exclude_keywords is not None:
             self.saved_exclude_keywords = exclude_keywords
+        if synonym_groups is not None:
+            self.saved_synonym_groups = synonym_groups
         if index_selected_extensions is not None:
             self.saved_index_selected_extensions = index_selected_extensions
         if custom_content_extensions is not None:
@@ -189,6 +197,7 @@ def test_get_app_settings_endpoint_returns_saved_settings() -> None:
     payload = get_app_settings(service)
 
     assert payload["exclude_keywords"] == ".git\nnode_modules"
+    assert payload["synonym_groups"] == "スマートフォン,スマホ,モバイル"
     assert payload["index_selected_extensions"] == ".md\n.json"
     assert payload["custom_content_extensions"] == ".py\n.dat"
     assert payload["custom_filename_extensions"] == ".CAE"
@@ -203,6 +212,7 @@ def test_update_app_settings_endpoint_returns_updated_settings() -> None:
     payload = update_app_settings(
         AppSettingsUpdateRequest(
             exclude_keywords="dist\nbuild",
+            synonym_groups="スマートフォン,スマホ,モバイル\nノートPC,ラップトップ",
             index_selected_extensions=".md\n.py",
             custom_content_extensions=".py\n.dat",
             custom_filename_extensions=".cae",
@@ -212,6 +222,8 @@ def test_update_app_settings_endpoint_returns_updated_settings() -> None:
 
     assert payload["exclude_keywords"] == "dist\nbuild"
     assert service.saved_exclude_keywords == "dist\nbuild"
+    assert payload["synonym_groups"] == "スマートフォン,スマホ,モバイル\nノートPC,ラップトップ"
+    assert service.saved_synonym_groups == "スマートフォン,スマホ,モバイル\nノートPC,ラップトップ"
     assert payload["index_selected_extensions"] == ".md\n.py"
     assert payload["custom_content_extensions"] == ".py\n.dat"
     assert payload["custom_filename_extensions"] == ".cae"

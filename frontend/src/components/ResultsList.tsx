@@ -4,7 +4,28 @@ import type { SearchResult } from "../types";
 type ResultsListProps = {
   items: SearchResult[];
   dateField: "created" | "modified";
+  onResultOpen: (fileId: number) => void;
 };
+
+/**
+ * 検索結果のフルパスから親フォルダの絶対パスを取り出す。
+ */
+function getFolderPath(fullPath: string): string {
+  const lastSeparatorIndex = Math.max(fullPath.lastIndexOf("/"), fullPath.lastIndexOf("\\"));
+  if (lastSeparatorIndex < 0) {
+    return fullPath;
+  }
+  if (lastSeparatorIndex === 0) {
+    return fullPath.slice(0, 1);
+  }
+
+  const parentPath = fullPath.slice(0, lastSeparatorIndex);
+  if (/^[A-Za-z]:$/.test(parentPath)) {
+    return `${parentPath}${fullPath[lastSeparatorIndex]}`;
+  }
+
+  return parentPath;
+}
 
 function fallbackCopyTextToClipboard(text: string): boolean {
   const textarea = document.createElement("textarea");
@@ -32,7 +53,7 @@ function fallbackCopyTextToClipboard(text: string): boolean {
   return didCopy;
 }
 
-export function ResultsList({ items, dateField }: ResultsListProps) {
+export function ResultsList({ items, dateField, onResultOpen }: ResultsListProps) {
   const [copiedFileId, setCopiedFileId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -73,7 +94,9 @@ export function ResultsList({ items, dateField }: ResultsListProps) {
   return (
     <div className="results-list">
       {items.map((item) => {
+        const folderPath = getFolderPath(item.full_path);
         const fullPathUrl = `http://localhost:8001/api/fullpath?path=${encodeURIComponent(item.full_path)}`;
+        const folderUrl = `http://localhost:8001/?path=${encodeURIComponent(folderPath)}`;
 
         return (
           <article className="result-card" key={item.file_id}>
@@ -90,6 +113,15 @@ export function ResultsList({ items, dateField }: ResultsListProps) {
                 >
                   パスをコピー
                 </button>
+                <a
+                  className="result-folder-link"
+                  href={folderUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="親フォルダを開く"
+                >
+                  フォルダを開く
+                </a>
                 {copiedFileId === item.file_id ? (
                   <span className="result-path-status">コピーしました</span>
                 ) : null}
@@ -102,12 +134,14 @@ export function ResultsList({ items, dateField }: ResultsListProps) {
                   href={fullPathUrl}
                   target="_blank"
                   rel="noreferrer"
+                  onClick={() => onResultOpen(item.file_id)}
                 >
                   {item.file_name}
                 </a>
               </h3>
               <div className="result-meta">
                 <span>{dateField === "created" ? "作成" : "編集"}: {new Date(dateField === "created" ? item.created_at : item.mtime).toLocaleString()}</span>
+                <span>アクセス: {item.click_count}</span>
               </div>
             </div>
             <p

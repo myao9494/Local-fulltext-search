@@ -14,6 +14,7 @@ class SearchResultItem(BaseModel):
     file_ext: str
     created_at: datetime
     mtime: datetime
+    click_count: int
     snippet: str
 
 
@@ -25,6 +26,7 @@ class SearchResponse(BaseModel):
 class SearchQueryParams(BaseModel):
     q: str = Field(min_length=1)
     full_path: str = ""
+    search_all_enabled: bool = False
     index_depth: int = Field(ge=0, le=128)
     refresh_window_minutes: int = Field(default=60, ge=0, le=1440)
     regex_enabled: bool = False
@@ -32,6 +34,8 @@ class SearchQueryParams(BaseModel):
     types: str | None = None
     exclude_keywords: str | None = None
     date_field: Literal["created", "modified"] = "created"
+    sort_by: Literal["created", "modified", "click_count"] = "modified"
+    sort_order: Literal["asc", "desc"] = "desc"
     created_from: date | None = None
     created_to: date | None = None
     limit: int = Field(default=20, ge=1, le=1000)
@@ -65,3 +69,12 @@ class SearchQueryParams(BaseModel):
 
 class SearchRequest(SearchQueryParams):
     pass
+
+
+class SearchClickRequest(BaseModel):
+    file_id: int = Field(ge=1)
+
+
+class SearchClickResponse(BaseModel):
+    file_id: int
+    click_count: int

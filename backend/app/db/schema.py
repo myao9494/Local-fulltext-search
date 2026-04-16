@@ -24,6 +24,7 @@ SCHEMA_STATEMENTS: list[str] = [
         file_ext TEXT NOT NULL,
         created_at REAL NOT NULL,
         mtime REAL NOT NULL,
+        click_count INTEGER NOT NULL DEFAULT 0,
         size INTEGER NOT NULL,
         indexed_at TEXT NOT NULL,
         last_error TEXT
@@ -97,6 +98,7 @@ def initialize_schema(connection: Connection) -> None:
         _drop_managed_schema_objects(connection)
     for statement in SCHEMA_STATEMENTS:
         connection.execute(statement)
+    _apply_non_destructive_migrations(connection)
     connection.commit()
 
 
@@ -108,7 +110,17 @@ def reset_schema(connection: Connection) -> None:
     _drop_managed_schema_objects(connection)
     for statement in SCHEMA_STATEMENTS:
         connection.execute(statement)
+    _apply_non_destructive_migrations(connection)
     connection.commit()
+
+
+def _apply_non_destructive_migrations(connection: Connection) -> None:
+    """
+    既存DBは可能な限り保持したまま、後方互換な列追加だけを反映する。
+    """
+    file_columns = _get_columns(connection, "files")
+    if "click_count" not in file_columns:
+        connection.execute("ALTER TABLE files ADD COLUMN click_count INTEGER NOT NULL DEFAULT 0;")
 
 
 def _needs_schema_reset(connection: Connection) -> bool:
@@ -138,6 +150,7 @@ def _needs_schema_reset(connection: Connection) -> bool:
         "file_ext",
         "created_at",
         "mtime",
+        "click_count",
         "size",
         "indexed_at",
         "last_error",
@@ -156,9 +169,10 @@ def _needs_schema_reset(connection: Connection) -> bool:
     if legacy_folder_columns:
         return True
     index_run_columns = _get_columns(connection, "index_runs")
+    legacy_file_columns = expected_file_columns - {"click_count"}
     return (
         target_columns != expected_target_columns
-        or file_columns != expected_file_columns
+        or (file_columns != expected_file_columns and file_columns != legacy_file_columns)
         or index_run_columns != expected_index_run_columns
         or failed_file_columns != expected_failed_file_columns
     )

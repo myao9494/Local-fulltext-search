@@ -6,6 +6,8 @@ type SearchBarProps = {
   indexDepth: string;
   searchFilterText: string;
   dateField: "created" | "modified";
+  sortBy: "created" | "modified" | "click_count";
+  sortOrder: "asc" | "desc";
   createdFrom: string;
   createdTo: string;
   isSearching: boolean;
@@ -20,6 +22,8 @@ type SearchBarProps = {
   onIndexDepthChange: (value: string) => void;
   onSearchFilterTextChange: (value: string) => void;
   onDateFieldChange: (value: "created" | "modified") => void;
+  onSortByChange: (value: "created" | "modified" | "click_count") => void;
+  onSortOrderChange: (value: "asc" | "desc") => void;
   onCreatedFromChange: (value: string) => void;
   onCreatedToChange: (value: string) => void;
   onClearCreatedDateFilter: () => void;
@@ -37,6 +41,8 @@ export function SearchBar({
   indexDepth,
   searchFilterText,
   dateField,
+  sortBy,
+  sortOrder,
   createdFrom,
   createdTo,
   isSearching,
@@ -51,6 +57,8 @@ export function SearchBar({
   onIndexDepthChange,
   onSearchFilterTextChange,
   onDateFieldChange,
+  onSortByChange,
+  onSortOrderChange,
   onCreatedFromChange,
   onCreatedToChange,
   onClearCreatedDateFilter,
@@ -216,6 +224,30 @@ export function SearchBar({
               日付指定をキャンセル
             </button>
             <div className="date-filter-hint">未入力は指定なし。片側だけ指定すると、選択した日付種別の「以降」「以前」として扱います。</div>
+          </div>
+          <div className="date-filter-group">
+            <label className="date-filter-label" htmlFor="sort-by-select">並び替え</label>
+            <select
+              id="sort-by-select"
+              className="small-input date-field-select"
+              value={sortBy}
+              onChange={(event) => onSortByChange(event.target.value as "created" | "modified" | "click_count")}
+              aria-label="並び替え"
+            >
+              <option value="modified">編集日順</option>
+              <option value="created">作成日順</option>
+              <option value="click_count">アクセス数順</option>
+            </select>
+            <select
+              className="small-input date-field-select"
+              value={sortOrder}
+              onChange={(event) => onSortOrderChange(event.target.value as "asc" | "desc")}
+              aria-label="並び順"
+            >
+              <option value="desc">新しい順 / 多い順</option>
+              <option value="asc">古い順 / 少ない順</option>
+            </select>
+            <div className="date-filter-hint">一致品質を保ったまま、同順位内を指定条件で並び替えます。</div>
           </div>
         </div>
       </div>

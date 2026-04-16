@@ -6,6 +6,7 @@ export type SearchResult = {
   file_ext: string;
   created_at: string;
   mtime: string;
+  click_count: number;
   snippet: string;
 };
 
@@ -47,6 +48,7 @@ export type IndexedTargetListResponse = {
 
 export type AppSettings = {
   exclude_keywords: string;
+  synonym_groups: string;
   index_selected_extensions: string;
   custom_content_extensions: string;
   custom_filename_extensions: string;

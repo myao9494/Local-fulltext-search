@@ -81,6 +81,36 @@ def test_search_matches_mixed_ascii_and_japanese_terms(tmp_path: Path) -> None:
     assert "<mark>寿司</mark>" in result.items[0].snippet
 
 
+def test_search_treats_synonym_group_as_same_keyword(tmp_path: Path, monkeypatch) -> None:
+    """
+    同義語リストに含まれる語は、通常検索で同じキーワードとしてヒットできる。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "mobile.md").write_text("スマートフォン向けアクセサリの比較メモ", encoding="utf-8")
+    base_settings = service.index_service.get_app_settings()
+
+    monkeypatch.setattr(
+        service.index_service,
+        "get_app_settings",
+        lambda: base_settings.model_copy(update={"synonym_groups": "スマートフォン,スマホ,モバイル"}),
+    )
+
+    result = service.search(
+        SearchQueryParams(
+            q="スマホ",
+            full_path=str(target),
+            index_depth=5,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["mobile.md"]
+    assert "<mark>スマートフォン</mark>" in result.items[0].snippet
+
+
 def test_search_requires_all_whitespace_separated_terms(tmp_path: Path) -> None:
     """
     空白区切りの複数語は AND 条件として検索する。
@@ -102,6 +132,69 @@ def test_search_requires_all_whitespace_separated_terms(tmp_path: Path) -> None:
 
     assert result.total == 1
     assert [item.file_name for item in result.items] == ["match.md"]
+
+
+def test_search_supports_minus_prefixed_exclude_terms(tmp_path: Path) -> None:
+    """
+    通常検索では `-keyword` を除外語として扱い、含む候補を落とす。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "keep.md").write_text("alpha beta", encoding="utf-8")
+    (target / "drop.md").write_text("alpha beta gamma", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha -gamma",
+            full_path=str(target),
+            index_depth=5,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["keep.md"]
+
+
+def test_search_supports_escaped_minus_prefixed_literal_terms(tmp_path: Path) -> None:
+    """
+    `\\-keyword` は除外ではなく、先頭の `-` を含む通常語として検索できる。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="ticket-101.md",
+        full_path=str(tmp_path / "ticket-101.md"),
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="release -101 memo",
+        click_count=0,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="ticket-202.md",
+        full_path=str(tmp_path / "ticket-202.md"),
+        created_at=datetime(2026, 4, 11, tzinfo=UTC),
+        mtime=datetime(2026, 4, 11, tzinfo=UTC),
+        body="release -202 memo",
+        click_count=0,
+    )
+
+    result = service.search(
+        SearchQueryParams(
+            q=r"\-101",
+            full_path="",
+            index_depth=5,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["ticket-101.md"]
 
 
 def test_search_allows_terms_to_be_satisfied_across_filename_and_body(tmp_path: Path) -> None:
@@ -199,6 +292,110 @@ def test_search_supports_regex_mode_for_content_matches(tmp_path: Path) -> None:
 
     assert result.total == 1
     assert [item.file_name for item in result.items] == ["release.md"]
+
+
+def test_search_sorts_by_created_at_desc(tmp_path: Path) -> None:
+    """
+    作成日順の降順を指定すると、新しい作成日の結果から返す。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="older.md",
+        full_path=str(tmp_path / "older.md"),
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 15, tzinfo=UTC),
+        body="alpha",
+        click_count=2,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="newer.md",
+        full_path=str(tmp_path / "newer.md"),
+        created_at=datetime(2026, 4, 12, tzinfo=UTC),
+        mtime=datetime(2026, 4, 11, tzinfo=UTC),
+        body="alpha",
+        click_count=1,
+    )
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            index_depth=5,
+            sort_by="created",
+            sort_order="desc",
+        )
+    )
+
+    assert [item.file_name for item in result.items] == ["newer.md", "older.md"]
+
+
+def test_search_sorts_by_click_count_desc(tmp_path: Path) -> None:
+    """
+    アクセス数順では click_count の多い結果を優先する。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="low.md",
+        full_path=str(tmp_path / "low.md"),
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="alpha",
+        click_count=1,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="high.md",
+        full_path=str(tmp_path / "high.md"),
+        created_at=datetime(2026, 4, 9, tzinfo=UTC),
+        mtime=datetime(2026, 4, 9, tzinfo=UTC),
+        body="alpha",
+        click_count=8,
+    )
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            index_depth=5,
+            sort_by="click_count",
+            sort_order="desc",
+        )
+    )
+
+    assert [item.file_name for item in result.items] == ["high.md", "low.md"]
+    assert [item.click_count for item in result.items] == [8, 1]
+
+
+def test_record_click_increments_click_count(tmp_path: Path) -> None:
+    """
+    検索結果クリックを記録すると、対象ファイルのアクセス数が 1 増える。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    file_id = _insert_indexed_markdown(
+        connection=connection,
+        file_name="memo.md",
+        full_path=str(tmp_path / "memo.md"),
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="alpha",
+        click_count=3,
+    )
+
+    updated_count = service.record_click(file_id)
+
+    assert updated_count == 4
+    stored_count = connection.execute("SELECT click_count FROM files WHERE id = ?", (file_id,)).fetchone()[0]
+    assert stored_count == 4
 
 
 def test_search_rejects_invalid_regex_pattern(tmp_path: Path) -> None:
@@ -698,8 +895,78 @@ def test_search_without_full_path_matches_across_entire_database(tmp_path: Path)
     )
 
     assert result.total == 2
-    assert [item.file_name for item in result.items] == ["alpha.md", "alpha-notes.md"]
+    assert sorted(item.file_name for item in result.items) == ["alpha-notes.md", "alpha.md"]
     assert all(item.target_path == "" for item in result.items)
+
+
+def test_search_all_enabled_with_full_path_limits_results_to_that_path(tmp_path: Path) -> None:
+    """
+    全 DB 検索フラグが有効でも full_path があれば、その配下だけを検索対象にする。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    ensure_calls: list[dict[str, object]] = []
+    service.index_service.ensure_fresh_target = lambda **kwargs: ensure_calls.append(kwargs)
+
+    indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
+    timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
+    rows = [
+        (
+            "/workspace/docs/alpha.md",
+            "/workspace/docs/alpha.md",
+            "alpha.md",
+            ".md",
+            timestamp,
+            timestamp,
+            12,
+            indexed_at,
+        ),
+        (
+            "/archive/alpha-notes.md",
+            "/archive/alpha-notes.md",
+            "alpha-notes.md",
+            ".md",
+            timestamp,
+            timestamp,
+            12,
+            indexed_at,
+        ),
+    ]
+    connection.executemany(
+        """
+        INSERT INTO files(
+            full_path, normalized_path,
+            file_name, file_ext, created_at, mtime, size, indexed_at, last_error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+        """,
+        rows,
+    )
+    connection.executemany(
+        """
+        INSERT INTO file_segments(file_id, segment_type, segment_label, content)
+        VALUES (?, 'body', ?, ?)
+        """,
+        [
+            (1, "/workspace/docs/alpha.md", "alpha project memo"),
+            (2, "/archive/alpha-notes.md", "alpha archive memo"),
+        ],
+    )
+    connection.commit()
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="/workspace/docs",
+            search_all_enabled=True,
+            index_depth=5,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["alpha.md"]
+    assert all(item.target_path == "/workspace/docs" for item in result.items)
+    assert ensure_calls == []
 
 
 def test_search_without_full_path_applies_exclude_keywords_to_entire_database(tmp_path: Path) -> None:
@@ -878,3 +1145,48 @@ def _create_connection(tmp_path: Path) -> Connection:
     connection.execute("PRAGMA foreign_keys = ON;")
     initialize_schema(connection)
     return connection
+
+
+def _insert_indexed_markdown(
+    *,
+    connection: Connection,
+    file_name: str,
+    full_path: str,
+    created_at: datetime,
+    mtime: datetime,
+    body: str,
+    click_count: int,
+) -> int:
+    """
+    検索テスト用に、本文付き Markdown ファイルを直接投入する。
+    """
+    indexed_at = datetime(2026, 4, 15, tzinfo=UTC).isoformat()
+    cursor = connection.execute(
+        """
+        INSERT INTO files(
+            full_path, normalized_path, file_name, file_ext,
+            created_at, mtime, size, indexed_at, last_error, click_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+        """,
+        (
+            full_path,
+            full_path,
+            file_name,
+            ".md",
+            created_at.timestamp(),
+            mtime.timestamp(),
+            len(body.encode("utf-8")),
+            indexed_at,
+            click_count,
+        ),
+    )
+    file_id = int(cursor.lastrowid)
+    connection.execute(
+        """
+        INSERT INTO file_segments(file_id, segment_type, segment_label, content)
+        VALUES (?, 'body', 'body', ?)
+        """,
+        (file_id, body),
+    )
+    connection.commit()
+    return file_id

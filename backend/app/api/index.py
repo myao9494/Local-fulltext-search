@@ -36,6 +36,7 @@ def update_app_settings(
     """
     return service.update_app_settings(
         exclude_keywords=payload.exclude_keywords,
+        synonym_groups=payload.synonym_groups,
         index_selected_extensions=payload.index_selected_extensions,
         custom_content_extensions=payload.custom_content_extensions,
         custom_filename_extensions=payload.custom_filename_extensions,

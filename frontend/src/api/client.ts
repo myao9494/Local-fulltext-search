@@ -45,6 +45,7 @@ export async function fetchAppSettings(): Promise<AppSettings> {
 
 export async function updateAppSettings(payload: {
   exclude_keywords?: string;
+  synonym_groups?: string;
   index_selected_extensions?: string;
   custom_content_extensions?: string;
   custom_filename_extensions?: string;
@@ -94,12 +95,15 @@ export async function pickFolder(): Promise<{ full_path: string }> {
 export async function search(params: {
   q: string;
   full_path: string;
+  search_all_enabled?: boolean;
   index_depth: number;
   refresh_window_minutes: number;
   regex_enabled?: boolean;
   index_types?: string;
   types?: string;
   date_field?: "created" | "modified";
+  sort_by?: "created" | "modified" | "click_count";
+  sort_order?: "asc" | "desc";
   created_from?: string;
   created_to?: string;
 }): Promise<SearchResponse> {
@@ -110,5 +114,13 @@ export async function search(params: {
       limit: 20,
       offset: 0,
     }),
+  });
+}
+
+export async function recordSearchClick(fileId: number): Promise<{ file_id: number; click_count: number }> {
+  return request<{ file_id: number; click_count: number }>("/api/search/click", {
+    method: "POST",
+    keepalive: true,
+    body: JSON.stringify({ file_id: fileId }),
   });
 }

@@ -19,6 +19,7 @@ class Settings(BaseModel):
     data_dir: Path = Path(os.getenv("SEARCH_APP_DATA_DIR", str(BACKEND_DIR / "data")))
     database_name: str = os.getenv("SEARCH_APP_DB_NAME", "search.db")
     exclude_keywords_name: str = os.getenv("SEARCH_APP_EXCLUDE_KEYWORDS_NAME", "exclude_keywords.txt")
+    synonym_groups_name: str = os.getenv("SEARCH_APP_SYNONYM_GROUPS_NAME", "synonym_groups.txt")
     index_selected_extensions_name: str = os.getenv("SEARCH_APP_INDEX_SELECTED_EXTENSIONS_NAME", "index_selected_extensions.txt")
     custom_content_extensions_name: str = os.getenv("SEARCH_APP_CUSTOM_CONTENT_EXTENSIONS_NAME", "custom_content_extensions.txt")
     custom_filename_extensions_name: str = os.getenv(
@@ -43,6 +44,7 @@ class Settings(BaseModel):
     @field_validator(
         "database_name",
         "exclude_keywords_name",
+        "synonym_groups_name",
         "index_selected_extensions_name",
         "custom_content_extensions_name",
         "custom_filename_extensions_name",
@@ -63,6 +65,10 @@ class Settings(BaseModel):
     @property
     def exclude_keywords_path(self) -> Path:
         return (self.data_dir / self.exclude_keywords_name).resolve()
+
+    @property
+    def synonym_groups_path(self) -> Path:
+        return (self.data_dir / self.synonym_groups_name).resolve()
 
     @property
     def index_selected_extensions_path(self) -> Path:

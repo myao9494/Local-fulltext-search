@@ -66,6 +66,21 @@ def test_search_query_params_accepts_empty_full_path_for_global_search() -> None
     assert params.full_path == ""
 
 
+def test_search_query_params_accepts_search_all_flag_with_absolute_full_path() -> None:
+    """
+    全 DB 検索フラグ有効時は、復帰用の full_path を保持しても受け付ける。
+    """
+    params = SearchQueryParams(
+        q="alpha",
+        full_path="/tmp/docs",
+        search_all_enabled=True,
+        index_depth=5,
+    )
+
+    assert params.search_all_enabled is True
+    assert params.full_path == "/tmp/docs"
+
+
 def test_search_query_params_accepts_created_date_range() -> None:
     """
     作成日の開始日と終了日は日付型として受け付ける。
@@ -110,3 +125,19 @@ def test_search_query_params_accepts_modified_date_field() -> None:
     )
 
     assert params.date_field == "modified"
+
+
+def test_search_query_params_accepts_sort_options() -> None:
+    """
+    並び替え条件は作成日・編集日・アクセス数を受け付ける。
+    """
+    params = SearchQueryParams(
+        q="alpha",
+        full_path="",
+        index_depth=5,
+        sort_by="click_count",
+        sort_order="asc",
+    )
+
+    assert params.sort_by == "click_count"
+    assert params.sort_order == "asc"

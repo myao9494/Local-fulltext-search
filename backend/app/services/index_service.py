@@ -234,6 +234,7 @@ class IndexService:
         custom_filename_extensions = self._read_persisted_custom_filename_extensions()
         return AppSettingsResponse(
             exclude_keywords=self._read_persisted_exclude_keywords(),
+            synonym_groups=self._read_persisted_synonym_groups(),
             index_selected_extensions=self._read_persisted_index_selected_extensions(
                 custom_content_extensions=custom_content_extensions,
                 custom_filename_extensions=custom_filename_extensions,
@@ -246,6 +247,7 @@ class IndexService:
         self,
         *,
         exclude_keywords: str | None = None,
+        synonym_groups: str | None = None,
         index_selected_extensions: str | None = None,
         custom_content_extensions: str | None = None,
         custom_filename_extensions: str | None = None,
@@ -256,6 +258,9 @@ class IndexService:
         current = self.get_app_settings()
         normalized_exclude_keywords = (
             self._normalize_exclude_keywords(exclude_keywords) if exclude_keywords is not None else current.exclude_keywords
+        )
+        normalized_synonym_groups = (
+            self._normalize_synonym_groups(synonym_groups) if synonym_groups is not None else current.synonym_groups
         )
         normalized_custom_content_extensions = (
             self._normalize_extension_entries(custom_content_extensions)
@@ -281,11 +286,13 @@ class IndexService:
             )
         )
         self._write_persisted_exclude_keywords(normalized_exclude_keywords)
+        self._write_persisted_synonym_groups(normalized_synonym_groups)
         self._write_persisted_custom_content_extensions(normalized_custom_content_extensions)
         self._write_persisted_custom_filename_extensions(normalized_custom_filename_extensions)
         self._write_persisted_index_selected_extensions(normalized_index_selected_extensions)
         return AppSettingsResponse(
             exclude_keywords=normalized_exclude_keywords,
+            synonym_groups=normalized_synonym_groups,
             index_selected_extensions=normalized_index_selected_extensions,
             custom_content_extensions=normalized_custom_content_extensions,
             custom_filename_extensions=normalized_custom_filename_extensions,
@@ -314,6 +321,27 @@ class IndexService:
         path = settings.exclude_keywords_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self._normalize_exclude_keywords(value), encoding="utf-8")
+
+    def _read_persisted_synonym_groups(self) -> str:
+        """
+        同義語リストは 1 行 1 グループのテキストファイルから読み込む。
+        """
+        ensure_data_dir()
+        path = settings.synonym_groups_path
+        if path.exists():
+            return self._normalize_synonym_groups(path.read_text(encoding="utf-8"))
+
+        self._write_persisted_synonym_groups("")
+        return ""
+
+    def _write_persisted_synonym_groups(self, value: str) -> None:
+        """
+        同義語リストをカンマ区切り・1 行 1 グループのプレーンテキストとして保存する。
+        """
+        ensure_data_dir()
+        path = settings.synonym_groups_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._normalize_synonym_groups(value), encoding="utf-8")
 
     def _read_persisted_custom_content_extensions(self) -> str:
         """
@@ -1219,6 +1247,9 @@ class IndexService:
     def _normalize_extension_entries(self, value: str | None) -> str:
         return "\n".join(self._parse_extension_entries(value))
 
+    def _normalize_synonym_groups(self, value: str | None) -> str:
+        return "\n".join(",".join(group) for group in self._parse_synonym_groups(value))
+
     def _normalize_selected_extensions(
         self,
         value: str | None,
@@ -1266,6 +1297,26 @@ class IndexService:
             seen.add(extension)
             extensions.append(extension)
         return extensions
+
+    def _parse_synonym_groups(self, value: str | None) -> list[list[str]]:
+        """
+        同義語リストは 1 行を 1 グループとして解釈し、カンマ区切りで重複を除去する。
+        ASCII は大文字小文字違いを同一語として扱い、元の表記は先勝ちで残す。
+        """
+        groups: list[list[str]] = []
+        for line in (value or "").splitlines():
+            seen: set[str] = set()
+            group: list[str] = []
+            for raw_token in line.replace("，", ",").split(","):
+                token = raw_token.strip()
+                normalized_token = token.casefold()
+                if not token or normalized_token in seen:
+                    continue
+                seen.add(normalized_token)
+                group.append(token)
+            if group:
+                groups.append(group)
+        return groups
 
     def _should_exclude_path(self, path: Path, keywords: list[str]) -> bool:
         """

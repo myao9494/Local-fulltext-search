@@ -10,17 +10,20 @@
 - `.md`
 - `.json`
 - `.txt`
+- `.xml`
+- `.excalidraw`
+- `.dio`
+- `.excalidraw.md`
+- `.dio.svg`
 - `.pdf`
 - `.docx`
 - `.xlsx`
+- `.xlsm`
 - `.pptx`
 - `.msg`
 - 画像系はファイル名のみ検索対象
 
 ### 今回は対象外
-- `.excalidraw`
-- `.drawio`
-- `.drawio.svg`
 - OCR
 
 ## 必須要件
@@ -47,6 +50,7 @@
 
 ### 検索時指定
 - 検索時に対象フォルダのフルパスを指定する
+- 既存インデックス全体を対象に検索する場合は `full_path` を空にできる
 - 検索時に階層数を指定する
 - 事前のフォルダ登録 UI は持たない
 - 必要ならフォルダ選択ダイアログでフルパス入力を補助する
@@ -71,7 +75,9 @@
 ### 対象拡張子
 - ハンバーガーメニューから対象拡張子を選択できる
 - 本文抽出対象とファイル名のみ対象の拡張子を選択できる
+- 本文抽出対象 / ファイル名のみ対象の追加拡張子を保存できる
 - 既定はすべて選択
+- 検索バー側には、インデックス対象設定とは独立した検索結果絞り込み用の拡張子入力を持つ
 
 ## API
 
@@ -79,11 +85,18 @@
 パラメータ:
 - `q`
 - `full_path`
+- `search_all_enabled`
 - `index_depth`
 - `refresh_window_minutes`
 - `regex_enabled`
+- `index_types`
 - `types`
 - `exclude_keywords`
+- `date_field`
+- `sort_by`
+- `sort_order`
+- `created_from`
+- `created_to`
 - `limit`
 - `offset`
 
@@ -97,6 +110,14 @@
 - 総ファイル数
 - エラー件数
 - 実行中フラグ
+- 中止要求フラグ
+
+### `GET /api/index/settings` / `PUT /api/index/settings`
+- 除外キーワード
+- 同義語リスト
+- インデックス対象拡張子
+- 本文抽出対象の追加拡張子
+- ファイル名のみ対象の追加拡張子
 
 ### `GET /api/index/failed-files`
 以下を返す:
@@ -105,13 +126,33 @@
 - エラーメッセージ
 - 最終失敗日時
 
+### `GET /api/index/targets` / `DELETE /api/index/targets`
+- 実際にインデックス済みファイルを含むフォルダ一覧を返す
+- 選択したフォルダ配下のインデックスと失敗履歴をまとめて削除できる
+
+### `POST /api/index/cancel`
+- 実行中インデックスへ中止要求を送る
+
+### `POST /api/index/reset`
+- DB を空の初期状態へ戻す
+
+### `POST /api/search/click`
+- 検索結果オープン時のアクセス数を 1 件加算する
+
 ## UI
 
 ### トップ画面
+- 画面上部のタブで `検索` と `インデックス済みフォルダ` を切り替える
 - 検索対象フォルダのフルパス入力
+- `全データベース` 切り替え
 - 階層数入力
 - 検索ボックス
 - 正規表現トグル
+- 検索拡張子フィルタ入力
+- 日付種別 + 期間フィルタ
+- 並び替え条件
+- インデックス状態表示
+- インデックス中止ボタン
 - Enter で検索
 - 検索ボタン
 - ハンバーガーメニューへの導線
@@ -123,15 +164,27 @@
   - ファイル名
   - パス
   - スニペット
-  - 更新日時
+  - 作成日または更新日
+  - アクセス数
   - フルパスのコピー導線
+  - 親フォルダを開くリンク
 
 ### ハンバーガーメニュー
 - インデックス更新間隔(分)の設定
 - 対象拡張子の選択
+- 追加拡張子の登録 / 削除
 - 除外キーワードの設定
+- 同義語リストの設定
+- 既定検索フォルダの設定
 - 失敗ファイル一覧
+- データベース初期化
 - 状態表示
+
+### インデックス済みフォルダ画面
+- フルパス部分一致で絞り込みできる
+- 絞り込み結果に対する一括選択ができる
+- インデックス済みファイル数と最終インデックス日時を表示する
+- 選択したフォルダ配下のインデックスを削除できる
 
 ## DBテーブル
 
@@ -152,6 +205,8 @@
 - `file_name`
 - `file_ext`
 - `mtime`
+- `created_at`
+- `click_count`
 - `size`
 - `indexed_at`
 - `last_error`
@@ -167,10 +222,27 @@
 - `file_segments` と連携する FTS5 テーブル
 - 本文セグメントに加え、必要に応じて日本語部分一致用の `cjk_bigram` セグメントも保持する
 
+### index_runs
+- `id`
+- `is_running`
+- `cancel_requested`
+- `last_started_at`
+- `last_finished_at`
+- `last_error`
+- `total_files`
+- `error_count`
+
+### failed_files
+- `id`
+- `normalized_path`
+- `file_name`
+- `error_message`
+- `last_failed_at`
+
 ## 完了条件
 
 1. 検索時に `フルパス + 階層数` を指定できる
-2. `.md`, `.json`, `.txt`, `.pdf`, `.docx`, `.xlsx`, `.pptx`, `.msg` をインデックスできる
+2. `.md`, `.json`, `.txt`, `.xml`, `.excalidraw`, `.dio`, `.excalidraw.md`, `.dio.svg`, `.pdf`, `.docx`, `.xlsx`, `.xlsm`, `.pptx`, `.msg` をインデックスできる
 3. 差分更新できる
 4. 一定時間以内の更新は省略できる
 5. 全文検索と一部ファイルのファイル名検索ができる

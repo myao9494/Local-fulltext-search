@@ -31,9 +31,15 @@
 - `.md`
 - `.json`
 - `.txt`
+- `.xml`
+- `.excalidraw`
+- `.dio`
+- `.excalidraw.md`
+- `.dio.svg`
 - `.pdf`
 - `.docx`
 - `.xlsx`
+- `.xlsm`
 - `.pptx`
 - `.msg`
 
@@ -58,10 +64,9 @@
 - `.alac`
 - `.m4p`
 
-### 将来対応
-- `.excalidraw`
-- `.drawio`
-- `.drawio.svg`
+### 設定から追加可能
+- 本文抽出対象として任意のテキスト拡張子を追加できる
+- ファイル名のみ検索対象として任意の拡張子を追加できる
 
 ## 仕様書
 
@@ -90,7 +95,7 @@
 
 現時点では、以下を実装しています。
 
-- 対象ファイルは `.md` / `.json` / `.txt` / `.pdf` / `.docx` / `.xlsx` / `.pptx` / `.msg`
+- 対象ファイルは上記「対応ファイル」の既定拡張子一式
 - 画像・音声ファイルはファイル名のみ検索対象にできる
 - FastAPI バックエンド
 - React + Vite フロントエンド
@@ -105,7 +110,7 @@
 今回は以下を実装していません。
 
 - OCR
-- Excalidraw / draw.io
+- 追加拡張子向けの専用抽出器拡充
 - インターネット公開向けの認証・防御
 
 ## ディレクトリ構成
@@ -311,9 +316,11 @@ VITE_API_BASE_URL=http://mac-mini:8079 npm run build
 
 `対象拡張子` について:
 
-- 現在選択できるのは `.md`, `.json`, `.txt`, `.pdf`, `.docx`, `.xlsx`, `.xlsm`, `.pptx`, `.msg` と画像・音声系拡張子
+- 既定で選択できるのは `.md`, `.json`, `.txt`, `.xml`, `.excalidraw`, `.dio`, `.excalidraw.md`, `.dio.svg`, `.pdf`, `.docx`, `.xlsx`, `.xlsm`, `.pptx`, `.msg` と画像・音声系拡張子
 - デフォルトはすべて選択
 - ハンバーガーメニュー内で変更できる
+- 本文抽出対象 / ファイル名のみ対象の追加拡張子も保存できる
+- 検索バー右側の拡張子入力は検索結果の絞り込み用で、インデックス対象設定とは別
 
 ## 他端末での復旧
 
@@ -343,6 +350,7 @@ DB について:
 - バックエンド起動時に `data` ディレクトリが自動作成される
 - スキーマはアプリ起動時に自動作成される
 - 既定の DB パスは、起動ディレクトリに依存せず常に `backend/data/search.db`
+- 同じ `backend/data/` 配下に `exclude_keywords.txt`, `synonym_groups.txt`, `index_selected_extensions.txt`, `custom_content_extensions.txt`, `custom_filename_extensions.txt` も保存される
 - 保存先を変えたい場合は `SEARCH_APP_DATA_DIR` と `SEARCH_APP_DB_NAME` で上書きできる
 
 例:
@@ -366,27 +374,47 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 
 ## API 概要
 
+- `GET /api/health`
 - `POST /api/folders/pick`
 - `GET /api/index/status`
+- `GET /api/index/settings`
+- `PUT /api/index/settings`
 - `GET /api/index/failed-files`
+- `GET /api/index/targets`
+- `DELETE /api/index/targets`
+- `POST /api/index/cancel`
+- `POST /api/index/reset`
 - `GET /api/search`
 - `POST /api/search`
+- `POST /api/search/click`
 
 ### `GET /api/search`
 
 必須:
 
 - `q`
-- `full_path`
-  - 絶対パス、または Windows の UNC パスを指定する
 - `index_depth`
 
 任意:
 
+- `full_path`
+  - 絶対パス、または Windows の UNC パスを指定する
+  - 空文字なら既存 DB 全体を対象に検索する
+- `search_all_enabled`
+  - UI の「全データベース」状態を渡すためのフラグ
+  - `full_path` も同時に渡した場合は、そのパス条件を保持したままオンデマンド再インデックスだけ抑止する
 - `refresh_window_minutes`
 - `regex_enabled`
+- `index_types`
+  - 検索前のオンデマンド再インデックス対象拡張子
 - `types`
+  - 検索結果を絞り込む拡張子
 - `exclude_keywords`
+- `date_field`
+- `sort_by`
+- `sort_order`
+- `created_from`
+- `created_to`
 - `limit`
 - `offset`
 
@@ -447,8 +475,10 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 - `q`
 - `full_path`
 - `index_depth` 省略時は `1`
+- `search_all`
+  - `1`, `true`, `yes`, `on` のいずれかで有効
 
-`q` と `full_path` の両方があると、初回表示時に自動で検索を実行します。
+`q` と `full_path` の両方がある場合、または `q` と `search_all` がある場合は、初回表示時に自動で検索を実行します。
 
 例:
 
@@ -525,4 +555,4 @@ Invoke-RestMethod `
 
 - 現在のドキュメントはコードを正として更新しています
 - 以前の「フォルダ登録ベース」の記述は現行実装とは一致しません
-- VPN 経由で使う場合、フロントエンドは `mac-mini` などアクセス元で解決できるホスト名で API を参照する必要があります
+- VPN 経由で Vite 開発サーバを使う場合は、`frontend/vite.config.ts` の `allowedHosts` と `VITE_API_BASE_URL` を環境に合わせて調整してください
