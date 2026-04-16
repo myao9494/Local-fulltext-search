@@ -7,7 +7,14 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import get_search_service
-from app.models.search import SearchClickRequest, SearchClickResponse, SearchQueryParams, SearchRequest, SearchResponse
+from app.models.search import (
+    IndexedSearchRequest,
+    SearchClickRequest,
+    SearchClickResponse,
+    SearchQueryParams,
+    SearchRequest,
+    SearchResponse,
+)
 from app.services.search_service import SearchService
 
 router = APIRouter(prefix="/api", tags=["search"])
@@ -60,6 +67,17 @@ def search_with_body(
     service: SearchService = Depends(get_search_service),
 ) -> SearchResponse:
     return service.search(params)
+
+
+@router.post("/search/indexed", response_model=SearchResponse)
+def search_existing_index(
+    params: IndexedSearchRequest,
+    service: SearchService = Depends(get_search_service),
+) -> SearchResponse:
+    """
+    既存インデックスだけを使って検索し、必要な再インデックスは行わない。
+    """
+    return service.search_existing_index(params)
 
 
 @router.post("/search/click", response_model=SearchClickResponse)

@@ -14,16 +14,16 @@ test("parseLaunchParams は full_path と q と index_depth を取り出す", ()
   });
 });
 
-test("parseLaunchParams は index_depth が無いとき既定値 1 を使う", () => {
+test("parseLaunchParams は index_depth が無いとき既定値 5 を使う", () => {
   const params = parseLaunchParams("?full_path=%2Ftmp%2Fdocs&q=keyword");
 
-  assert.equal(params.indexDepth, "1");
+  assert.equal(params.indexDepth, "5");
 });
 
-test("parseLaunchParams は不正な index_depth を既定値 1 に丸める", () => {
+test("parseLaunchParams は不正な index_depth を既定値 5 に丸める", () => {
   const params = parseLaunchParams("?full_path=%2Ftmp%2Fdocs&q=keyword&index_depth=-1");
 
-  assert.equal(params.indexDepth, "1");
+  assert.equal(params.indexDepth, "5");
 });
 
 test("shouldAutoSearch は q と fullPath がそろったときだけ true を返す", () => {

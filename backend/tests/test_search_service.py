@@ -899,6 +899,49 @@ def test_search_without_full_path_matches_across_entire_database(tmp_path: Path)
     assert all(item.target_path == "" for item in result.items)
 
 
+def test_search_existing_index_uses_existing_db_without_reindex_and_without_depth_limit(tmp_path: Path) -> None:
+    """
+    既存インデックス専用検索は再インデックスせず、指定フォルダ配下を深さ無制限で検索する。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    ensure_calls: list[dict[str, object]] = []
+    service.index_service.ensure_fresh_target = lambda **kwargs: ensure_calls.append(kwargs)
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="root.md",
+        full_path="/workspace/docs/root.md",
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="alpha root memo",
+        click_count=0,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="deep.md",
+        full_path="/workspace/docs/a/b/c/d/e/deep.md",
+        created_at=datetime(2026, 4, 11, tzinfo=UTC),
+        mtime=datetime(2026, 4, 11, tzinfo=UTC),
+        body="alpha deep memo",
+        click_count=0,
+    )
+
+    from app.models.search import IndexedSearchRequest
+
+    result = service.search_existing_index(
+        IndexedSearchRequest(
+            q="alpha",
+            folder_path="/workspace/docs",
+        )
+    )
+
+    assert result.total == 2
+    assert sorted(item.file_name for item in result.items) == ["deep.md", "root.md"]
+    assert all(item.target_path == "/workspace/docs" for item in result.items)
+    assert ensure_calls == []
+
+
 def test_search_all_enabled_with_full_path_limits_results_to_that_path(tmp_path: Path) -> None:
     """
     全 DB 検索フラグが有効でも full_path があれば、その配下だけを検索対象にする。

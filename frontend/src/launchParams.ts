@@ -8,6 +8,8 @@ export type LaunchParams = {
   searchAll: boolean;
 };
 
+const DEFAULT_INDEX_DEPTH = "5";
+
 /**
  * URLSearchParams から画面初期値を生成する。
  */
@@ -38,12 +40,12 @@ export function shouldAutoSearch(params: LaunchParams): boolean {
  */
 function normalizeIndexDepth(value: string): string {
   if (value.length === 0) {
-    return "1";
+    return DEFAULT_INDEX_DEPTH;
   }
 
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) {
-    return "1";
+    return DEFAULT_INDEX_DEPTH;
   }
 
   return String(parsed);

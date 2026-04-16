@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 
 from app.db.connection import get_connection
 from app.extractors.text_extractor import normalize_extension_filter
-from app.models.search import SearchQueryParams, SearchResponse, SearchResultItem
+from app.models.search import IndexedSearchRequest, SearchQueryParams, SearchResponse, SearchResultItem
 from app.services.cjk_bigram import build_cjk_bigram_match_query
 from app.services.index_service import IndexService
 from app.services.path_service import get_descendant_path_prefix, get_descendant_path_range, normalize_path, normalize_path_str
@@ -41,12 +41,58 @@ class SearchService:
                 types=params.index_types,
             )
 
+        return self._execute_search(
+            params=params,
+            normalized_target_path=normalized_target_path,
+            excluded_keywords=excluded_keywords,
+            app_settings=app_settings,
+            path_depth_limit=params.index_depth,
+        )
+
+    def search_existing_index(self, params: IndexedSearchRequest) -> SearchResponse:
+        """
+        既存 DB だけを使って検索する。
+        対象フォルダ配下を深さ無制限で絞り込むが、インデックス更新は行わない。
+        """
+        normalized_target_path = normalize_path_str(params.folder_path)
+        app_settings = self.index_service.get_app_settings()
+        excluded_keywords = self.index_service._parse_exclude_keywords(app_settings.exclude_keywords)
+        search_params = SearchQueryParams(
+            q=params.q,
+            full_path=params.folder_path,
+            search_all_enabled=True,
+            index_depth=0,
+            refresh_window_minutes=0,
+            limit=params.limit,
+            offset=params.offset,
+        )
+        return self._execute_search(
+            params=search_params,
+            normalized_target_path=normalized_target_path,
+            excluded_keywords=excluded_keywords,
+            app_settings=app_settings,
+            path_depth_limit=None,
+        )
+
+    def _execute_search(
+        self,
+        *,
+        params: SearchQueryParams,
+        normalized_target_path: str,
+        excluded_keywords: list[str],
+        app_settings,
+        path_depth_limit: int | None,
+    ) -> SearchResponse:
+        """
+        FTS / 正規表現の分岐だけをまとめ、共通前処理を再利用する。
+        """
         if params.regex_enabled:
             return self._search_with_regex(
                 params=params,
                 normalized_target_path=normalized_target_path,
                 excluded_keywords=excluded_keywords,
                 app_settings=app_settings,
+                path_depth_limit=path_depth_limit,
             )
 
         return self._search_with_fts(
@@ -54,6 +100,7 @@ class SearchService:
             normalized_target_path=normalized_target_path,
             excluded_keywords=excluded_keywords,
             app_settings=app_settings,
+            path_depth_limit=path_depth_limit,
         )
 
     def record_click(self, file_id: int) -> int:
@@ -82,6 +129,7 @@ class SearchService:
         normalized_target_path: str,
         excluded_keywords: list[str],
         app_settings,
+        path_depth_limit: int | None,
     ) -> SearchResponse:
         """
         通常モードでは既存の FTS5 ベース全文検索を利用する。
@@ -89,7 +137,7 @@ class SearchService:
         """
         where_clause, values = self._build_common_filters(
             normalized_target_path=normalized_target_path,
-            index_depth=params.index_depth,
+            path_depth_limit=path_depth_limit,
             types=params.types,
             date_field=params.date_field,
             created_from=params.created_from,
@@ -373,6 +421,7 @@ class SearchService:
         normalized_target_path: str,
         excluded_keywords: list[str],
         app_settings,
+        path_depth_limit: int | None,
     ) -> SearchResponse:
         """
         正規表現モードでは Python の re で本文とファイル名を評価する。
@@ -380,7 +429,7 @@ class SearchService:
         """
         where_clause, values = self._build_common_filters(
             normalized_target_path=normalized_target_path,
-            index_depth=params.index_depth,
+            path_depth_limit=path_depth_limit,
             types=params.types,
             date_field=params.date_field,
             created_from=params.created_from,
@@ -657,7 +706,7 @@ class SearchService:
         self,
         *,
         normalized_target_path: str,
-        index_depth: int,
+        path_depth_limit: int | None,
         types: str | None,
         date_field: str = "created",
         created_from: date | None = None,
@@ -674,13 +723,17 @@ class SearchService:
 
         if normalized_target_path:
             prefix_start, prefix_end = get_descendant_path_range(normalized_target_path)
-            descendant_prefix = get_descendant_path_prefix(normalized_target_path)
-            depth_expression = (
-                "(length(files.normalized_path) - length(replace(files.normalized_path, '/', '')))"
-                " - (length(?) - length(replace(?, '/', '')))"
-            )
-            filters.extend(["files.normalized_path >= ?", "files.normalized_path < ?", f"{depth_expression} <= ?"])
-            values.extend([prefix_start, prefix_end, descendant_prefix, descendant_prefix, index_depth])
+            filters.extend(["files.normalized_path >= ?", "files.normalized_path < ?"])
+            values.extend([prefix_start, prefix_end])
+
+            if path_depth_limit is not None:
+                descendant_prefix = get_descendant_path_prefix(normalized_target_path)
+                depth_expression = (
+                    "(length(files.normalized_path) - length(replace(files.normalized_path, '/', '')))"
+                    " - (length(?) - length(replace(?, '/', '')))"
+                )
+                filters.append(f"{depth_expression} <= ?")
+                values.extend([descendant_prefix, descendant_prefix, path_depth_limit])
 
         if types:
             extensions = sorted(

@@ -6,6 +6,19 @@ from pydantic import BaseModel, Field, field_validator
 from app.services.path_service import AbsolutePathRequiredError, normalize_path
 
 
+def _validate_absolute_path_or_unc(value: str, *, field_name: str) -> str:
+    """
+    API で受け取る検索対象パスは、絶対パスまたは UNC パスだけを許可する。
+    """
+    if value == "":
+        return value
+    try:
+        normalize_path(value)
+    except AbsolutePathRequiredError as error:
+        raise ValueError(f"{field_name} must be an absolute path or Windows UNC path.") from error
+    return value
+
+
 class SearchResultItem(BaseModel):
     file_id: int
     target_path: str
@@ -47,13 +60,7 @@ class SearchQueryParams(BaseModel):
         """
         検索対象パスは、現在の作業ディレクトリに依存しない絶対パスだけを受け付ける。
         """
-        if value == "":
-            return value
-        try:
-            normalize_path(value)
-        except AbsolutePathRequiredError as error:
-            raise ValueError("full_path must be an absolute path or Windows UNC path.") from error
-        return value
+        return _validate_absolute_path_or_unc(value, field_name="full_path")
 
     @field_validator("created_to")
     @classmethod
@@ -69,6 +76,26 @@ class SearchQueryParams(BaseModel):
 
 class SearchRequest(SearchQueryParams):
     pass
+
+
+class IndexedSearchRequest(BaseModel):
+    """
+    既存インデックス専用検索の入力。
+    既存 DB だけを対象にし、再インデックスは行わない。
+    """
+
+    q: str = Field(min_length=1)
+    folder_path: str
+    limit: int = Field(default=20, ge=1, le=1000)
+    offset: int = Field(default=0, ge=0)
+
+    @field_validator("folder_path")
+    @classmethod
+    def validate_folder_path_is_absolute(cls, value: str) -> str:
+        """
+        対象フォルダは絶対パスまたは UNC パスだけを受け付ける。
+        """
+        return _validate_absolute_path_or_unc(value, field_name="folder_path")
 
 
 class SearchClickRequest(BaseModel):

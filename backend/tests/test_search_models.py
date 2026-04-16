@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.models.search import SearchQueryParams
+from app.models.search import IndexedSearchRequest, SearchQueryParams
 
 
 def test_search_query_params_accepts_absolute_full_path(tmp_path: Path) -> None:
@@ -141,3 +141,26 @@ def test_search_query_params_accepts_sort_options() -> None:
 
     assert params.sort_by == "click_count"
     assert params.sort_order == "asc"
+
+
+def test_indexed_search_request_accepts_absolute_folder_path() -> None:
+    """
+    既存 DB 検索用の folder_path は絶対パスなら受け付ける。
+    """
+    params = IndexedSearchRequest(
+        q="alpha",
+        folder_path="/tmp/docs",
+    )
+
+    assert params.folder_path == "/tmp/docs"
+
+
+def test_indexed_search_request_rejects_relative_folder_path() -> None:
+    """
+    既存 DB 検索用の folder_path に相対パスは受け付けない。
+    """
+    with pytest.raises(ValidationError):
+        IndexedSearchRequest(
+            q="alpha",
+            folder_path="docs",
+        )

@@ -386,6 +386,7 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 - `POST /api/index/reset`
 - `GET /api/search`
 - `POST /api/search`
+- `POST /api/search/indexed`
 - `POST /api/search/click`
 
 ### `GET /api/search`
@@ -423,6 +424,7 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 - 外部アプリ連携では、こちらを推奨
 - JSON body で受けるので、Windows の UNC パスや日本語パスを扱いやすい
 - パラメータは `GET /api/search` と同じ
+- 指定フォルダのインデックスが古い場合は、必要に応じて再インデックスしてから検索する
 
 例:
 
@@ -437,6 +439,23 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
   "exclude_keywords": "node_modules\n.git",
   "limit": 20,
   "offset": 0
+}
+```
+
+### `POST /api/search/indexed`
+
+- 既存 DB だけを使って検索する
+- 入力は `q` と `folder_path`
+- `folder_path` 配下を深さ無制限で検索する
+- 再インデックスは行わない
+- 既に作成済みの DB を使った高速な絞り込み用途に向いている
+
+例:
+
+```json
+{
+  "q": "見積",
+  "folder_path": "\\\\vss45\\一行課\\資料"
 }
 ```
 
@@ -459,7 +478,8 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 
 他アプリから本アプリを呼び出す場合は、UI 用 URL を開くより、バックエンド API を直接呼ぶ方が扱いやすいです。
 
-- 推奨: `POST /api/search`
+- 最新化しながら検索したい: `POST /api/search`
+- 既存 DB だけで検索したい: `POST /api/search/indexed`
 - ブラウザや手動確認向け: `GET /api/search`
 
 理由:
