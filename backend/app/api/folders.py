@@ -52,13 +52,34 @@ def _pick_folder_macos() -> str:
 
 
 def _pick_folder_windows() -> str:
+    # 一時的な最前面フォームを親にしてダイアログを開き、
+    # ブラウザや他ウィンドウの背後へ回り込みにくくする。
     script = (
         "Add-Type -AssemblyName System.Windows.Forms; "
+        "Add-Type -AssemblyName System.Drawing; "
+        "$owner = New-Object System.Windows.Forms.Form; "
+        "$owner.Text = 'FolderPickerOwner'; "
+        "$owner.ShowInTaskbar = $false; "
+        "$owner.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow; "
+        "$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual; "
+        "$owner.Location = New-Object System.Drawing.Point(-32000, -32000); "
+        "$owner.Size = New-Object System.Drawing.Size(1, 1); "
+        "$owner.Opacity = 0; "
+        "$owner.TopMost = $true; "
         "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; "
         "$dialog.Description = '検索対象フォルダを選択'; "
         "$dialog.ShowNewFolderButton = $false; "
-        "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { "
-        "[Console]::Write($dialog.SelectedPath) }"
+        "try { "
+        "$owner.Show(); "
+        "$owner.Activate(); "
+        "$owner.BringToFront(); "
+        "if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { "
+        "[Console]::Write($dialog.SelectedPath) } "
+        "} finally { "
+        "$dialog.Dispose(); "
+        "$owner.Close(); "
+        "$owner.Dispose(); "
+        "}"
     )
     result = subprocess.run(
         ["powershell", "-NoProfile", "-Command", script],

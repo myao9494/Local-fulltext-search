@@ -1,6 +1,7 @@
 import type { AppSettings, FailedFileListResponse, IndexedTargetListResponse, IndexStatus, SearchResponse } from "../types";
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
+const API_BASE = (import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL ?? "";
+const SEARCH_PAGE_SIZE = 1000;
 
 type ApiErrorDetail = {
   msg?: string;
@@ -107,14 +108,35 @@ export async function search(params: {
   created_from?: string;
   created_to?: string;
 }): Promise<SearchResponse> {
-  return request<SearchResponse>("/api/search", {
-    method: "POST",
-    body: JSON.stringify({
-      ...params,
-      limit: 20,
-      offset: 0,
-    }),
-  });
+  const items = [];
+  let total = 0;
+  let offset = 0;
+
+  while (true) {
+    const response = await request<SearchResponse>("/api/search", {
+      method: "POST",
+      body: JSON.stringify({
+        ...params,
+        limit: SEARCH_PAGE_SIZE,
+        offset,
+      }),
+    });
+
+    if (offset === 0) {
+      total = response.total;
+    }
+
+    items.push(...response.items);
+
+    if (response.items.length === 0 || items.length >= response.total) {
+      return {
+        total,
+        items,
+      };
+    }
+
+    offset += response.items.length;
+  }
 }
 
 export async function recordSearchClick(fileId: number): Promise<{ file_id: number; click_count: number }> {

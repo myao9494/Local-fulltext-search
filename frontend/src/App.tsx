@@ -15,6 +15,7 @@ import {
 } from "./api/client";
 import { ResultsList } from "./components/ResultsList";
 import { SearchBar } from "./components/SearchBar";
+import { filterSearchResultsByExtensions, normalizeExtensionToken } from "./extensionFilter";
 import { parseLaunchParams, shouldAutoSearch } from "./launchParams";
 import type { FailedFile, IndexedTarget, IndexStatus, SearchResult } from "./types";
 
@@ -123,17 +124,6 @@ function normalizeSynonymGroups(value: string | null | undefined): string {
  */
 function normalizeDefaultSearchPath(value: string): string {
   return value.trim();
-}
-
-/**
- * 拡張子入力は `.md` 形式へ正規化し、空値は捨てる。
- */
-function normalizeExtensionToken(value: string): string {
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
 }
 
 /**
@@ -297,6 +287,7 @@ function App() {
     customContentExtensions.join(" ") !== savedCustomContentExtensions.join(" ") ||
     customFilenameExtensions.join(" ") !== savedCustomFilenameExtensions.join(" ");
   const sortedResults = sortSearchResults(results, { sortBy, sortOrder });
+  const visibleResults = filterSearchResultsByExtensions(sortedResults, searchFilterText);
 
   async function refreshIndexStatus(): Promise<void> {
     setIndexStatus(await fetchIndexStatus());
@@ -433,7 +424,6 @@ function App() {
         refresh_window_minutes: parsedWindow,
         regex_enabled: isRegexEnabled,
         index_types: selectedIndexExtensions.join(" "),
-        types: searchFilterText,
         date_field: dateField,
         sort_by: sortBy,
         sort_order: sortOrder,
@@ -885,9 +875,9 @@ function App() {
           <section>
             <div className="section-header">
               <h2>Search Results</h2>
-              <span>{sortedResults.length}件</span>
+              <span>{searchFilterText.trim() ? `${visibleResults.length} / ${sortedResults.length}件` : `${visibleResults.length}件`}</span>
             </div>
-            <ResultsList items={sortedResults} dateField={dateField} onResultOpen={handleResultOpen} />
+            <ResultsList items={visibleResults} dateField={dateField} onResultOpen={handleResultOpen} />
           </section>
         ) : (
           <section className="indexed-targets-panel">
