@@ -12,12 +12,14 @@ from app.api.index import (
     delete_indexed_targets,
     get_app_settings,
     get_indexed_targets,
+    get_scheduler_settings,
     reset_database,
+    start_scheduler,
     update_app_settings,
 )
 from app.config import settings
 from app.main import create_app
-from app.models.indexing import AppSettingsUpdateRequest, DeleteIndexedFoldersRequest
+from app.models.indexing import AppSettingsUpdateRequest, DeleteIndexedFoldersRequest, SchedulerUpdateRequest
 
 
 class StubIndexService:
@@ -34,6 +36,17 @@ class StubIndexService:
         self.saved_index_selected_extensions = ".md\n.json"
         self.saved_custom_content_extensions = ".py\n.dat"
         self.saved_custom_filename_extensions = ".CAE"
+        self.scheduler_payload = {
+            "paths": ["/tmp/docs", "/tmp/share"],
+            "start_at": "2026-04-20T00:00:00+00:00",
+            "is_enabled": True,
+            "status": "scheduled",
+            "last_started_at": None,
+            "last_finished_at": None,
+            "current_path": None,
+            "last_error": None,
+            "logs": [],
+        }
 
     def reset_database(self) -> None:
         self.did_reset = True
@@ -134,6 +147,27 @@ class StubIndexService:
             self.saved_custom_filename_extensions = custom_filename_extensions
         return self.get_app_settings()
 
+    def get_scheduler_settings(self) -> object:
+        class SchedulerSettings:
+            def __init__(self, payload: dict[str, object]) -> None:
+                self.payload = payload
+
+            def model_dump(self) -> dict[str, object]:
+                return self.payload
+
+        return SchedulerSettings(self.scheduler_payload)
+
+    def schedule_indexing(self, *, paths: list[str], start_at) -> object:
+        self.scheduler_payload = {
+            **self.scheduler_payload,
+            "paths": paths,
+            "start_at": start_at.isoformat(),
+            "is_enabled": True,
+            "status": "scheduled",
+            "logs": [],
+        }
+        return self.get_scheduler_settings()
+
 
 def test_reset_database_endpoint_returns_status_payload() -> None:
     """
@@ -229,6 +263,38 @@ def test_update_app_settings_endpoint_returns_updated_settings() -> None:
     assert payload["custom_filename_extensions"] == ".cae"
 
 
+def test_get_scheduler_settings_endpoint_returns_saved_schedule() -> None:
+    """
+    ルート関数は保存済みのスケジューラー設定をそのまま返す。
+    """
+    service = StubIndexService()
+
+    payload = get_scheduler_settings(service)
+
+    assert payload["paths"] == ["/tmp/docs", "/tmp/share"]
+    assert payload["status"] == "scheduled"
+    assert payload["is_enabled"] is True
+
+
+def test_start_scheduler_endpoint_returns_scheduled_settings() -> None:
+    """
+    ルート関数はスケジュール開始要求をサービスへ渡し、保存後の値を返す。
+    """
+    service = StubIndexService()
+
+    payload = start_scheduler(
+        SchedulerUpdateRequest(
+            paths=["/tmp/docs", "/tmp/share"],
+            start_at="2026-04-21T09:30:00+09:00",
+        ),
+        service,
+    )
+
+    assert payload["paths"] == ["/tmp/docs", "/tmp/share"]
+    assert payload["start_at"] == "2026-04-21T09:30:00+09:00"
+    assert payload["status"] == "scheduled"
+
+
 def test_reset_database_route_is_registered(tmp_path: Path, monkeypatch) -> None:
     """
     create_app 後のルータに POST /api/index/reset が登録される。
@@ -309,3 +375,23 @@ def test_app_settings_routes_are_registered(tmp_path: Path, monkeypatch) -> None
 
     assert first_get_match.path == "/api/index/settings"
     assert first_put_match.path == "/api/index/settings"
+
+
+def test_scheduler_routes_are_registered(tmp_path: Path, monkeypatch) -> None:
+    """
+    create_app 後のルータにスケジューラー取得・開始 API が登録される。
+    """
+    frontend_dist = tmp_path / "dist"
+    frontend_dist.mkdir()
+    (frontend_dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    monkeypatch.setattr(settings, "frontend_dist_dir", frontend_dist)
+
+    app = create_app()
+    get_scope = {"type": "http", "path": "/api/index/scheduler", "method": "GET"}
+    post_scope = {"type": "http", "path": "/api/index/scheduler/start", "method": "POST"}
+
+    first_get_match = next(route for route in app.router.routes if route.matches(get_scope)[0] == Match.FULL)
+    first_post_match = next(route for route in app.router.routes if route.matches(post_scope)[0] == Match.FULL)
+
+    assert first_get_match.path == "/api/index/scheduler"
+    assert first_post_match.path == "/api/index/scheduler/start"

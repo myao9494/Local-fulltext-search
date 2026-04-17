@@ -1,4 +1,11 @@
-import type { AppSettings, FailedFileListResponse, IndexedTargetListResponse, IndexStatus, SearchResponse } from "../types";
+import type {
+  AppSettings,
+  FailedFileListResponse,
+  IndexedTargetListResponse,
+  IndexStatus,
+  SchedulerSettings,
+  SearchResponse,
+} from "../types";
 
 const API_BASE = (import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL ?? "";
 const SEARCH_PAGE_SIZE = 1000;
@@ -42,6 +49,17 @@ export async function fetchIndexStatus(): Promise<IndexStatus> {
 
 export async function fetchAppSettings(): Promise<AppSettings> {
   return request<AppSettings>("/api/index/settings");
+}
+
+export async function fetchSchedulerSettings(): Promise<SchedulerSettings> {
+  return request<SchedulerSettings>("/api/index/scheduler");
+}
+
+export async function startScheduler(payload: { paths: string[]; start_at: string }): Promise<SchedulerSettings> {
+  return request<SchedulerSettings>("/api/index/scheduler/start", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function updateAppSettings(payload: {

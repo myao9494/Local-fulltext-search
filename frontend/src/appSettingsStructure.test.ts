@@ -10,6 +10,41 @@ const clientPath = path.join(currentDirectory, "api", "client.ts");
 const appStylesPath = path.join(currentDirectory, "styles", "app.css");
 
 /**
+ * ハンバーガーメニューからスケジューラー画面へ遷移できる。
+ */
+test("設定メニューにスケジューラー導線を追加する", () => {
+  const source = readFileSync(appPath, "utf-8");
+  const clientSource = readFileSync(clientPath, "utf-8");
+  const styleSource = readFileSync(appStylesPath, "utf-8");
+
+  assert.match(source, /type PageView = "search" \| "indexed-targets" \| "scheduler"/);
+  assert.match(source, /スケジューラー/);
+  assert.match(source, /handleOpenSchedulerPage/);
+  assert.match(source, /pageView === "scheduler"/);
+  assert.match(clientSource, /fetchSchedulerSettings/);
+  assert.match(clientSource, /startScheduler/);
+  assert.match(styleSource, /\.scheduler-panel\s*\{/);
+});
+
+/**
+ * スケジューラー画面では複数パスと開始日時を指定し、ログを確認できる。
+ */
+test("スケジューラー画面に複数パス設定と開始ログ表示を追加する", () => {
+  const source = readFileSync(appPath, "utf-8");
+
+  assert.match(source, /schedulerPaths/);
+  assert.match(source, /schedulerStartAt/);
+  assert.match(source, /handleAddSchedulerPath/);
+  assert.match(source, /handleStartScheduler/);
+  assert.match(source, /type="datetime-local"/);
+  assert.match(source, /フォルダを追加/);
+  assert.match(source, /開始日時/);
+  assert.match(source, /スケジュール開始/);
+  assert.match(source, /schedulerState\.logs\.map/);
+  assert.match(source, /ログ/);
+});
+
+/**
  * ハンバーガーメニュー内に、確認付きで DB 初期化を呼べる危険操作ボタンを置く。
  */
 test("設定メニューにデータベース初期化ボタンを表示する", () => {

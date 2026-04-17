@@ -33,13 +33,17 @@ class SearchService:
         )
         excluded_keywords = self.index_service._parse_exclude_keywords(effective_exclude_keywords)
         if normalized_target_path and not params.search_all_enabled:
-            self.index_service.ensure_fresh_target(
-                full_path=normalized_target_path,
-                refresh_window_minutes=params.refresh_window_minutes,
-                exclude_keywords=effective_exclude_keywords,
-                index_depth=params.index_depth,
-                types=params.index_types,
-            )
+            try:
+                self.index_service.ensure_fresh_target(
+                    full_path=normalized_target_path,
+                    refresh_window_minutes=params.refresh_window_minutes,
+                    exclude_keywords=effective_exclude_keywords,
+                    index_depth=params.index_depth,
+                    types=params.index_types,
+                )
+            except HTTPException as error:
+                if error.status_code != status.HTTP_409_CONFLICT:
+                    raise
 
         return self._execute_search(
             params=params,

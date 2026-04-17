@@ -71,6 +71,60 @@ SCHEMA_STATEMENTS: list[str] = [
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS scheduler_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        start_at TEXT,
+        is_enabled INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+    );
+    """,
+    """
+    INSERT INTO scheduler_settings (id, start_at, is_enabled, updated_at)
+    VALUES (1, NULL, 0, CURRENT_TIMESTAMP)
+    ON CONFLICT(id) DO NOTHING;
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS scheduler_paths (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scheduler_id INTEGER NOT NULL,
+        folder_path TEXT NOT NULL,
+        sort_order INTEGER NOT NULL,
+        FOREIGN KEY(scheduler_id) REFERENCES scheduler_settings(id) ON DELETE CASCADE
+    );
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduler_paths_unique_order
+    ON scheduler_paths(scheduler_id, sort_order);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS scheduler_runtime (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        status TEXT NOT NULL DEFAULT 'idle',
+        current_path TEXT,
+        process_id INTEGER,
+        run_token TEXT,
+        last_started_at TEXT,
+        last_finished_at TEXT,
+        last_error TEXT
+    );
+    """,
+    """
+    INSERT INTO scheduler_runtime (
+        id, status, current_path, process_id, run_token, last_started_at, last_finished_at, last_error
+    )
+    VALUES (1, 'idle', NULL, NULL, NULL, NULL, NULL, NULL)
+    ON CONFLICT(id) DO NOTHING;
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS scheduler_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        logged_at TEXT NOT NULL,
+        level TEXT NOT NULL,
+        message TEXT NOT NULL,
+        folder_path TEXT
+    );
+    """,
+    """
     CREATE TRIGGER IF NOT EXISTS file_segments_ai AFTER INSERT ON file_segments BEGIN
         INSERT INTO file_segments_fts(rowid, content, segment_label)
         VALUES (new.id, new.content, new.segment_label);
@@ -166,15 +220,36 @@ def _needs_schema_reset(connection: Connection) -> bool:
         "error_count",
     }
     expected_failed_file_columns = {"id", "normalized_path", "file_name", "error_message", "last_failed_at"}
+    expected_scheduler_settings_columns = {"id", "start_at", "is_enabled", "updated_at"}
+    expected_scheduler_paths_columns = {"id", "scheduler_id", "folder_path", "sort_order"}
+    expected_scheduler_runtime_columns = {
+        "id",
+        "status",
+        "current_path",
+        "process_id",
+        "run_token",
+        "last_started_at",
+        "last_finished_at",
+        "last_error",
+    }
+    expected_scheduler_logs_columns = {"id", "logged_at", "level", "message", "folder_path"}
     if legacy_folder_columns:
         return True
     index_run_columns = _get_columns(connection, "index_runs")
+    scheduler_settings_columns = _get_columns(connection, "scheduler_settings")
+    scheduler_paths_columns = _get_columns(connection, "scheduler_paths")
+    scheduler_runtime_columns = _get_columns(connection, "scheduler_runtime")
+    scheduler_logs_columns = _get_columns(connection, "scheduler_logs")
     legacy_file_columns = expected_file_columns - {"click_count"}
     return (
         target_columns != expected_target_columns
         or (file_columns != expected_file_columns and file_columns != legacy_file_columns)
         or index_run_columns != expected_index_run_columns
         or failed_file_columns != expected_failed_file_columns
+        or (scheduler_settings_columns and scheduler_settings_columns != expected_scheduler_settings_columns)
+        or (scheduler_paths_columns and scheduler_paths_columns != expected_scheduler_paths_columns)
+        or (scheduler_runtime_columns and scheduler_runtime_columns != expected_scheduler_runtime_columns)
+        or (scheduler_logs_columns and scheduler_logs_columns != expected_scheduler_logs_columns)
     )
 
 
@@ -188,6 +263,10 @@ def _drop_managed_schema_objects(connection: Connection) -> None:
     connection.execute("DROP TABLE IF EXISTS file_segments;")
     connection.execute("DROP TABLE IF EXISTS files;")
     connection.execute("DROP TABLE IF EXISTS failed_files;")
+    connection.execute("DROP TABLE IF EXISTS scheduler_logs;")
+    connection.execute("DROP TABLE IF EXISTS scheduler_paths;")
+    connection.execute("DROP TABLE IF EXISTS scheduler_runtime;")
+    connection.execute("DROP TABLE IF EXISTS scheduler_settings;")
     connection.execute("DROP TABLE IF EXISTS targets;")
     connection.execute("DROP TABLE IF EXISTS folders;")
     connection.execute("DROP TABLE IF EXISTS index_runs;")

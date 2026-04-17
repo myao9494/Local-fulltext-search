@@ -7,17 +7,19 @@ import {
   fetchFailedFiles,
   fetchIndexedTargets,
   fetchIndexStatus,
+  fetchSchedulerSettings,
   pickFolder,
   resetDatabase,
   recordSearchClick,
   search,
+  startScheduler,
   updateAppSettings,
 } from "./api/client";
 import { ResultsList } from "./components/ResultsList";
 import { SearchBar } from "./components/SearchBar";
 import { filterSearchResultsByExtensions, normalizeExtensionToken } from "./extensionFilter";
 import { parseLaunchParams, shouldAutoSearch } from "./launchParams";
-import type { FailedFile, IndexedTarget, IndexStatus, SearchResult } from "./types";
+import type { FailedFile, IndexedTarget, IndexStatus, SchedulerSettings, SearchResult } from "./types";
 
 const BASE_CONTENT_EXTENSIONS = [
   ".md",
@@ -81,7 +83,27 @@ const DEFAULT_SYNONYM_GROUPS = "";
 const DEFAULT_SEARCH_FILTER_TEXT = "";
 const DEFAULT_SEARCH_PATH = "";
 
-type PageView = "search" | "indexed-targets";
+type PageView = "search" | "indexed-targets" | "scheduler";
+
+/**
+ * datetime-local 入出力用に ISO 文字列をローカル日時へ丸める。
+ */
+function toLocalDateTimeInputValue(value: string | null): string {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  const offset = date.getTimezoneOffset();
+  const localDate = new Date(date.getTime() - offset * 60_000);
+  return localDate.toISOString().slice(0, 16);
+}
+
+/**
+ * 画面入力のローカル日時を API 保存用の ISO 文字列へ変換する。
+ */
+function toSchedulerStartAtIso(value: string): string {
+  return new Date(value).toISOString();
+}
 
 /**
  * React Strict Mode の開発時二重実行でも初回 URL 検索を重複発火させない。
@@ -244,6 +266,10 @@ function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isIndexExtensionMenuOpen, setIsIndexExtensionMenuOpen] = useState(false);
   const [isFailedFilesOpen, setIsFailedFilesOpen] = useState(false);
+  const [schedulerState, setSchedulerState] = useState<SchedulerSettings | null>(null);
+  const [schedulerPaths, setSchedulerPaths] = useState<string[]>([]);
+  const [schedulerPathDraft, setSchedulerPathDraft] = useState("");
+  const [schedulerStartAt, setSchedulerStartAt] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [failedFiles, setFailedFiles] = useState<FailedFile[]>([]);
   const [indexedTargets, setIndexedTargets] = useState<IndexedTarget[]>([]);
@@ -260,6 +286,7 @@ function App() {
   const [isSavingExcludeKeywords, setIsSavingExcludeKeywords] = useState(false);
   const [isSavingSynonymGroups, setIsSavingSynonymGroups] = useState(false);
   const [isSavingIndexExtensions, setIsSavingIndexExtensions] = useState(false);
+  const [isStartingScheduler, setIsStartingScheduler] = useState(false);
   const isIndexCancelling = Boolean(indexStatus?.is_running && indexStatus?.cancel_requested);
   const isIndexRunning = Boolean(indexStatus?.is_running && !indexStatus?.cancel_requested);
   const indexStatusLabel = isIndexCancelling ? "インデックス取得を中止中" : isIndexRunning ? "インデックス取得中" : "インデックス待機中";
@@ -288,9 +315,17 @@ function App() {
     customFilenameExtensions.join(" ") !== savedCustomFilenameExtensions.join(" ");
   const sortedResults = sortSearchResults(results, { sortBy, sortOrder });
   const visibleResults = filterSearchResultsByExtensions(sortedResults, searchFilterText);
+  const isSchedulerPage = pageView === "scheduler";
 
   async function refreshIndexStatus(): Promise<void> {
     setIndexStatus(await fetchIndexStatus());
+  }
+
+  async function refreshSchedulerState(): Promise<void> {
+    const response = await fetchSchedulerSettings();
+    setSchedulerState(response);
+    setSchedulerPaths(response.paths);
+    setSchedulerStartAt(toLocalDateTimeInputValue(response.start_at));
   }
 
   /**
@@ -330,6 +365,7 @@ function App() {
       setSavedIndexExtensions(loadedSelectedIndexExtensions);
       setSelectedIndexExtensions(loadedSelectedIndexExtensions);
       await refreshIndexStatus();
+      await refreshSchedulerState();
     } catch (error) {
       setNoticeMessage("");
       setErrorMessage(error instanceof Error ? error.message : "初期データ取得に失敗しました。");
@@ -360,6 +396,21 @@ function App() {
       window.clearInterval(timerId);
     };
   }, [isSearching, indexStatus?.is_running]);
+
+  useEffect(() => {
+    const isSchedulerActive = schedulerState?.is_enabled || schedulerState?.status === "running" || schedulerState?.status === "launching";
+    if (!isSchedulerActive) {
+      return;
+    }
+
+    const timerId = window.setInterval(() => {
+      void refreshSchedulerState().catch(() => undefined);
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [pageView, schedulerState?.is_enabled, schedulerState?.status]);
 
   useEffect(() => {
     if (!shouldAutoSearch(launchParams)) {
@@ -466,6 +517,71 @@ function App() {
     } catch (error) {
       setNoticeMessage("");
       setErrorMessage(error instanceof Error ? error.message : "フォルダ選択に失敗しました。");
+    }
+  }
+
+  function handleOpenSchedulerPage(): void {
+    setPageView("scheduler");
+    setIsMenuOpen(false);
+    setErrorMessage("");
+    setNoticeMessage("");
+    void refreshSchedulerState().catch(() => undefined);
+  }
+
+  function handleAddSchedulerPath(path: string): void {
+    const normalized = path.trim();
+    if (!normalized) {
+      setErrorMessage("スケジューラーに追加するパスを入力してください。");
+      return;
+    }
+    setSchedulerPaths((current) => (current.includes(normalized) ? current : [...current, normalized]));
+    setSchedulerPathDraft("");
+    setErrorMessage("");
+  }
+
+  async function handlePickSchedulerFolder(): Promise<void> {
+    try {
+      const payload = await pickFolder();
+      if (payload.full_path) {
+        handleAddSchedulerPath(payload.full_path);
+      }
+      setNoticeMessage("");
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "スケジューラー用フォルダの選択に失敗しました。");
+    }
+  }
+
+  async function handleStartScheduler(): Promise<void> {
+    if (isStartingScheduler) {
+      return;
+    }
+    if (schedulerPaths.length === 0) {
+      setErrorMessage("スケジューラーの対象フォルダを 1 つ以上追加してください。");
+      return;
+    }
+    if (!schedulerStartAt) {
+      setErrorMessage("スケジューラーの開始日時を入力してください。");
+      return;
+    }
+
+    try {
+      setIsStartingScheduler(true);
+      setErrorMessage("");
+      setNoticeMessage("");
+      const response = await startScheduler({
+        paths: schedulerPaths,
+        start_at: toSchedulerStartAtIso(schedulerStartAt),
+      });
+      setSchedulerState(response);
+      setSchedulerPaths(response.paths);
+      setSchedulerStartAt(toLocalDateTimeInputValue(response.start_at));
+      setNoticeMessage("スケジューラーを開始しました。開始時刻になると別プロセスで順次インデックス化します。");
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "スケジューラーの開始に失敗しました。");
+    } finally {
+      setIsStartingScheduler(false);
     }
   }
 
@@ -693,6 +809,13 @@ function App() {
         setErrorMessage(error instanceof Error ? error.message : "インデックス済みフォルダの取得に失敗しました。");
       }
     }
+    if (nextView === "scheduler") {
+      try {
+        await refreshSchedulerState();
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : "スケジューラー設定の取得に失敗しました。");
+      }
+    }
   }
 
   /**
@@ -879,7 +1002,7 @@ function App() {
             </div>
             <ResultsList items={visibleResults} dateField={dateField} onResultOpen={handleResultOpen} />
           </section>
-        ) : (
+        ) : pageView === "indexed-targets" ? (
           <section className="indexed-targets-panel">
             <div className="indexed-targets-panel-header">
               <div className="section-header">
@@ -952,7 +1075,118 @@ function App() {
               )}
             </div>
           </section>
-        )}
+        ) : isSchedulerPage ? (
+          <section className="scheduler-panel">
+            <div className="indexed-targets-panel-header">
+              <div className="section-header">
+                <div>
+                  <h2>スケジューラー</h2>
+                  <div className="form-help">
+                    指定した開始日時になると、登録済みフォルダを別プロセスで順次インデックスします。
+                  </div>
+                </div>
+                <div className="section-header-actions">
+                  <span>{schedulerState?.status ?? "idle"}</span>
+                  <button className="menu-button" onClick={() => setIsMenuOpen((value) => !value)} type="button" aria-label="設定">
+                    <svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24">
+                      <path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="scheduler-card">
+              <label className="form-help" htmlFor="scheduler-start-at">
+                開始日時
+              </label>
+              <input
+                id="scheduler-start-at"
+                className="search-input"
+                value={schedulerStartAt}
+                onChange={(event) => setSchedulerStartAt(event.target.value)}
+                type="datetime-local"
+              />
+
+              <div className="scheduler-path-editor">
+                <label className="form-help" htmlFor="scheduler-path-input">
+                  対象パス
+                </label>
+                <div className="scheduler-path-actions">
+                  <input
+                    id="scheduler-path-input"
+                    className="search-input"
+                    value={schedulerPathDraft}
+                    onChange={(event) => setSchedulerPathDraft(event.target.value)}
+                    placeholder="/Users/name/Documents/project-a"
+                  />
+                  <button className="secondary-button" onClick={() => handleAddSchedulerPath(schedulerPathDraft)} type="button">
+                    フォルダを追加
+                  </button>
+                  <button className="secondary-button" onClick={() => void handlePickSchedulerFolder()} type="button">
+                    フォルダ選択
+                  </button>
+                </div>
+                <div className="scheduler-path-list">
+                  {schedulerPaths.length === 0 ? (
+                    <div className="form-help">まだ対象フォルダはありません。</div>
+                  ) : (
+                    schedulerPaths.map((path) => (
+                      <div className="scheduler-path-item" key={path}>
+                        <div className="scheduler-path-text">{path}</div>
+                        <button
+                          className="secondary-button"
+                          onClick={() => setSchedulerPaths((current) => current.filter((item) => item !== path))}
+                          type="button"
+                        >
+                          削除
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="scheduler-actions">
+                <button className="secondary-button settings-save-button" onClick={() => void handleStartScheduler()} type="button" disabled={isStartingScheduler}>
+                  {isStartingScheduler ? "開始中..." : "スケジュール開始"}
+                </button>
+              </div>
+            </div>
+
+            <div className="status-card scheduler-status-card">
+              <div>状態: {schedulerState?.status ?? "-"}</div>
+              <div>開始予定: {schedulerState?.start_at ? new Date(schedulerState.start_at).toLocaleString() : "-"}</div>
+              <div>最終開始: {schedulerState?.last_started_at ? new Date(schedulerState.last_started_at).toLocaleString() : "-"}</div>
+              <div>最終完了: {schedulerState?.last_finished_at ? new Date(schedulerState.last_finished_at).toLocaleString() : "-"}</div>
+              <div>処理中パス: {schedulerState?.current_path ?? "-"}</div>
+              <div>最終エラー: {schedulerState?.last_error ?? "-"}</div>
+            </div>
+
+            <div className="scheduler-log-panel">
+              <div className="section-header">
+                <h3>ログ</h3>
+                <span>{schedulerState?.logs.length ?? 0}件</span>
+              </div>
+              <div className="scheduler-log-list">
+                {schedulerState?.logs.length ? (
+                  schedulerState.logs.map((item, index) => (
+                    <div className={`scheduler-log-item ${item.level}`} key={`${item.logged_at}-${index}`}>
+                      <div className="scheduler-log-meta">
+                        <span>{new Date(item.logged_at).toLocaleString()}</span>
+                        <span>{item.level}</span>
+                      </div>
+                      <div>{item.message}</div>
+                      {item.folder_path ? <div className="scheduler-log-path">{item.folder_path}</div> : null}
+                    </div>
+                  ))
+                ) : (
+                  <div className="form-help">ログはまだありません。</div>
+                )}
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         <aside className={`settings-drawer ${isMenuOpen ? "open" : ""}`} aria-hidden={!isMenuOpen}>
           <div className="settings-panel">
@@ -961,6 +1195,13 @@ function App() {
               <button className="secondary-button" onClick={() => setIsMenuOpen(false)} type="button">
                 閉じる
               </button>
+            </div>
+
+            <div className="settings-action-row">
+              <button className="secondary-button" onClick={handleOpenSchedulerPage} type="button">
+                スケジューラー
+              </button>
+              <div className="form-help">複数フォルダと開始日時を指定し、別プロセスで順次インデックスできます。</div>
             </div>
 
             <div className="folder-form">

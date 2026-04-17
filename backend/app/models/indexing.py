@@ -99,3 +99,39 @@ class AppSettingsUpdateRequest(BaseModel):
     index_selected_extensions: str | None = None
     custom_content_extensions: str | None = None
     custom_filename_extensions: str | None = None
+
+
+class SchedulerLogItem(BaseModel):
+    """
+    スケジューラー実行中に記録したログ 1 行分。
+    """
+
+    logged_at: datetime
+    level: str
+    message: str
+    folder_path: str | None = None
+
+
+class SchedulerSettingsResponse(BaseModel):
+    """
+    スケジューラー設定・実行状況・最新ログをまとめて返す。
+    """
+
+    paths: list[str]
+    start_at: datetime | None
+    is_enabled: bool
+    status: str
+    last_started_at: datetime | None
+    last_finished_at: datetime | None
+    current_path: str | None
+    last_error: str | None
+    logs: list[SchedulerLogItem]
+
+
+class SchedulerUpdateRequest(BaseModel):
+    """
+    スケジューラー開始時に使う対象パス群と開始日時。
+    """
+
+    paths: list[str]
+    start_at: datetime

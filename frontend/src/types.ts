@@ -53,3 +53,22 @@ export type AppSettings = {
   custom_content_extensions: string;
   custom_filename_extensions: string;
 };
+
+export type SchedulerLog = {
+  logged_at: string;
+  level: string;
+  message: string;
+  folder_path: string | null;
+};
+
+export type SchedulerSettings = {
+  paths: string[];
+  start_at: string | null;
+  is_enabled: boolean;
+  status: string;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  current_path: string | null;
+  last_error: string | null;
+  logs: SchedulerLog[];
+};

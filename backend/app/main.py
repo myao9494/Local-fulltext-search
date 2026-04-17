@@ -16,6 +16,7 @@ from app.api.search import router as search_router
 from app.config import settings
 from app.db.connection import get_connection
 from app.db.schema import initialize_schema
+from app.services.scheduler_service import SchedulerMonitor
 
 
 @asynccontextmanager
@@ -23,8 +24,12 @@ async def lifespan(app: FastAPI):
     """起動時にDB接続を共有し、シャットダウン時にクローズする。"""
     connection = get_connection()
     initialize_schema(connection)
+    scheduler_monitor = SchedulerMonitor()
+    scheduler_monitor.start()
     app.state.db_connection = connection
+    app.state.scheduler_monitor = scheduler_monitor
     yield
+    scheduler_monitor.stop()
     connection.close()
 
 

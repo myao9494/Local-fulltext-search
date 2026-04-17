@@ -1083,3 +1083,57 @@ button.small-btn {
   color: var(--text-muted);
   white-space: nowrap;
 }
+.scheduler-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.scheduler-card,
+.scheduler-log-panel {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.5);
+  backdrop-filter: blur(16px);
+}
+
+.scheduler-path-editor,
+.scheduler-path-list,
+.scheduler-log-list {
+  display: grid;
+  gap: 10px;
+}
+
+.scheduler-path-actions,
+.scheduler-actions,
+.scheduler-log-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.scheduler-path-item,
+.scheduler-log-item {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(30, 41, 59, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.scheduler-log-item.error {
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+.scheduler-path-text,
+.scheduler-log-path {
+  word-break: break-all;
+}
+
+.scheduler-status-card {
+  gap: 8px;
+}

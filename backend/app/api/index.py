@@ -6,9 +6,10 @@
 
 from fastapi import APIRouter, Depends
 
-from app.api.deps import get_index_service
-from app.models.indexing import AppSettingsUpdateRequest, DeleteIndexedFoldersRequest
+from app.api.deps import get_index_service, get_scheduler_service
+from app.models.indexing import AppSettingsUpdateRequest, DeleteIndexedFoldersRequest, SchedulerUpdateRequest
 from app.services.index_service import IndexService
+from app.services.scheduler_service import SchedulerService
 
 router = APIRouter(prefix="/api/index", tags=["index"])
 
@@ -89,3 +90,22 @@ def reset_database(service: IndexService = Depends(get_index_service)) -> dict[s
         "message": "Database was reset.",
         "status": service.get_status().model_dump(),
     }
+
+
+@router.get("/scheduler")
+def get_scheduler_settings(service: SchedulerService = Depends(get_scheduler_service)) -> dict[str, object]:
+    """
+    スケジューラー設定・実行状況・ログをまとめて返す。
+    """
+    return service.get_scheduler_settings().model_dump()
+
+
+@router.post("/scheduler/start")
+def start_scheduler(
+    payload: SchedulerUpdateRequest,
+    service: SchedulerService = Depends(get_scheduler_service),
+) -> dict[str, object]:
+    """
+    スケジュール対象パスと開始日時を保存し、開始待ち状態へ切り替える。
+    """
+    return service.schedule_indexing(paths=payload.paths, start_at=payload.start_at).model_dump()

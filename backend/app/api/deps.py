@@ -8,6 +8,7 @@ from sqlite3 import Connection
 from fastapi import Depends, Request
 
 from app.services.index_service import IndexService
+from app.services.scheduler_service import SchedulerService
 from app.services.search_service import SearchService
 
 
@@ -24,3 +25,8 @@ def get_search_service(connection: Connection = Depends(get_db_connection)) -> S
 def get_index_service(connection: Connection = Depends(get_db_connection)) -> IndexService:
     """リクエスト単位の接続を使用する IndexService を返す。"""
     return IndexService(connection=connection)
+
+
+def get_scheduler_service(connection: Connection = Depends(get_db_connection)) -> SchedulerService:
+    """リクエスト単位の接続を使用する SchedulerService を返す。"""
+    return SchedulerService(connection=connection)
