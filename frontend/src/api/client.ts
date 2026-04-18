@@ -115,6 +115,7 @@ export async function search(params: {
   q: string;
   full_path: string;
   search_all_enabled?: boolean;
+  skip_refresh?: boolean;
   index_depth: number;
   refresh_window_minutes: number;
   regex_enabled?: boolean;
@@ -131,6 +132,8 @@ export async function search(params: {
   const items = [];
   let total = 0;
   let offset = 0;
+  let usedExistingIndex = false;
+  let backgroundRefreshScheduled = false;
 
   while (true) {
     const response = await request<SearchResponse>("/api/search", {
@@ -144,18 +147,24 @@ export async function search(params: {
 
     if (offset === 0) {
       total = response.total;
+      usedExistingIndex = response.used_existing_index;
+      backgroundRefreshScheduled = response.background_refresh_scheduled;
     }
 
     items.push(...response.items);
     options?.onProgress?.({
       total,
       items: [...items],
+      used_existing_index: usedExistingIndex,
+      background_refresh_scheduled: backgroundRefreshScheduled,
     });
 
     if (response.items.length === 0 || items.length >= response.total) {
       return {
         total,
         items,
+        used_existing_index: usedExistingIndex,
+        background_refresh_scheduled: backgroundRefreshScheduled,
       };
     }
 

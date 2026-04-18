@@ -2,6 +2,8 @@ from datetime import UTC, date, datetime, time, timedelta
 from html import escape
 import re
 from sqlite3 import Connection
+import threading
+import time as time_module
 
 from fastapi import HTTPException, status
 
@@ -11,6 +13,11 @@ from app.models.search import IndexedSearchRequest, SearchQueryParams, SearchRes
 from app.services.cjk_bigram import build_cjk_bigram_match_query
 from app.services.index_service import IndexService
 from app.services.path_service import get_descendant_path_prefix, get_descendant_path_range, normalize_path, normalize_path_str
+
+_BACKGROUND_REFRESH_LOCK = threading.Lock()
+_BACKGROUND_REFRESH_KEYS: set[tuple[str, str, int, str]] = set()
+_BACKGROUND_REFRESH_LAST_SCHEDULED_AT: dict[tuple[str, str, int, str], float] = {}
+BACKGROUND_REFRESH_RETRY_COOLDOWN_SECONDS = 30.0
 
 
 class SearchService:
@@ -32,26 +39,151 @@ class SearchService:
             params.exclude_keywords if params.exclude_keywords is not None else app_settings.exclude_keywords
         )
         excluded_keywords = self.index_service._parse_exclude_keywords(effective_exclude_keywords)
-        if normalized_target_path and not params.search_all_enabled:
-            try:
-                self.index_service.ensure_fresh_target(
-                    full_path=normalized_target_path,
-                    refresh_window_minutes=params.refresh_window_minutes,
-                    exclude_keywords=effective_exclude_keywords,
-                    index_depth=params.index_depth,
-                    types=params.index_types,
-                )
-            except HTTPException as error:
-                if error.status_code != status.HTTP_409_CONFLICT:
-                    raise
+        refresh_flags = {"used_existing_index": False, "background_refresh_scheduled": False}
+        if normalized_target_path and not params.search_all_enabled and not params.skip_refresh:
+            refresh_flags = self._refresh_target_for_search(
+                normalized_target_path=normalized_target_path,
+                refresh_window_minutes=params.refresh_window_minutes,
+                effective_exclude_keywords=effective_exclude_keywords,
+                index_depth=params.index_depth,
+                index_types=params.index_types,
+                custom_content_extensions=app_settings.custom_content_extensions,
+                custom_filename_extensions=app_settings.custom_filename_extensions,
+            )
 
-        return self._execute_search(
+        response = self._execute_search(
             params=params,
             normalized_target_path=normalized_target_path,
             excluded_keywords=excluded_keywords,
             app_settings=app_settings,
             path_depth_limit=params.index_depth,
         )
+        return response.model_copy(update=refresh_flags)
+
+    def _refresh_target_for_search(
+        self,
+        *,
+        normalized_target_path: str,
+        refresh_window_minutes: int,
+        effective_exclude_keywords: str,
+        index_depth: int,
+        index_types: str | None,
+        custom_content_extensions: str,
+        custom_filename_extensions: str,
+    ) -> dict[str, bool]:
+        """
+        既存インデックスがあるフォルダは既存結果を優先し、必要な再更新だけをバックグラウンドへ回す。
+        初回検索や未インデックス状態では従来どおり同期インデックスを行う。
+        """
+        normalized_extensions = self.index_service._normalize_selected_extensions(
+            index_types,
+            custom_content_extensions=custom_content_extensions,
+            custom_filename_extensions=custom_filename_extensions,
+        )
+        try:
+            target = self.index_service._ensure_target(
+                full_path=normalized_target_path,
+                exclude_keywords=effective_exclude_keywords,
+                index_depth=index_depth,
+                selected_extensions=normalized_extensions,
+            )
+        except HTTPException as error:
+            # 既存インデックスだけでも検索できるよう、到達不能/未接続パスでは再更新を諦めて現在の DB を使う。
+            if error.status_code == status.HTTP_400_BAD_REQUEST:
+                return {"used_existing_index": True, "background_refresh_scheduled": False}
+            raise
+        effective_keywords = self.index_service._merge_exclude_keyword_strings(
+            effective_exclude_keywords,
+            str(target.get("exclude_keywords") or ""),
+        )
+        needs_refresh = self.index_service._needs_refresh(
+            target,
+            refresh_window_minutes,
+            effective_keywords,
+            index_depth,
+            normalized_extensions,
+        )
+        has_existing_index = target.get("last_indexed_at") is not None
+        if not needs_refresh:
+            return {"used_existing_index": False, "background_refresh_scheduled": False}
+        if not has_existing_index:
+            try:
+                self.index_service.ensure_fresh_target(
+                    full_path=normalized_target_path,
+                    refresh_window_minutes=refresh_window_minutes,
+                    exclude_keywords=effective_keywords,
+                    index_depth=index_depth,
+                    types=index_types,
+                )
+            except HTTPException as error:
+                if error.status_code != status.HTTP_409_CONFLICT:
+                    raise
+            return {"used_existing_index": False, "background_refresh_scheduled": False}
+
+        scheduled = self._schedule_background_refresh(
+            normalized_target_path=normalized_target_path,
+            effective_exclude_keywords=effective_keywords,
+            index_depth=index_depth,
+            index_types=index_types,
+        )
+        return {"used_existing_index": True, "background_refresh_scheduled": scheduled}
+
+    def _schedule_background_refresh(
+        self,
+        *,
+        normalized_target_path: str,
+        effective_exclude_keywords: str,
+        index_depth: int,
+        index_types: str | None,
+    ) -> bool:
+        """
+        同一条件の再インデックスは1本だけ裏で実行し、検索レスポンス自体は待たない。
+        """
+        normalized_index_types = index_types or ""
+        refresh_key = (
+            normalized_target_path,
+            effective_exclude_keywords,
+            index_depth,
+            normalized_index_types,
+        )
+        with _BACKGROUND_REFRESH_LOCK:
+            if refresh_key in _BACKGROUND_REFRESH_KEYS:
+                return False
+            last_scheduled_at = _BACKGROUND_REFRESH_LAST_SCHEDULED_AT.get(refresh_key)
+            now = time_module.monotonic()
+            if last_scheduled_at is not None and now - last_scheduled_at < BACKGROUND_REFRESH_RETRY_COOLDOWN_SECONDS:
+                return False
+            _BACKGROUND_REFRESH_KEYS.add(refresh_key)
+            _BACKGROUND_REFRESH_LAST_SCHEDULED_AT[refresh_key] = now
+
+        def run_refresh() -> None:
+            connection: Connection | None = None
+            try:
+                connection = get_connection()
+                index_service = IndexService(connection=connection)
+                if index_service._is_running():
+                    return
+                index_service.ensure_fresh_target(
+                    full_path=normalized_target_path,
+                    refresh_window_minutes=0,
+                    exclude_keywords=effective_exclude_keywords,
+                    index_depth=index_depth,
+                    types=normalized_index_types,
+                )
+            except HTTPException:
+                pass
+            finally:
+                if connection is not None:
+                    connection.close()
+                with _BACKGROUND_REFRESH_LOCK:
+                    _BACKGROUND_REFRESH_KEYS.discard(refresh_key)
+
+        threading.Thread(
+            target=run_refresh,
+            name="search-background-refresh",
+            daemon=True,
+        ).start()
+        return True
 
     def search_existing_index(self, params: IndexedSearchRequest) -> SearchResponse:
         """

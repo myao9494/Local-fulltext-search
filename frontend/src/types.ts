@@ -13,6 +13,8 @@ export type SearchResult = {
 export type SearchResponse = {
   total: number;
   items: SearchResult[];
+  used_existing_index: boolean;
+  background_refresh_scheduled: boolean;
 };
 
 export type IndexStatus = {

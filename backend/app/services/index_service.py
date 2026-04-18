@@ -43,10 +43,9 @@ from app.models.indexing import (
     IndexedTargetListResponse,
     IndexStatusResponse,
 )
-from app.services.cjk_bigram import build_cjk_bigram_index_content, has_cjk_bigram_tokens
+from app.services.cjk_bigram import build_cjk_bigram_index_content
 from app.services.path_service import (
     AbsolutePathRequiredError,
-    get_descendant_path_prefix,
     get_descendant_path_range,
     normalize_path,
 )
@@ -97,6 +96,7 @@ class IndexRunController:
 
 _CONTROLLERS_LOCK = threading.Lock()
 _CONTROLLERS: dict[int, IndexRunController] = {}
+CURRENT_TARGET_INDEX_VERSION = 1
 
 
 class IndexService:
@@ -121,13 +121,8 @@ class IndexService:
         index_depth: int = 1,
         types: str | None = None,
     ) -> None:
-        controller = self._get_run_controller()
         if self._is_running():
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Indexing is already running.")
-
-        controller.reset()
-        started_at = datetime.now(UTC).isoformat()
-        self._update_status(is_running=True, cancel_requested=False, last_started_at=started_at, last_error=None)
 
         app_settings = self.get_app_settings()
         normalized_keywords = self._normalize_exclude_keywords(exclude_keywords)
@@ -150,7 +145,22 @@ class IndexService:
                 normalized_keywords,
                 str(target.get("exclude_keywords") or ""),
             )
-            if self._needs_refresh(target, refresh_window_minutes, effective_keywords, index_depth, normalized_extensions):
+            needs_refresh = self._needs_refresh(
+                target,
+                refresh_window_minutes,
+                effective_keywords,
+                index_depth,
+                normalized_extensions,
+            )
+            if not needs_refresh:
+                return
+
+            controller = self._get_run_controller()
+            controller.reset()
+            started_at = datetime.now(UTC).isoformat()
+            self._update_status(is_running=True, cancel_requested=False, last_started_at=started_at, last_error=None)
+
+            if needs_refresh:
                 stats = self._index_target(
                     target,
                     effective_keywords,
@@ -167,14 +177,7 @@ class IndexService:
                     exclude_keywords=str(stats["exclude_keywords"]),
                     index_depth=index_depth,
                     selected_extensions=normalized_extensions,
-                )
-            else:
-                total_files = self._count_target_files(
-                    str(target["full_path"]),
-                    index_depth=int(target["index_depth"]),
-                    selected_extensions=str(target["selected_extensions"]),
-                    custom_content_extensions=app_settings.custom_content_extensions,
-                    custom_filename_extensions=app_settings.custom_filename_extensions,
+                    indexed_file_count=total_files,
                 )
         except IndexingCancelledError as error:
             self._update_status(
@@ -550,7 +553,8 @@ class IndexService:
         row = self.connection.execute(
             """
             SELECT
-                id, full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions, created_at, updated_at
+                id, full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
+                indexed_file_count, index_version, created_at, updated_at
             FROM targets
             WHERE full_path = ?
             """,
@@ -563,9 +567,10 @@ class IndexService:
         cursor = self.connection.execute(
             """
             INSERT INTO targets(
-                full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions, created_at, updated_at
+                full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
+                indexed_file_count, index_version, created_at, updated_at
             )
-            VALUES (?, NULL, ?, ?, ?, ?, ?)
+            VALUES (?, NULL, ?, ?, ?, 0, 0, ?, ?)
             """,
             (normalized_path.as_posix(), exclude_keywords, index_depth, selected_extensions, now, now),
         )
@@ -573,7 +578,8 @@ class IndexService:
         created = self.connection.execute(
             """
             SELECT
-                id, full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions, created_at, updated_at
+                id, full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
+                indexed_file_count, index_version, created_at, updated_at
             FROM targets
             WHERE id = ?
             """,
@@ -598,7 +604,7 @@ class IndexService:
             return True
         if str(target.get("selected_extensions") or "") != selected_extensions:
             return True
-        if self._needs_cjk_bigram_backfill(str(target["full_path"])):
+        if int(target.get("index_version") or 0) < CURRENT_TARGET_INDEX_VERSION:
             return True
         indexed_at = datetime.fromisoformat(str(last_indexed_at))
         elapsed_seconds = (datetime.now(UTC) - indexed_at).total_seconds()
@@ -966,28 +972,6 @@ class IndexService:
             return float(birth_time)
         return float(stat.st_ctime)
 
-    def _needs_cjk_bigram_backfill(self, root_path: str) -> bool:
-        """
-        旧インデックスに日本語 bi-gram 補助セグメントがない場合は再インデックスする。
-        """
-        prefix_start, prefix_end = get_descendant_path_range(root_path)
-        cursor = self.connection.execute(
-            """
-            SELECT body.content
-            FROM files
-            JOIN file_segments AS body
-              ON body.file_id = files.id
-             AND body.segment_type = 'body'
-            LEFT JOIN file_segments AS cjk_bigram
-              ON cjk_bigram.file_id = files.id
-             AND cjk_bigram.segment_type = 'cjk_bigram'
-            WHERE files.normalized_path >= ? AND files.normalized_path < ?
-              AND cjk_bigram.id IS NULL
-            """,
-            (prefix_start, prefix_end),
-        )
-        return any(has_cjk_bigram_tokens(str(row["content"])) for row in cursor)
-
     def _record_file_error(self, path: Path, error: Exception) -> None:
         normalized_path = path.resolve().as_posix()
         error_message = str(error)
@@ -1150,55 +1134,28 @@ class IndexService:
         exclude_keywords: str,
         index_depth: int,
         selected_extensions: str,
+        indexed_file_count: int,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         self.connection.execute(
             """
             UPDATE targets
-            SET last_indexed_at = ?, exclude_keywords = ?, index_depth = ?, selected_extensions = ?, updated_at = ?
+            SET last_indexed_at = ?, exclude_keywords = ?, index_depth = ?, selected_extensions = ?,
+                indexed_file_count = ?, index_version = ?, updated_at = ?
             WHERE id = ?
             """,
-            (now, exclude_keywords, index_depth, selected_extensions, now, target_id),
+            (
+                now,
+                exclude_keywords,
+                index_depth,
+                selected_extensions,
+                indexed_file_count,
+                CURRENT_TARGET_INDEX_VERSION,
+                now,
+                target_id,
+            ),
         )
         self.connection.commit()
-
-    def _count_target_files(
-        self,
-        root_path: str,
-        *,
-        index_depth: int,
-        selected_extensions: str,
-        custom_content_extensions: str,
-        custom_filename_extensions: str,
-    ) -> int:
-        """
-        現在の対象条件に一致するファイル数を返す。
-        """
-        prefix_start, prefix_end = get_descendant_path_range(root_path)
-        descendant_prefix = get_descendant_path_prefix(root_path)
-        depth_expression = (
-            "(length(normalized_path) - length(replace(normalized_path, '/', '')))"
-            " - (length(?) - length(replace(?, '/', '')))"
-        )
-        filters = ["normalized_path >= ?", "normalized_path < ?", f"{depth_expression} <= ?"]
-        values: list[object] = [prefix_start, prefix_end, descendant_prefix, descendant_prefix, index_depth]
-
-        extensions = sorted(
-            normalize_extension_filter(
-                selected_extensions,
-                extra_content_extensions=tuple(self._parse_extension_entries(custom_content_extensions)),
-                extra_filename_extensions=tuple(self._parse_extension_entries(custom_filename_extensions)),
-            )
-        )
-        placeholders = ", ".join("?" for _ in extensions)
-        filters.append(f"file_ext IN ({placeholders})")
-        values.extend(extensions)
-
-        row = self.connection.execute(
-            f"SELECT COUNT(*) AS count FROM files WHERE {' AND '.join(filters)}",
-            tuple(values),
-        ).fetchone()
-        return int(row["count"]) if row else 0
 
     def _update_status(
         self,

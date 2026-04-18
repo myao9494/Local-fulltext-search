@@ -84,6 +84,27 @@ const DEFAULT_SEARCH_FILTER_TEXT = "";
 const DEFAULT_SEARCH_PATH = "";
 
 type PageView = "search" | "indexed-targets" | "scheduler";
+type SearchExecutionParams = {
+  q: string;
+  full_path: string;
+  search_all_enabled?: boolean;
+  skip_refresh?: boolean;
+  index_depth: number;
+  refresh_window_minutes: number;
+  regex_enabled?: boolean;
+  index_types?: string;
+  date_field?: "created" | "modified";
+  sort_by?: "created" | "modified" | "click_count";
+  sort_order?: "asc" | "desc";
+  created_from?: string;
+  created_to?: string;
+};
+type PendingAutoRefresh = {
+  params: SearchExecutionParams;
+  searchKey: string;
+  baselineLastFinishedAt: string | null;
+  hasObservedRunning: boolean;
+};
 
 /**
  * datetime-local 入出力用に ISO 文字列をローカル日時へ丸める。
@@ -279,6 +300,7 @@ function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [noticeMessage, setNoticeMessage] = useState("");
   const [isSearching, setIsSearching] = useState(false);
+  const [pendingAutoRefresh, setPendingAutoRefresh] = useState<PendingAutoRefresh | null>(null);
   const [isResettingDatabase, setIsResettingDatabase] = useState(false);
   const [isCancellingIndex, setIsCancellingIndex] = useState(false);
   const [isLoadingTargets, setIsLoadingTargets] = useState(false);
@@ -317,8 +339,10 @@ function App() {
   const visibleResults = filterSearchResultsByExtensions(sortedResults, searchFilterText);
   const isSchedulerPage = pageView === "scheduler";
 
-  async function refreshIndexStatus(): Promise<void> {
-    setIndexStatus(await fetchIndexStatus());
+  async function refreshIndexStatus(): Promise<IndexStatus> {
+    const response = await fetchIndexStatus();
+    setIndexStatus(response);
+    return response;
   }
 
   async function refreshSchedulerState(): Promise<void> {
@@ -384,7 +408,7 @@ function App() {
    * 検索中やインデックス実行中はステータスを定期取得し、中止ボタンの表示状態を追従させる。
    */
   useEffect(() => {
-    if (!isSearching && !indexStatus?.is_running) {
+    if (!isSearching && !indexStatus?.is_running && !pendingAutoRefresh) {
       return;
     }
 
@@ -395,7 +419,54 @@ function App() {
     return () => {
       window.clearInterval(timerId);
     };
-  }, [isSearching, indexStatus?.is_running]);
+  }, [isSearching, indexStatus?.is_running, pendingAutoRefresh]);
+
+  useEffect(() => {
+    if (!pendingAutoRefresh || !indexStatus) {
+      return;
+    }
+
+    if (pendingAutoRefresh.searchKey !== buildSearchKeyFromState()) {
+      setPendingAutoRefresh(null);
+      return;
+    }
+
+    if (!pendingAutoRefresh.hasObservedRunning) {
+      if (indexStatus.is_running) {
+        setPendingAutoRefresh((current) =>
+          current ? { ...current, hasObservedRunning: true } : current,
+        );
+        return;
+      }
+      if (indexStatus.last_finished_at && indexStatus.last_finished_at !== pendingAutoRefresh.baselineLastFinishedAt) {
+        const params = pendingAutoRefresh.params;
+        setPendingAutoRefresh(null);
+        void executeSearch(params, { isAutoRefresh: true });
+      }
+      return;
+    }
+
+    if (!indexStatus.is_running) {
+      const params = pendingAutoRefresh.params;
+      setPendingAutoRefresh(null);
+      void executeSearch(params, { isAutoRefresh: true });
+    }
+  }, [
+    pendingAutoRefresh,
+    indexStatus,
+    query,
+    fullPath,
+    isSearchAllEnabled,
+    indexDepth,
+    refreshWindowMinutes,
+    isRegexEnabled,
+    selectedIndexExtensions,
+    dateField,
+    sortBy,
+    sortOrder,
+    createdFrom,
+    createdTo,
+  ]);
 
   useEffect(() => {
     const isSchedulerActive = schedulerState?.is_enabled || schedulerState?.status === "running" || schedulerState?.status === "launching";
@@ -425,6 +496,76 @@ function App() {
     lastAutoSearchKey = autoSearchKey;
     void handleSearch();
   }, [launchParams]);
+
+  function buildSearchKeyFromState(): string {
+    return [
+      query,
+      fullPath.trim() || savedDefaultSearchPath,
+      String(isSearchAllEnabled),
+      indexDepth,
+      refreshWindowMinutes,
+      String(isRegexEnabled),
+      selectedIndexExtensions.join(" "),
+      dateField,
+      sortBy,
+      sortOrder,
+      createdFrom,
+      createdTo,
+    ].join("\n");
+  }
+
+  async function executeSearch(params: SearchExecutionParams, options?: { isAutoRefresh?: boolean }): Promise<void> {
+    try {
+      setIsSearching(true);
+      setErrorMessage("");
+      if (!options?.isAutoRefresh) {
+        setNoticeMessage("");
+      }
+      const response = await search(params, {
+        onProgress: (partialResponse) => {
+          setResults(partialResponse.items);
+        },
+      });
+      setResults(response.items);
+      const latestStatus = await refreshIndexStatus();
+      if (isFailedFilesOpen) {
+        const failedResponse = await fetchFailedFiles();
+        setFailedFiles(failedResponse.items);
+      }
+      localStorage.setItem("refresh_window_minutes", String(params.refresh_window_minutes));
+      localStorage.setItem("search_filter_extensions", searchFilterText);
+      if (options?.isAutoRefresh) {
+        setNoticeMessage("バックグラウンド再インデックスが完了したため、検索結果を自動更新しました。");
+      } else if (hasUnsavedExcludeKeywords) {
+        setNoticeMessage("未保存の除外キーワードは今回の検索に反映していません。保存後に再検索してください。");
+      } else if (hasUnsavedSynonymGroups) {
+        setNoticeMessage("未保存の同義語リストは今回の検索に反映していません。保存後に再検索してください。");
+      } else if (response.background_refresh_scheduled) {
+        setPendingAutoRefresh({
+          params: { ...params, skip_refresh: true },
+          searchKey: buildSearchKeyFromState(),
+          baselineLastFinishedAt: latestStatus.last_finished_at,
+          hasObservedRunning: latestStatus.is_running,
+        });
+        setNoticeMessage("既存インデックスで先に結果を表示しつつ、フォルダの再インデックスをバックグラウンドで更新しています。");
+      } else if (response.used_existing_index) {
+        setNoticeMessage("既存インデックスを使って検索結果を表示しました。");
+      } else {
+        setPendingAutoRefresh(null);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "検索に失敗しました。";
+      if (message === "Indexing was cancelled.") {
+        setNoticeMessage("インデックス作成を中止しました。必要になったら再検索で再開できます。");
+        setErrorMessage("");
+      } else {
+        setErrorMessage(message);
+      }
+    } finally {
+      await refreshIndexStatus().catch(() => undefined);
+      setIsSearching(false);
+    }
+  }
 
   async function handleSearch(): Promise<void> {
     if (isSearching) {
@@ -463,53 +604,21 @@ function App() {
       setIsMenuOpen(true);
       return;
     }
-    try {
-      setIsSearching(true);
-      setErrorMessage("");
-      setNoticeMessage("");
-      const response = await search({
-        q: query,
-        full_path: resolvedSearchPath,
-        search_all_enabled: isSearchAllEnabled,
-        index_depth: parsedDepth,
-        refresh_window_minutes: parsedWindow,
-        regex_enabled: isRegexEnabled,
-        index_types: selectedIndexExtensions.join(" "),
-        date_field: dateField,
-        sort_by: sortBy,
-        sort_order: sortOrder,
-        created_from: createdFrom || undefined,
-        created_to: createdTo || undefined,
-      }, {
-        onProgress: (partialResponse) => {
-          setResults(partialResponse.items);
-        },
-      });
-      setResults(response.items);
-      await refreshIndexStatus();
-      if (isFailedFilesOpen) {
-        const failedResponse = await fetchFailedFiles();
-        setFailedFiles(failedResponse.items);
-      }
-      localStorage.setItem("refresh_window_minutes", String(parsedWindow));
-      localStorage.setItem("search_filter_extensions", searchFilterText);
-      if (hasUnsavedExcludeKeywords) {
-        setNoticeMessage("未保存の除外キーワードは今回の検索に反映していません。保存後に再検索してください。");
-      } else if (hasUnsavedSynonymGroups) {
-        setNoticeMessage("未保存の同義語リストは今回の検索に反映していません。保存後に再検索してください。");
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "検索に失敗しました。";
-      if (message === "Indexing was cancelled.") {
-        setNoticeMessage("インデックス作成を中止しました。必要になったら再検索で再開できます。");
-        setErrorMessage("");
-      } else {
-        setErrorMessage(message);
-      }
-    } finally {
-      await refreshIndexStatus().catch(() => undefined);
-      setIsSearching(false);
-    }
+
+    await executeSearch({
+      q: query,
+      full_path: resolvedSearchPath,
+      search_all_enabled: isSearchAllEnabled,
+      index_depth: parsedDepth,
+      refresh_window_minutes: parsedWindow,
+      regex_enabled: isRegexEnabled,
+      index_types: selectedIndexExtensions.join(" "),
+      date_field: dateField,
+      sort_by: sortBy,
+      sort_order: sortOrder,
+      created_from: createdFrom || undefined,
+      created_to: createdTo || undefined,
+    });
   }
 
   async function handlePickFolder(): Promise<void> {

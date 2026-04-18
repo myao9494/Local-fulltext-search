@@ -28,6 +28,8 @@ test("search は先頭ページ取得直後に途中結果を通知する", asyn
             click_count: 0,
             snippet: "xml",
           })),
+          used_existing_index: true,
+          background_refresh_scheduled: true,
         }),
       );
     }
@@ -59,6 +61,8 @@ test("search は先頭ページ取得直後に途中結果を通知する", asyn
             snippet: "xml",
           },
         ],
+        used_existing_index: false,
+        background_refresh_scheduled: false,
       }),
     );
   }) as typeof fetch;
@@ -110,6 +114,8 @@ test("search は全件取得のため複数ページを順に取得する", asyn
             click_count: 0,
             snippet: "xml",
           })),
+          used_existing_index: true,
+          background_refresh_scheduled: true,
         }),
       );
     }
@@ -141,6 +147,8 @@ test("search は全件取得のため複数ページを順に取得する", asyn
             snippet: "xml",
           },
         ],
+        used_existing_index: false,
+        background_refresh_scheduled: false,
       }),
     );
   }) as typeof fetch;
@@ -155,6 +163,8 @@ test("search は全件取得のため複数ページを順に取得する", asyn
 
     assert.equal(response.total, 1002);
     assert.equal(response.items.length, 1002);
+    assert.equal(response.used_existing_index, true);
+    assert.equal(response.background_refresh_scheduled, true);
     assert.deepEqual(calls, [
       { limit: 1000, offset: 0 },
       { limit: 1000, offset: 1000 },

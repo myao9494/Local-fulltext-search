@@ -34,12 +34,15 @@ class SearchResultItem(BaseModel):
 class SearchResponse(BaseModel):
     total: int
     items: list[SearchResultItem]
+    used_existing_index: bool = False
+    background_refresh_scheduled: bool = False
 
 
 class SearchQueryParams(BaseModel):
     q: str = Field(min_length=1)
     full_path: str = ""
     search_all_enabled: bool = False
+    skip_refresh: bool = False
     index_depth: int = Field(ge=0, le=128)
     refresh_window_minutes: int = Field(default=60, ge=0, le=1440)
     regex_enabled: bool = False

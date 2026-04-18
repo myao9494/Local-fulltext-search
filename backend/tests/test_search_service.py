@@ -8,6 +8,7 @@ from pathlib import Path
 from sqlite3 import Connection
 
 from app.db.schema import initialize_schema
+from app.models.indexing import AppSettingsResponse
 from app.models.search import SearchQueryParams
 from app.services.search_service import SearchService
 
@@ -963,7 +964,162 @@ def test_search_existing_index_uses_existing_db_without_reindex_and_without_dept
     assert result.total == 2
     assert sorted(item.file_name for item in result.items) == ["deep.md", "root.md"]
     assert all(item.target_path == "/workspace/docs" for item in result.items)
+    assert result.used_existing_index is False
+    assert result.background_refresh_scheduled is False
     assert ensure_calls == []
+
+
+def test_search_with_existing_stale_index_uses_current_results_and_schedules_background_refresh(tmp_path: Path) -> None:
+    """
+    既存インデックス済みフォルダが期限切れでも、検索は既存結果を返しつつ再インデックスを裏で予約する。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "memo.md").write_text("alpha memo", encoding="utf-8")
+    service.index_service.get_app_settings = lambda: AppSettingsResponse(
+        exclude_keywords="",
+        synonym_groups="",
+        index_selected_extensions=".md",
+        custom_content_extensions="",
+        custom_filename_extensions="",
+    )
+    service.index_service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=60)
+
+    scheduled_calls: list[dict[str, object]] = []
+    synchronous_calls: list[dict[str, object]] = []
+    service._schedule_background_refresh = lambda **kwargs: scheduled_calls.append(kwargs) or True
+    service.index_service.ensure_fresh_target = lambda **kwargs: synchronous_calls.append(kwargs)
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(target),
+            index_depth=1,
+            refresh_window_minutes=0,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["memo.md"]
+    assert result.used_existing_index is True
+    assert result.background_refresh_scheduled is True
+    assert synchronous_calls == []
+    assert scheduled_calls == [
+        {
+            "normalized_target_path": str(target),
+            "effective_exclude_keywords": "",
+            "index_depth": 1,
+            "index_types": None,
+        }
+    ]
+
+
+def test_search_with_unindexed_folder_keeps_synchronous_refresh(tmp_path: Path) -> None:
+    """
+    初回検索で未インデックスのフォルダは従来どおり同期インデックスする。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "memo.md").write_text("alpha memo", encoding="utf-8")
+    service.index_service.get_app_settings = lambda: AppSettingsResponse(
+        exclude_keywords="",
+        synonym_groups="",
+        index_selected_extensions=".md",
+        custom_content_extensions="",
+        custom_filename_extensions="",
+    )
+
+    schedule_calls: list[dict[str, object]] = []
+    ensure_calls: list[dict[str, object]] = []
+    service._schedule_background_refresh = lambda **kwargs: schedule_calls.append(kwargs)
+    service.index_service.ensure_fresh_target = lambda **kwargs: ensure_calls.append(kwargs)
+
+    service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(target),
+            index_depth=1,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert schedule_calls == []
+    assert ensure_calls == [
+        {
+            "full_path": str(target),
+            "refresh_window_minutes": 60,
+            "exclude_keywords": "",
+            "index_depth": 1,
+            "types": None,
+        }
+    ]
+
+
+def test_search_with_skip_refresh_bypasses_refresh_flow(tmp_path: Path) -> None:
+    """
+    skip_refresh 指定時は既存インデックス検索だけを行い、再インデックス判定へ入らない。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="memo.md",
+        full_path=str(target / "memo.md"),
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="alpha memo",
+        click_count=0,
+    )
+
+    ensure_calls: list[dict[str, object]] = []
+    service.index_service.ensure_fresh_target = lambda **kwargs: ensure_calls.append(kwargs)
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(target),
+            skip_refresh=True,
+            index_depth=1,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["memo.md"]
+    assert result.used_existing_index is False
+    assert result.background_refresh_scheduled is False
+    assert ensure_calls == []
+
+
+def test_schedule_background_refresh_throttles_repeated_requests(tmp_path: Path) -> None:
+    """
+    同じ条件のバックグラウンド再インデックスは短時間に何度も予約しない。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+
+    first = service._schedule_background_refresh(
+        normalized_target_path="/workspace/docs",
+        effective_exclude_keywords="",
+        index_depth=1,
+        index_types=None,
+    )
+    second = service._schedule_background_refresh(
+        normalized_target_path="/workspace/docs",
+        effective_exclude_keywords="",
+        index_depth=1,
+        index_types=None,
+    )
+
+    assert first is True
+    assert second is False
 
 
 def test_search_all_enabled_with_full_path_limits_results_to_that_path(tmp_path: Path) -> None:

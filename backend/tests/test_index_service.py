@@ -70,9 +70,9 @@ def test_unchanged_files_are_skipped_on_reindex(tmp_path: Path) -> None:
     assert row["indexed_at"] == first_indexed_at
 
 
-def test_needs_refresh_when_japanese_bigram_segment_is_missing(tmp_path: Path) -> None:
+def test_needs_refresh_when_target_index_version_is_missing_for_japanese_bigram_support(tmp_path: Path) -> None:
     """
-    旧インデックスに日本語 bi-gram 補助セグメントがない場合は再インデックスする。
+    旧インデックス由来で target の索引バージョンが古い場合は再インデックスする。
     """
     connection = _create_connection(tmp_path)
     service = IndexService(connection=connection)
@@ -117,7 +117,10 @@ def test_needs_refresh_when_japanese_bigram_segment_is_missing(tmp_path: Path) -
         exclude_keywords="",
         index_depth=5,
         selected_extensions="",
+        indexed_file_count=1,
     )
+    connection.execute("UPDATE targets SET index_version = 0 WHERE id = ?", (int(target_row["id"]),))
+    connection.commit()
 
     refreshed_target = service._ensure_target(
         full_path=str(target),
@@ -132,6 +135,34 @@ def test_needs_refresh_when_japanese_bigram_segment_is_missing(tmp_path: Path) -
         index_depth=5,
         selected_extensions="",
     )
+
+
+def test_no_refresh_path_skips_status_update_and_recount(tmp_path: Path) -> None:
+    """
+    期限内で再インデックス不要なら、実行状態更新や件数再集計を行わず即座に復帰する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "stable.md").write_text("unchanged content", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=60)
+    first_status = service.get_status()
+
+    def fail_update_status(**_: object) -> None:
+        raise AssertionError("_update_status should not run when refresh is unnecessary")
+
+    service._update_status = fail_update_status
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=60)
+
+    second_status = IndexService(connection=connection).get_status()
+    assert second_status.last_started_at == first_status.last_started_at
+    assert second_status.last_finished_at == first_status.last_finished_at
+    assert second_status.total_files == 1
+
+
 
 
 def test_deleted_files_are_removed_from_index(tmp_path: Path) -> None:

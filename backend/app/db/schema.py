@@ -10,6 +10,8 @@ SCHEMA_STATEMENTS: list[str] = [
         exclude_keywords TEXT NOT NULL DEFAULT '',
         index_depth INTEGER NOT NULL DEFAULT 1,
         selected_extensions TEXT NOT NULL DEFAULT '',
+        indexed_file_count INTEGER NOT NULL DEFAULT 0,
+        index_version INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE(full_path)
@@ -177,8 +179,13 @@ def _apply_non_destructive_migrations(connection: Connection) -> None:
     既存DBは可能な限り保持したまま、後方互換な列追加だけを反映する。
     """
     file_columns = _get_columns(connection, "files")
+    target_columns = _get_columns(connection, "targets")
     if "click_count" not in file_columns:
         connection.execute("ALTER TABLE files ADD COLUMN click_count INTEGER NOT NULL DEFAULT 0;")
+    if "indexed_file_count" not in target_columns:
+        connection.execute("ALTER TABLE targets ADD COLUMN indexed_file_count INTEGER NOT NULL DEFAULT 0;")
+    if "index_version" not in target_columns:
+        connection.execute("ALTER TABLE targets ADD COLUMN index_version INTEGER NOT NULL DEFAULT 0;")
 
 
 def _needs_schema_reset(connection: Connection) -> bool:
@@ -197,6 +204,8 @@ def _needs_schema_reset(connection: Connection) -> bool:
         "exclude_keywords",
         "index_depth",
         "selected_extensions",
+        "indexed_file_count",
+        "index_version",
         "created_at",
         "updated_at",
     }

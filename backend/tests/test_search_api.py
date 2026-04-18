@@ -83,6 +83,26 @@ def test_search_with_body_passes_search_all_flag_to_service() -> None:
     assert service.last_search_params.full_path == "/tmp/docs"
 
 
+def test_search_with_body_passes_skip_refresh_flag_to_service() -> None:
+    """
+    POST /api/search は skip_refresh フラグをそのまま SearchRequest でサービスへ渡す。
+    """
+    service = StubSearchService()
+
+    search_with_body(
+        SearchRequest(
+            q="alpha",
+            full_path="/tmp/docs",
+            skip_refresh=True,
+            index_depth=5,
+        ),
+        service,
+    )
+
+    assert service.last_search_params is not None
+    assert service.last_search_params.skip_refresh is True
+
+
 def test_search_existing_index_passes_folder_path_to_service() -> None:
     """
     POST /api/search/indexed は folder_path と検索語をそのままサービスへ渡す。
