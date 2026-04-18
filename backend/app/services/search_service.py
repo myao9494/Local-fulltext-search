@@ -139,7 +139,7 @@ class SearchService:
         通常モードでは既存の FTS5 ベース全文検索を利用する。
         CTE を1回だけ評価し、COUNT と結果を同時に取得する。
         """
-        where_clause, values = self._build_common_filters(
+        scoped_files_cte_sql, scoped_file_values = self._build_scoped_files_cte(
             normalized_target_path=normalized_target_path,
             path_depth_limit=path_depth_limit,
             types=params.types,
@@ -163,89 +163,87 @@ class SearchService:
                     matched_queries.append(
                         f"""
                         SELECT
-                            files.id AS file_id,
+                            scoped_files.id AS file_id,
                             {term_index} AS term_index,
                             0 AS match_rank,
                             0.0 AS score,
                             NULL AS snippet,
                             file_segments.segment_type AS segment_type,
                             file_segments.content AS body_content
-                        FROM file_segments
-                        JOIN files ON files.id = file_segments.file_id
-                        WHERE {where_clause}
-                          AND file_segments.segment_type = 'body'
+                        FROM scoped_files
+                        JOIN file_segments ON file_segments.file_id = scoped_files.id
+                        WHERE file_segments.segment_type = 'body'
                           AND lower(file_segments.content) LIKE ? ESCAPE '\\'
                         """
                     )
-                    query_values.extend([*values, f"%{escaped_term}%"])
+                    query_values.append(f"%{escaped_term}%")
                 else:
                     body_fts_query = self._quote_fts_term(term)
                     matched_queries.append(
                         f"""
                         SELECT
-                            files.id AS file_id,
+                            scoped_files.id AS file_id,
                             {term_index} AS term_index,
                             0 AS match_rank,
                             bm25(file_segments_fts) AS score,
                             snippet(file_segments_fts, 0, '<mark>', '</mark>', ' ... ', 36) AS snippet,
                             file_segments.segment_type AS segment_type,
                             file_segments.content AS body_content
-                        FROM file_segments_fts
-                        JOIN file_segments ON file_segments.id = file_segments_fts.rowid
-                        JOIN files ON files.id = file_segments.file_id
-                        WHERE {where_clause}
-                          AND file_segments.segment_type = 'body'
+                        FROM scoped_files
+                        JOIN file_segments ON file_segments.file_id = scoped_files.id
+                        JOIN file_segments_fts ON file_segments_fts.rowid = file_segments.id
+                        WHERE file_segments.segment_type = 'body'
                           AND file_segments_fts MATCH ?
                         """
                     )
-                    query_values.extend([*values, body_fts_query])
+                    query_values.append(body_fts_query)
 
                     cjk_bigram_query = build_cjk_bigram_match_query(term)
                     if cjk_bigram_query is not None:
                         matched_queries.append(
                             f"""
                             SELECT
-                                files.id AS file_id,
+                                scoped_files.id AS file_id,
                                 {term_index} AS term_index,
                                 1 AS match_rank,
                                 bm25(file_segments_fts) AS score,
                                 NULL AS snippet,
                                 file_segments.segment_type AS segment_type,
                                 body_segments.content AS body_content
-                            FROM file_segments_fts
-                            JOIN file_segments ON file_segments.id = file_segments_fts.rowid
-                            JOIN files ON files.id = file_segments.file_id
+                            FROM scoped_files
+                            JOIN file_segments ON file_segments.file_id = scoped_files.id
+                            JOIN file_segments_fts ON file_segments_fts.rowid = file_segments.id
                             JOIN file_segments AS body_segments
-                              ON body_segments.file_id = files.id
+                              ON body_segments.file_id = scoped_files.id
                              AND body_segments.segment_type = 'body'
-                            WHERE {where_clause}
-                              AND file_segments.segment_type = 'cjk_bigram'
+                            WHERE file_segments.segment_type = 'cjk_bigram'
                               AND file_segments_fts MATCH ?
                             """
                         )
-                        query_values.extend([*values, cjk_bigram_query])
+                        query_values.append(cjk_bigram_query)
 
                 matched_queries.append(
                     f"""
                     SELECT
-                        files.id AS file_id,
+                        scoped_files.id AS file_id,
                         {term_index} AS term_index,
                         2 AS match_rank,
                         1000000.0 AS score,
                         NULL AS snippet,
                         'filename' AS segment_type,
                         body_segments.content AS body_content
-                    FROM files
+                    FROM scoped_files
                     LEFT JOIN file_segments AS body_segments
-                      ON body_segments.file_id = files.id
+                      ON body_segments.file_id = scoped_files.id
                      AND body_segments.segment_type = 'body'
-                    WHERE {where_clause} AND lower(files.file_name) LIKE ? ESCAPE '\\'
+                    WHERE lower(scoped_files.file_name) LIKE ? ESCAPE '\\'
                     """
                 )
-                query_values.extend([*values, f"%{escaped_term}%"])
+                query_values.append(f"%{escaped_term}%")
 
         matched_files_cte = f"""
-            WITH matched_terms AS (
+            {scoped_files_cte_sql},
+            matched_terms AS (
                 {" UNION ALL ".join(matched_queries)}
             ),
             matched_file_terms AS (
@@ -281,25 +279,31 @@ class SearchService:
             )
         """
 
-        order_by_clause = self._build_order_by_clause(sort_by=params.sort_by, sort_order=params.sort_order)
+        order_by_clause = self._build_order_by_clause(
+            sort_by=params.sort_by,
+            sort_order=params.sort_order,
+            table_alias="scoped_files",
+        )
+
+        query_values = [*scoped_file_values, *query_values]
 
         if exclude_terms or (not normalized_target_path and excluded_keywords):
             rows = self.connection.execute(
                 f"""
                 {matched_files_cte}
                 SELECT
-                    files.id AS file_id,
-                    files.file_name,
-                    files.normalized_path,
-                    files.file_ext,
-                    files.created_at,
-                    files.mtime,
-                    files.click_count,
+                    scoped_files.id AS file_id,
+                    scoped_files.file_name,
+                    scoped_files.normalized_path,
+                    scoped_files.file_ext,
+                    scoped_files.created_at,
+                    scoped_files.mtime,
+                    scoped_files.click_count,
                     filtered.snippet,
                     filtered.segment_type,
                     filtered.body_content
                 FROM filtered
-                JOIN files ON files.id = filtered.file_id
+                JOIN scoped_files ON scoped_files.id = filtered.file_id
                 ORDER BY {order_by_clause}
                 """,
                 tuple(query_values),
@@ -348,20 +352,20 @@ class SearchService:
             ),
             paged_matches AS (
                 SELECT
-                    files.id AS file_id,
-                    files.file_name,
-                    files.normalized_path,
-                    files.file_ext,
-                    files.created_at,
-                    files.mtime,
-                    files.click_count,
+                    scoped_files.id AS file_id,
+                    scoped_files.file_name,
+                    scoped_files.normalized_path,
+                    scoped_files.file_ext,
+                    scoped_files.created_at,
+                    scoped_files.mtime,
+                    scoped_files.click_count,
                     filtered.snippet,
                     filtered.segment_type,
                     filtered.body_content,
                     filtered.match_rank,
                     filtered.score
                 FROM filtered
-                JOIN files ON files.id = filtered.file_id
+                JOIN scoped_files ON scoped_files.id = filtered.file_id
                 ORDER BY {order_by_clause}
                 LIMIT ? OFFSET ?
             )
@@ -431,7 +435,7 @@ class SearchService:
         正規表現モードでは Python の re で本文とファイル名を評価する。
         イテレータで逐次処理し、メモリ使用量を抑える。
         """
-        where_clause, values = self._build_common_filters(
+        scoped_files_cte_sql, values = self._build_scoped_files_cte(
             normalized_target_path=normalized_target_path,
             path_depth_limit=path_depth_limit,
             types=params.types,
@@ -446,21 +450,25 @@ class SearchService:
         pattern = self._compile_regex(" ".join(include_terms))
         cursor = self.connection.execute(
             f"""
+            {scoped_files_cte_sql}
             SELECT
-                files.id AS file_id,
-                files.file_name,
-                files.normalized_path,
-                files.file_ext,
-                files.created_at,
-                files.mtime,
-                files.click_count,
+                scoped_files.id AS file_id,
+                scoped_files.file_name,
+                scoped_files.normalized_path,
+                scoped_files.file_ext,
+                scoped_files.created_at,
+                scoped_files.mtime,
+                scoped_files.click_count,
                 file_segments.content
-            FROM files
+            FROM scoped_files
             LEFT JOIN file_segments
-                ON file_segments.file_id = files.id
+                ON file_segments.file_id = scoped_files.id
                AND file_segments.segment_type = 'body'
-            WHERE {where_clause}
-            ORDER BY {self._build_regex_order_by_clause(sort_by=params.sort_by, sort_order=params.sort_order)}
+            ORDER BY {self._build_regex_order_by_clause(
+                sort_by=params.sort_by,
+                sort_order=params.sort_order,
+                table_alias="scoped_files",
+            )}
             """,
             tuple(values),
         )
@@ -765,31 +773,74 @@ class SearchService:
 
         return " AND ".join(filters), values
 
-    def _build_order_by_clause(self, *, sort_by: str, sort_order: str) -> str:
+    def _build_scoped_files_cte(
+        self,
+        *,
+        normalized_target_path: str,
+        path_depth_limit: int | None,
+        types: str | None,
+        date_field: str = "created",
+        created_from: date | None = None,
+        created_to: date | None = None,
+        custom_content_extensions: str = "",
+        custom_filename_extensions: str = "",
+    ) -> tuple[str, list[object]]:
+        """
+        フォルダ・階層・拡張子・日付の候補絞り込みを1回だけ行う scoped_files CTE を組み立てる。
+        """
+        where_clause, values = self._build_common_filters(
+            normalized_target_path=normalized_target_path,
+            path_depth_limit=path_depth_limit,
+            types=types,
+            date_field=date_field,
+            created_from=created_from,
+            created_to=created_to,
+            custom_content_extensions=custom_content_extensions,
+            custom_filename_extensions=custom_filename_extensions,
+        )
+        return (
+            f"""
+            WITH scoped_files AS (
+                SELECT
+                    files.id,
+                    files.file_name,
+                    files.normalized_path,
+                    files.file_ext,
+                    files.created_at,
+                    files.mtime,
+                    files.click_count
+                FROM files
+                WHERE {where_clause}
+            )
+            """,
+            values,
+        )
+
+    def _build_order_by_clause(self, *, sort_by: str, sort_order: str, table_alias: str = "files") -> str:
         """
         FTS 検索は一致品質を優先しつつ、同順位内で指定列へ並び替える。
         """
         direction = "ASC" if sort_order == "asc" else "DESC"
-        sort_column = self._resolve_sort_column(sort_by)
-        return f"filtered.match_rank, filtered.score, {sort_column} {direction}, files.id DESC"
+        sort_column = self._resolve_sort_column(sort_by, table_alias=table_alias)
+        return f"filtered.match_rank, filtered.score, {sort_column} {direction}, {table_alias}.id DESC"
 
-    def _build_regex_order_by_clause(self, *, sort_by: str, sort_order: str) -> str:
+    def _build_regex_order_by_clause(self, *, sort_by: str, sort_order: str, table_alias: str = "files") -> str:
         """
         正規表現検索は DB 側で指定列順に走査し、結果の表示順と一致させる。
         """
         direction = "ASC" if sort_order == "asc" else "DESC"
-        sort_column = self._resolve_sort_column(sort_by)
-        return f"{sort_column} {direction}, files.id DESC"
+        sort_column = self._resolve_sort_column(sort_by, table_alias=table_alias)
+        return f"{sort_column} {direction}, {table_alias}.id DESC"
 
-    def _resolve_sort_column(self, sort_by: str) -> str:
+    def _resolve_sort_column(self, sort_by: str, *, table_alias: str = "files") -> str:
         """
         並び替えキーを SQL の安全な固定列へ解決する。
         """
         if sort_by == "created":
-            return "files.created_at"
+            return f"{table_alias}.created_at"
         if sort_by == "click_count":
-            return "files.click_count"
-        return "files.mtime"
+            return f"{table_alias}.click_count"
+        return f"{table_alias}.mtime"
 
     def _resolve_local_day_start_timestamp(self, value: date) -> float:
         """

@@ -45,6 +45,10 @@ SCHEMA_STATEMENTS: list[str] = [
     USING fts5(content, segment_label, content='file_segments', content_rowid='id');
     """,
     """
+    CREATE INDEX IF NOT EXISTS idx_file_segments_file_id_segment_type
+    ON file_segments(file_id, segment_type);
+    """,
+    """
     CREATE TABLE IF NOT EXISTS index_runs (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         is_running INTEGER NOT NULL DEFAULT 0,

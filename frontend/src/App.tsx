@@ -480,6 +480,10 @@ function App() {
         sort_order: sortOrder,
         created_from: createdFrom || undefined,
         created_to: createdTo || undefined,
+      }, {
+        onProgress: (partialResponse) => {
+          setResults(partialResponse.items);
+        },
       });
       setResults(response.items);
       await refreshIndexStatus();

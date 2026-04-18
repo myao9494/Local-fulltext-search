@@ -498,6 +498,30 @@ def test_search_matches_filename_only_image_in_normal_mode(tmp_path: Path) -> No
     assert [item.file_name for item in result.items] == ["architecture-overview.png"]
 
 
+def test_build_scoped_files_cte_keeps_target_filters_outside_each_term(tmp_path: Path) -> None:
+    """
+    フォルダ・拡張子・日付の対象絞り込みは scoped_files CTE に集約し、各語句クエリへ重複埋め込みしない。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+
+    cte_sql, values = service._build_scoped_files_cte(
+        normalized_target_path="/docs/projects",
+        path_depth_limit=3,
+        types=".md .json",
+        date_field="modified",
+        created_from=date(2026, 4, 10),
+        created_to=date(2026, 4, 12),
+        custom_content_extensions="",
+        custom_filename_extensions="",
+    )
+
+    assert "WITH scoped_files AS (" in cte_sql
+    assert cte_sql.count("files.normalized_path >= ?") == 1
+    assert cte_sql.count("files.normalized_path < ?") == 1
+    assert "SELECT" in cte_sql
+    assert len(values) == 9
+
+
 def test_search_matches_filename_only_image_in_regex_mode(tmp_path: Path) -> None:
     """
     本文を持たない画像ファイルでも、正規表現モードでファイル名検索できる。

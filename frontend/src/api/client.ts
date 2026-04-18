@@ -125,6 +125,8 @@ export async function search(params: {
   sort_order?: "asc" | "desc";
   created_from?: string;
   created_to?: string;
+}, options?: {
+  onProgress?: (response: SearchResponse) => void;
 }): Promise<SearchResponse> {
   const items = [];
   let total = 0;
@@ -145,6 +147,10 @@ export async function search(params: {
     }
 
     items.push(...response.items);
+    options?.onProgress?.({
+      total,
+      items: [...items],
+    });
 
     if (response.items.length === 0 || items.length >= response.total) {
       return {
