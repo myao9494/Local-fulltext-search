@@ -572,7 +572,8 @@ function App() {
     if (isSearching) {
       return;
     }
-    const resolvedSearchPath = fullPath.trim() || savedDefaultSearchPath;
+    const normalizedInputPath = fullPath.trim();
+    const resolvedSearchPath = normalizedInputPath || (isSearchAllEnabled ? "" : savedDefaultSearchPath);
     if (!query.trim()) {
       setErrorMessage("検索語を入力してください。");
       return;
