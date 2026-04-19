@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import {
   cancelIndexing,
+  deleteFile,
   fetchAppSettings,
   deleteIndexedTargets,
   fetchFailedFiles,
@@ -738,6 +739,22 @@ function App() {
       .catch(() => undefined);
   }
 
+  async function handleResultDelete(fileId: number, fullPath: string): Promise<void> {
+    if (!window.confirm(`このファイルを完全に削除しますか？\n（物理ファイルが削除され元に戻せません）\n\n${fullPath}`)) {
+      return;
+    }
+    
+    try {
+      await deleteFile(fileId);
+      setResults((current) => current.filter((item) => item.file_id !== fileId));
+      setNoticeMessage("ファイルを削除しました。");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "ファイルの削除に失敗しました。");
+      setNoticeMessage("");
+    }
+  }
+
   function toggleIndexExtension(extension: string): void {
     setSelectedIndexExtensions((current) =>
       current.includes(extension) ? current.filter((item) => item !== extension) : [...current, extension],
@@ -1113,7 +1130,7 @@ function App() {
               <h2>Search Results</h2>
               <span>{searchFilterText.trim() ? `${visibleResults.length} / ${sortedResults.length}件` : `${visibleResults.length}件`}</span>
             </div>
-            <ResultsList items={visibleResults} dateField={dateField} onResultOpen={handleResultOpen} />
+            <ResultsList items={visibleResults} dateField={dateField} onResultOpen={handleResultOpen} onResultDelete={handleResultDelete} />
           </section>
         ) : pageView === "indexed-targets" ? (
           <section className="indexed-targets-panel">

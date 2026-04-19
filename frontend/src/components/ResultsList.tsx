@@ -5,6 +5,7 @@ type ResultsListProps = {
   items: SearchResult[];
   dateField: "created" | "modified";
   onResultOpen: (fileId: number) => void;
+  onResultDelete: (fileId: number, fullPath: string) => void;
 };
 
 /**
@@ -53,7 +54,7 @@ function fallbackCopyTextToClipboard(text: string): boolean {
   return didCopy;
 }
 
-export function ResultsList({ items, dateField, onResultOpen }: ResultsListProps) {
+export function ResultsList({ items, dateField, onResultOpen, onResultDelete }: ResultsListProps) {
   const [copiedFileId, setCopiedFileId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -122,6 +123,14 @@ export function ResultsList({ items, dateField, onResultOpen }: ResultsListProps
                 >
                   フォルダを開く
                 </a>
+                <button
+                  type="button"
+                  className="result-delete-button"
+                  onClick={() => onResultDelete(item.file_id, item.full_path)}
+                  title="ファイルを完全に削除"
+                >
+                  削除
+                </button>
                 {copiedFileId === item.file_id ? (
                   <span className="result-path-status">コピーしました</span>
                 ) : null}

@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from app.api.files import router as files_router
 from app.api.folders import router as folders_router
 from app.api.index import router as index_router
 from app.api.search import router as search_router
@@ -43,6 +44,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    app.include_router(files_router)
     app.include_router(folders_router)
     app.include_router(index_router)
     app.include_router(search_router)

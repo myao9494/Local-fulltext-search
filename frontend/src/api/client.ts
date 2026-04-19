@@ -179,3 +179,9 @@ export async function recordSearchClick(fileId: number): Promise<{ file_id: numb
     body: JSON.stringify({ file_id: fileId }),
   });
 }
+
+export async function deleteFile(fileId: number): Promise<{ status: string; file_id: number }> {
+  return request<{ status: string; file_id: number }>(`/api/files/${fileId}`, {
+    method: "DELETE",
+  });
+}
