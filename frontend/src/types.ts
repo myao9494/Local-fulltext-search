@@ -1,5 +1,6 @@
 export type SearchResult = {
   file_id: number;
+  result_kind: "file" | "folder";
   target_path: string;
   file_name: string;
   full_path: string;

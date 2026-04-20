@@ -285,13 +285,16 @@ class SearchService:
         normalized_query = params.q.strip()
         include_terms, exclude_terms = self._split_search_terms(normalized_query)
         expanded_include_terms = self._expand_include_terms_with_synonyms(include_terms, app_settings.synonym_groups)
+        search_body = self._search_target_includes_body(params.search_target)
+        search_filename = self._search_target_includes_filename(params.search_target)
+        search_folder = self._search_target_includes_folder(params.search_target)
 
         matched_queries: list[str] = []
         query_values: list[object] = []
         for term_index, term_group in enumerate(expanded_include_terms):
             for term in term_group:
                 escaped_term = self._escape_like_pattern(term.lower())
-                if self._should_use_literal_term_search(term):
+                if search_body and self._should_use_literal_term_search(term):
                     matched_queries.append(
                         f"""
                         SELECT
@@ -309,8 +312,8 @@ class SearchService:
                         """
                     )
                     query_values.append(f"%{escaped_term}%")
-                else:
-                    body_fts_query = self._quote_fts_term(term)
+                elif search_body:
+                    body_fts_query = self._build_fts_content_query(self._quote_fts_term(term))
                     matched_queries.append(
                         f"""
                         SELECT
@@ -332,6 +335,7 @@ class SearchService:
 
                     cjk_bigram_query = build_cjk_bigram_match_query(term)
                     if cjk_bigram_query is not None:
+                        cjk_bigram_query = self._build_fts_content_query(cjk_bigram_query)
                         matched_queries.append(
                             f"""
                             SELECT
@@ -354,205 +358,208 @@ class SearchService:
                         )
                         query_values.append(cjk_bigram_query)
 
-                matched_queries.append(
-                    f"""
-                    SELECT
-                        scoped_files.id AS file_id,
-                        {term_index} AS term_index,
-                        2 AS match_rank,
-                        1000000.0 AS score,
-                        NULL AS snippet,
-                        'filename' AS segment_type,
-                        body_segments.content AS body_content
-                    FROM scoped_files
-                    LEFT JOIN file_segments AS body_segments
-                      ON body_segments.file_id = scoped_files.id
-                     AND body_segments.segment_type = 'body'
-                    WHERE lower(scoped_files.file_name) LIKE ? ESCAPE '\\'
-                    """
-                )
-                query_values.append(f"%{escaped_term}%")
+                if search_filename:
+                    matched_queries.append(
+                        f"""
+                        SELECT
+                            scoped_files.id AS file_id,
+                            {term_index} AS term_index,
+                            2 AS match_rank,
+                            1000000.0 AS score,
+                            NULL AS snippet,
+                            'filename' AS segment_type,
+                            body_segments.content AS body_content
+                        FROM scoped_files
+                        LEFT JOIN file_segments AS body_segments
+                          ON body_segments.file_id = scoped_files.id
+                         AND body_segments.segment_type = 'body'
+                        WHERE lower(scoped_files.file_name) LIKE ? ESCAPE '\\'
+                        """
+                    )
+                    query_values.append(f"%{escaped_term}%")
 
-        matched_files_cte = f"""
-            {scoped_files_cte_sql},
-            matched_terms AS (
-                {" UNION ALL ".join(matched_queries)}
-            ),
-            matched_file_terms AS (
-                SELECT
-                    file_id,
-                    term_index
-                FROM matched_terms
-                GROUP BY file_id, term_index
-            ),
-            matching_files AS (
-                SELECT file_id
-                FROM matched_file_terms
-                GROUP BY file_id
-                HAVING COUNT(*) = {len(expanded_include_terms)}
-            ),
-            ranked_matches AS (
-                SELECT
-                    matched_terms.file_id,
-                    matched_terms.match_rank,
-                    matched_terms.score,
-                    matched_terms.snippet,
-                    matched_terms.segment_type,
-                    matched_terms.body_content,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY matched_terms.file_id
-                        ORDER BY matched_terms.match_rank, matched_terms.score, matched_terms.file_id
-                    ) AS rn
-                FROM matched_terms
-                JOIN matching_files ON matching_files.file_id = matched_terms.file_id
-            ),
-            filtered AS (
-                SELECT * FROM ranked_matches WHERE rn = 1
-            )
-        """
-
+        file_items: list[SearchResultItem] = []
         order_by_clause = self._build_order_by_clause(
             sort_by=params.sort_by,
             sort_order=params.sort_order,
             table_alias="scoped_files",
         )
 
-        query_values = [*scoped_file_values, *query_values]
-
-        if exclude_terms or (not normalized_target_path and excluded_keywords):
-            rows = self.connection.execute(
-                f"""
-                {matched_files_cte}
-                SELECT
-                    scoped_files.id AS file_id,
-                    scoped_files.file_name,
-                    scoped_files.normalized_path,
-                    scoped_files.file_ext,
-                    scoped_files.created_at,
-                    scoped_files.mtime,
-                    scoped_files.click_count,
-                    filtered.snippet,
-                    filtered.segment_type,
-                    filtered.body_content
-                FROM filtered
-                JOIN scoped_files ON scoped_files.id = filtered.file_id
-                ORDER BY {order_by_clause}
-                """,
-                tuple(query_values),
-            ).fetchall()
-
-            visible_items = [
-                SearchResultItem(
-                    file_id=int(row["file_id"]),
-                    target_path=normalized_target_path,
-                    file_name=str(row["file_name"]),
-                    full_path=str(row["normalized_path"]),
-                    file_ext=str(row["file_ext"]),
-                    created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
-                    mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
-                    click_count=int(row["click_count"] or 0),
-                        snippet=self._resolve_snippet(
-                            snippet=row["snippet"],
-                            file_name=str(row["file_name"]),
-                            segment_type=str(row["segment_type"] or "filename"),
-                            body_content=row["body_content"],
-                            highlight_terms=self._flatten_highlight_terms(expanded_include_terms),
-                        ),
-                )
-                for row in rows
-                if not self._should_exclude_search_result(
-                    target_path=normalized_target_path,
-                    candidate_path=str(row["normalized_path"]),
-                    excluded_keywords=excluded_keywords,
-                )
-                and not self._matches_excluded_search_terms(
-                    file_name=str(row["file_name"]),
-                    body_content=str(row["body_content"] or ""),
-                    exclude_terms=exclude_terms,
-                )
-            ]
-            return SearchResponse(total=len(visible_items), items=visible_items[params.offset : params.offset + params.limit])
-
-        query_values.extend([params.limit, params.offset])
-
-        rows = self.connection.execute(
-            f"""
-            {matched_files_cte},
-            total_count AS (
-                SELECT COUNT(*) AS total
-                FROM filtered
-            ),
-            paged_matches AS (
-                SELECT
-                    scoped_files.id AS file_id,
-                    scoped_files.file_name,
-                    scoped_files.normalized_path,
-                    scoped_files.file_ext,
-                    scoped_files.created_at,
-                    scoped_files.mtime,
-                    scoped_files.click_count,
-                    filtered.snippet,
-                    filtered.segment_type,
-                    filtered.body_content,
-                    filtered.match_rank,
-                    filtered.score
-                FROM filtered
-                JOIN scoped_files ON scoped_files.id = filtered.file_id
-                ORDER BY {order_by_clause}
-                LIMIT ? OFFSET ?
-            )
-            SELECT
-                paged_matches.file_id,
-                paged_matches.file_name,
-                paged_matches.normalized_path,
-                paged_matches.file_ext,
-                paged_matches.created_at,
-                paged_matches.mtime,
-                paged_matches.click_count,
-                paged_matches.snippet,
-                paged_matches.segment_type,
-                paged_matches.body_content,
-                total_count.total
-            FROM total_count
-            LEFT JOIN paged_matches ON 1 = 1
-            ORDER BY paged_matches.match_rank, paged_matches.score, paged_matches.mtime DESC
-            """,
-            tuple(query_values),
-        ).fetchall()
-
-        total = int(rows[0]["total"]) if rows else 0
-        items = [
-            SearchResultItem(
-                file_id=int(row["file_id"]),
-                target_path=normalized_target_path,
-                file_name=str(row["file_name"]),
-                full_path=str(row["normalized_path"]),
-                file_ext=str(row["file_ext"]),
-                created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
-                mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
-                click_count=int(row["click_count"] or 0),
-                snippet=self._resolve_snippet(
-                    snippet=row["snippet"],
-                    file_name=str(row["file_name"]),
-                    segment_type=str(row["segment_type"] or "filename"),
-                    body_content=row["body_content"],
-                    highlight_terms=self._flatten_highlight_terms(expanded_include_terms),
+        if matched_queries:
+            matched_files_cte = f"""
+                {scoped_files_cte_sql},
+                matched_terms AS (
+                    {" UNION ALL ".join(matched_queries)}
                 ),
-            )
-            for row in rows
-            if row["file_id"] is not None
-            and not self._should_exclude_search_result(
-                target_path=normalized_target_path,
-                candidate_path=str(row["normalized_path"]),
-                excluded_keywords=excluded_keywords,
-            )
-            and not self._matches_excluded_search_terms(
-                file_name=str(row["file_name"]),
-                body_content=str(row["body_content"] or ""),
-                exclude_terms=exclude_terms,
-            )
-        ]
-        return SearchResponse(total=total, items=items)
+                matched_file_terms AS (
+                    SELECT
+                        file_id,
+                        term_index
+                    FROM matched_terms
+                    GROUP BY file_id, term_index
+                ),
+                matching_files AS (
+                    SELECT file_id
+                    FROM matched_file_terms
+                    GROUP BY file_id
+                    HAVING COUNT(*) = {len(expanded_include_terms)}
+                ),
+                ranked_matches AS (
+                    SELECT
+                        matched_terms.file_id,
+                        matched_terms.match_rank,
+                        matched_terms.score,
+                        matched_terms.snippet,
+                        matched_terms.segment_type,
+                        matched_terms.body_content,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY matched_terms.file_id
+                            ORDER BY matched_terms.match_rank, matched_terms.score, matched_terms.file_id
+                        ) AS rn
+                    FROM matched_terms
+                    JOIN matching_files ON matching_files.file_id = matched_terms.file_id
+                ),
+                filtered AS (
+                    SELECT * FROM ranked_matches WHERE rn = 1
+                )
+            """
+            all_query_values = [*scoped_file_values, *query_values]
+            should_fetch_all_files = search_folder or exclude_terms or (not normalized_target_path and excluded_keywords)
+
+            if should_fetch_all_files:
+                rows = self.connection.execute(
+                    f"""
+                    {matched_files_cte}
+                    SELECT
+                        scoped_files.id AS file_id,
+                        'file' AS result_kind,
+                        scoped_files.file_name,
+                        scoped_files.normalized_path,
+                        scoped_files.file_ext,
+                        scoped_files.created_at,
+                        scoped_files.mtime,
+                        scoped_files.click_count,
+                        filtered.snippet,
+                        filtered.segment_type,
+                        filtered.body_content
+                    FROM filtered
+                    JOIN scoped_files ON scoped_files.id = filtered.file_id
+                    ORDER BY {order_by_clause}
+                    """,
+                    tuple(all_query_values),
+                ).fetchall()
+                file_items = [
+                    self._build_search_result_item(
+                        row=row,
+                        normalized_target_path=normalized_target_path,
+                        highlight_terms=self._flatten_highlight_terms(expanded_include_terms),
+                    )
+                    for row in rows
+                    if not self._should_exclude_search_result(
+                        target_path=normalized_target_path,
+                        candidate_path=str(row["normalized_path"]),
+                        excluded_keywords=excluded_keywords,
+                    )
+                    and not self._matches_excluded_search_terms(
+                        file_name=str(row["file_name"]),
+                        body_content=str(row["body_content"] or ""),
+                        folder_path=self._resolve_folder_path(str(row["normalized_path"]), str(row["file_name"])),
+                        exclude_terms=exclude_terms,
+                    )
+                ]
+                if not search_folder:
+                    return SearchResponse(total=len(file_items), items=file_items[params.offset : params.offset + params.limit])
+            else:
+                paged_query_values = [*all_query_values, params.limit, params.offset]
+                rows = self.connection.execute(
+                    f"""
+                    {matched_files_cte},
+                    total_count AS (
+                        SELECT COUNT(*) AS total
+                        FROM filtered
+                    ),
+                    paged_matches AS (
+                        SELECT
+                            scoped_files.id AS file_id,
+                            'file' AS result_kind,
+                            scoped_files.file_name,
+                            scoped_files.normalized_path,
+                            scoped_files.file_ext,
+                            scoped_files.created_at,
+                            scoped_files.mtime,
+                            scoped_files.click_count,
+                            filtered.snippet,
+                            filtered.segment_type,
+                            filtered.body_content,
+                            filtered.match_rank,
+                            filtered.score
+                        FROM filtered
+                        JOIN scoped_files ON scoped_files.id = filtered.file_id
+                        ORDER BY {order_by_clause}
+                        LIMIT ? OFFSET ?
+                    )
+                    SELECT
+                        paged_matches.file_id,
+                        paged_matches.result_kind,
+                        paged_matches.file_name,
+                        paged_matches.normalized_path,
+                        paged_matches.file_ext,
+                        paged_matches.created_at,
+                        paged_matches.mtime,
+                        paged_matches.click_count,
+                        paged_matches.snippet,
+                        paged_matches.segment_type,
+                        paged_matches.body_content,
+                        total_count.total
+                    FROM total_count
+                    LEFT JOIN paged_matches ON 1 = 1
+                    ORDER BY paged_matches.match_rank, paged_matches.score, paged_matches.mtime DESC
+                    """,
+                    tuple(paged_query_values),
+                ).fetchall()
+
+                total = int(rows[0]["total"]) if rows else 0
+                items = [
+                    self._build_search_result_item(
+                        row=row,
+                        normalized_target_path=normalized_target_path,
+                        highlight_terms=self._flatten_highlight_terms(expanded_include_terms),
+                    )
+                    for row in rows
+                    if row["file_id"] is not None
+                    and not self._should_exclude_search_result(
+                        target_path=normalized_target_path,
+                        candidate_path=str(row["normalized_path"]),
+                        excluded_keywords=excluded_keywords,
+                    )
+                    and not self._matches_excluded_search_terms(
+                        file_name=str(row["file_name"]),
+                        body_content=str(row["body_content"] or ""),
+                        folder_path=self._resolve_folder_path(str(row["normalized_path"]), str(row["file_name"])),
+                        exclude_terms=exclude_terms,
+                    )
+                ]
+                return SearchResponse(total=total, items=items)
+
+        if not search_folder:
+            return SearchResponse(total=0, items=[])
+
+        folder_items = self._search_folder_results(
+            scoped_files_cte_sql=scoped_files_cte_sql,
+            scoped_file_values=scoped_file_values,
+            normalized_target_path=normalized_target_path,
+            excluded_keywords=excluded_keywords,
+            include_terms=include_terms,
+            exclude_terms=exclude_terms,
+            sort_by=params.sort_by,
+            sort_order=params.sort_order,
+        )
+        merged_items = self._sort_search_result_items(
+            [*file_items, *folder_items],
+            sort_by=params.sort_by,
+            sort_order=params.sort_order,
+        )
+        return SearchResponse(total=len(merged_items), items=merged_items[params.offset : params.offset + params.limit])
 
     def _search_with_regex(
         self,
@@ -580,6 +587,9 @@ class SearchService:
         normalized_query = params.q.strip()
         include_terms, exclude_terms = self._split_search_terms(normalized_query)
         pattern = self._compile_regex(" ".join(include_terms))
+        search_body = self._search_target_includes_body(params.search_target)
+        search_filename = self._search_target_includes_filename(params.search_target)
+        search_folder = self._search_target_includes_folder(params.search_target)
         cursor = self.connection.execute(
             f"""
             {scoped_files_cte_sql}
@@ -605,54 +615,79 @@ class SearchService:
             tuple(values),
         )
 
-        items: list[SearchResultItem] = []
-        matched_count = 0
+        file_items: list[SearchResultItem] = []
+        folder_items_by_path: dict[str, SearchResultItem] = {}
         for row in cursor:
             normalized_path = str(row["normalized_path"])
             if self.index_service._should_exclude_path(normalize_path(normalized_path), excluded_keywords):
                 continue
 
             file_name = str(row["file_name"])
+            folder_path = self._resolve_folder_path(normalized_path, file_name)
             content = str(row["content"] or "")
-            content_match = pattern.search(content)
-            file_name_match = pattern.search(file_name)
-            if content_match is None and file_name_match is None:
+            content_match = pattern.search(content) if search_body else None
+            file_name_match = pattern.search(file_name) if search_filename else None
+            folder_path_match = pattern.search(folder_path) if search_folder else None
+            if content_match is None and file_name_match is None and folder_path_match is None:
                 continue
             if self._matches_excluded_search_terms(
                 file_name=file_name,
                 body_content=content,
+                folder_path=folder_path,
                 exclude_terms=exclude_terms,
             ):
                 continue
 
-            matched_count += 1
-            # offset 範囲外はスキップ
-            if matched_count <= params.offset:
-                continue
-            # limit に達したらカウントのみ続行
-            if len(items) >= params.limit:
-                continue
+            if content_match is not None or file_name_match is not None:
+                file_items.append(
+                    SearchResultItem(
+                        file_id=int(row["file_id"]),
+                        result_kind="file",
+                        target_path=normalized_target_path,
+                        file_name=file_name,
+                        full_path=normalized_path,
+                        file_ext=str(row["file_ext"]),
+                        created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
+                        mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
+                        click_count=int(row["click_count"] or 0),
+                        snippet=self._build_regex_snippet(
+                            content=content,
+                            file_name=file_name,
+                            folder_path=folder_path,
+                            content_match=content_match,
+                            file_name_match=file_name_match,
+                            folder_path_match=None,
+                        ),
+                    )
+                )
 
-            items.append(
-                SearchResultItem(
-                    file_id=int(row["file_id"]),
+            if folder_path_match is not None and folder_path not in folder_items_by_path:
+                folder_items_by_path[folder_path] = SearchResultItem(
+                    file_id=-len(folder_items_by_path) - 1,
+                    result_kind="folder",
                     target_path=normalized_target_path,
-                    file_name=file_name,
-                    full_path=normalized_path,
-                    file_ext=str(row["file_ext"]),
+                    file_name=self._resolve_result_display_name("folder", folder_path, folder_path),
+                    full_path=folder_path,
+                    file_ext="",
                     created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
                     mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
-                    click_count=int(row["click_count"] or 0),
+                    click_count=0,
                     snippet=self._build_regex_snippet(
                         content=content,
                         file_name=file_name,
-                        content_match=content_match,
-                        file_name_match=file_name_match,
+                        folder_path=folder_path,
+                        content_match=None,
+                        file_name_match=None,
+                        folder_path_match=folder_path_match,
                     ),
                 )
-            )
 
-        return SearchResponse(total=matched_count, items=items)
+        all_items = self._sort_search_result_items(
+            [*file_items, *folder_items_by_path.values()],
+            sort_by=params.sort_by,
+            sort_order=params.sort_order,
+        )
+        return SearchResponse(total=len(all_items), items=all_items[params.offset : params.offset + params.limit])
 
     def _resolve_snippet(
         self,
@@ -661,6 +696,7 @@ class SearchService:
         file_name: str,
         segment_type: str = "filename",
         body_content: object = None,
+        folder_path: str = "",
         query: str = "",
         highlight_terms: list[str] | None = None,
     ) -> str:
@@ -678,6 +714,13 @@ class SearchService:
             )
             if literal_snippet is not None:
                 return literal_snippet
+        if segment_type == "folder":
+            literal_snippet = self._build_literal_snippet(
+                content=folder_path,
+                highlight_terms=highlight_terms or self._split_search_terms(query)[0],
+            )
+            if literal_snippet is not None:
+                return f"フォルダー名一致: {literal_snippet}"
         if isinstance(snippet, str) and snippet.strip():
             return snippet
         escaped_name = escape(file_name)
@@ -820,21 +863,87 @@ class SearchService:
         *,
         file_name: str,
         body_content: str,
+        folder_path: str,
         exclude_terms: list[str],
     ) -> bool:
         """
-        `-keyword` 指定の語がファイル名または本文に含まれる候補は除外する。
+        `-keyword` 指定の語がファイル名・フォルダーパス・本文に含まれる候補は除外する。
         """
         if not exclude_terms:
             return False
 
         lowered_file_name = file_name.lower()
         lowered_body_content = body_content.lower()
+        lowered_folder_path = folder_path.lower()
         for term in exclude_terms:
             lowered_term = term.lower()
-            if lowered_term in lowered_file_name or lowered_term in lowered_body_content:
+            if (
+                lowered_term in lowered_file_name
+                or lowered_term in lowered_body_content
+                or lowered_term in lowered_folder_path
+            ):
                 return True
         return False
+
+    def _build_folder_path_sql_expression(self, table_alias: str) -> str:
+        """
+        SQL 上で、ファイル自身を除いた親フォルダーパス部分を取り出す。
+        """
+        return (
+            f"rtrim(substr({table_alias}.normalized_path, 1, "
+            f"length({table_alias}.normalized_path) - length({table_alias}.file_name)), '/'))"
+        )
+
+    def _resolve_folder_path(self, normalized_path: str, file_name: str) -> str:
+        """
+        正規化済みフルパスから、検索用の親フォルダーパスを取り出す。
+        """
+        if normalized_path.endswith(file_name):
+            return normalized_path[: -len(file_name)].rstrip("/") or "/"
+        parts = normalized_path.rsplit("/", 1)
+        return parts[0] if len(parts) == 2 and parts[0] else "/"
+
+    def _resolve_result_display_name(self, result_kind: str, full_path: str, file_name: str) -> str:
+        """
+        フォルダ結果ではフルパスではなく末尾名を表示名として返す。
+        """
+        if result_kind != "folder":
+            return file_name
+        trimmed = full_path.rstrip("/\\")
+        if not trimmed:
+            return full_path
+        last_separator_index = max(trimmed.rfind("/"), trimmed.rfind("\\"))
+        if last_separator_index < 0:
+            return trimmed
+        if last_separator_index == 0:
+            return trimmed
+        return trimmed[last_separator_index + 1 :]
+
+    def _resolve_folder_path_for_result(self, result_kind: str, full_path: str, file_name: str) -> str:
+        """
+        結果種別に応じて、スニペットや除外判定に使うフォルダーパスを返す。
+        """
+        if result_kind == "folder":
+            return full_path
+        return self._resolve_folder_path(full_path, file_name)
+
+    def _search_target_includes_body(self, search_target: str) -> bool:
+        """
+        検索種別が本文検索を含むかを返す。
+        """
+        return search_target in {"all", "body"}
+
+    def _search_target_includes_filename(self, search_target: str) -> bool:
+        """
+        検索種別がファイル名検索を含むかを返す。
+        """
+        return search_target in {"all", "filename", "filename_and_folder"}
+
+    def _search_target_includes_folder(self, search_target: str) -> bool:
+        """
+        検索種別がフォルダー名検索を含むかを返す。
+        """
+        return search_target in {"all", "folder", "filename_and_folder"}
 
     def _should_use_literal_term_search(self, term: str) -> bool:
         """
@@ -845,6 +954,12 @@ class SearchService:
     def _quote_fts_term(self, term: str) -> str:
         escaped_term = term.replace('"', '""')
         return f'"{escaped_term}"'
+
+    def _build_fts_content_query(self, query: str) -> str:
+        """
+        FTS5 の本文検索は content カラムだけへ限定し、segment_label 側の誤一致を避ける。
+        """
+        return f"content:({query})"
 
     def _build_common_filters(
         self,
@@ -956,6 +1071,14 @@ class SearchService:
         sort_column = self._resolve_sort_column(sort_by, table_alias=table_alias)
         return f"filtered.match_rank, filtered.score, {sort_column} {direction}, {table_alias}.id DESC"
 
+    def _build_combined_order_by_clause(self, *, sort_by: str, sort_order: str, table_alias: str) -> str:
+        """
+        ファイル結果とフォルダ結果をまとめた集合を、一致品質と指定列で並び替える。
+        """
+        direction = "ASC" if sort_order == "asc" else "DESC"
+        sort_column = self._resolve_sort_column(sort_by, table_alias=table_alias)
+        return f"{table_alias}.match_rank, {table_alias}.score, {sort_column} {direction}, {table_alias}.file_id DESC"
+
     def _build_regex_order_by_clause(self, *, sort_by: str, sort_order: str, table_alias: str = "files") -> str:
         """
         正規表現検索は DB 側で指定列順に走査し、結果の表示順と一致させる。
@@ -973,6 +1096,141 @@ class SearchService:
         if sort_by == "click_count":
             return f"{table_alias}.click_count"
         return f"{table_alias}.mtime"
+
+    def _build_search_result_item(
+        self,
+        *,
+        row,
+        normalized_target_path: str,
+        highlight_terms: list[str],
+    ) -> SearchResultItem:
+        """
+        DB 行から UI 用の検索結果モデルを組み立てる。
+        """
+        result_kind = str(row["result_kind"] or "file")
+        full_path = str(row["normalized_path"])
+        raw_name = str(row["file_name"])
+        display_name = self._resolve_result_display_name(result_kind, full_path, raw_name)
+        folder_path = self._resolve_folder_path_for_result(result_kind, full_path, raw_name)
+        return SearchResultItem(
+            file_id=int(row["file_id"]),
+            result_kind="folder" if result_kind == "folder" else "file",
+            target_path=normalized_target_path,
+            file_name=display_name,
+            full_path=full_path,
+            file_ext=str(row["file_ext"]),
+            created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
+            mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
+            click_count=int(row["click_count"] or 0),
+            snippet=self._resolve_snippet(
+                snippet=row["snippet"],
+                file_name=display_name,
+                segment_type=str(row["segment_type"] or "filename"),
+                body_content=row["body_content"],
+                folder_path=folder_path,
+                highlight_terms=highlight_terms,
+            ),
+        )
+
+    def _sort_search_result_items(
+        self,
+        items: list[SearchResultItem],
+        *,
+        sort_by: str,
+        sort_order: str,
+    ) -> list[SearchResultItem]:
+        """
+        Python 側で構築した検索結果を UI 指定の並び順で安定ソートする。
+        """
+        reverse = sort_order == "desc"
+
+        def key(item: SearchResultItem) -> tuple[float, int]:
+            if sort_by == "click_count":
+                return (float(item.click_count), item.file_id)
+            if sort_by == "created":
+                return (item.created_at.timestamp(), item.file_id)
+            return (item.mtime.timestamp(), item.file_id)
+
+        return sorted(items, key=key, reverse=reverse)
+
+    def _search_folder_results(
+        self,
+        *,
+        scoped_files_cte_sql: str,
+        scoped_file_values: list[object],
+        normalized_target_path: str,
+        excluded_keywords: list[str],
+        include_terms: list[str],
+        exclude_terms: list[str],
+        sort_by: str,
+        sort_order: str,
+    ) -> list[SearchResultItem]:
+        """
+        フォルダ名検索は scoped_files の親フォルダ一覧を Python 側で一意化して結果化する。
+        """
+        rows = self.connection.execute(
+            f"""
+            {scoped_files_cte_sql}
+            SELECT
+                scoped_files.normalized_path,
+                scoped_files.file_name,
+                scoped_files.created_at,
+                scoped_files.mtime
+            FROM scoped_files
+            """,
+            tuple(scoped_file_values),
+        ).fetchall()
+
+        folder_map: dict[str, dict[str, float]] = {}
+        lowered_terms = [term.lower() for term in include_terms if term]
+        lowered_exclude_terms = [term.lower() for term in exclude_terms if term]
+        for row in rows:
+            file_path = str(row["normalized_path"])
+            file_name = str(row["file_name"])
+            folder_path = self._resolve_folder_path(file_path, file_name)
+            lowered_folder_path = folder_path.lower()
+            if lowered_terms and not all(term in lowered_folder_path for term in lowered_terms):
+                continue
+            if lowered_exclude_terms and any(term in lowered_folder_path for term in lowered_exclude_terms):
+                continue
+            if self._should_exclude_search_result(
+                target_path=normalized_target_path,
+                candidate_path=folder_path,
+                excluded_keywords=excluded_keywords,
+            ):
+                continue
+
+            existing = folder_map.get(folder_path)
+            created_at = float(row["created_at"])
+            mtime = float(row["mtime"])
+            if existing is None:
+                folder_map[folder_path] = {"created_at": created_at, "mtime": mtime}
+                continue
+            existing["created_at"] = max(existing["created_at"], created_at)
+            existing["mtime"] = max(existing["mtime"], mtime)
+
+        items = [
+            SearchResultItem(
+                file_id=-(index + 1),
+                result_kind="folder",
+                target_path=normalized_target_path,
+                file_name=self._resolve_result_display_name("folder", folder_path, folder_path),
+                full_path=folder_path,
+                file_ext="",
+                created_at=datetime.fromtimestamp(meta["created_at"], tz=UTC),
+                mtime=datetime.fromtimestamp(meta["mtime"], tz=UTC),
+                click_count=0,
+                snippet=self._resolve_snippet(
+                    snippet=None,
+                    file_name=self._resolve_result_display_name("folder", folder_path, folder_path),
+                    segment_type="folder",
+                    folder_path=folder_path,
+                    highlight_terms=include_terms,
+                ),
+            )
+            for index, (folder_path, meta) in enumerate(folder_map.items())
+        ]
+        return self._sort_search_result_items(items, sort_by=sort_by, sort_order=sort_order)
 
     def _resolve_local_day_start_timestamp(self, value: date) -> float:
         """
@@ -1004,8 +1262,10 @@ class SearchService:
         *,
         content: str,
         file_name: str,
+        folder_path: str,
         content_match: re.Match[str] | None,
         file_name_match: re.Match[str] | None,
+        folder_path_match: re.Match[str] | None,
     ) -> str:
         """
         正規表現検索の結果用に、最初の一致箇所を短い抜粋として整形する。
@@ -1020,13 +1280,20 @@ class SearchService:
             after = escape(content[content_match.end() : snippet_end])
             return f"{prefix}{before}<mark>{matched}</mark>{after}{suffix}"
 
-        escaped_name = escape(file_name)
-        if file_name_match is None:
-            return self._resolve_snippet(snippet=None, file_name=file_name)
+        if file_name_match is not None:
+            start = file_name_match.start()
+            end = file_name_match.end()
+            return (
+                "ファイル名一致: "
+                f"{escape(file_name[:start])}<mark>{escape(file_name[start:end])}</mark>{escape(file_name[end:])}"
+            )
 
-        start = file_name_match.start()
-        end = file_name_match.end()
-        return (
-            "ファイル名一致: "
-            f"{escape(file_name[:start])}<mark>{escape(file_name[start:end])}</mark>{escape(file_name[end:])}"
-        )
+        if folder_path_match is not None:
+            start = folder_path_match.start()
+            end = folder_path_match.end()
+            return (
+                "フォルダー名一致: "
+                f"{escape(folder_path[:start])}<mark>{escape(folder_path[start:end])}</mark>{escape(folder_path[end:])}"
+            )
+
+        return self._resolve_snippet(snippet=None, file_name=file_name, folder_path=folder_path)

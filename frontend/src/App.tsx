@@ -85,6 +85,7 @@ const DEFAULT_SEARCH_FILTER_TEXT = "";
 const DEFAULT_SEARCH_PATH = "";
 
 type PageView = "search" | "indexed-targets" | "scheduler";
+type SearchTarget = "all" | "body" | "filename" | "folder" | "filename_and_folder";
 type SearchExecutionParams = {
   q: string;
   full_path: string;
@@ -93,6 +94,7 @@ type SearchExecutionParams = {
   index_depth: number;
   refresh_window_minutes: number;
   regex_enabled?: boolean;
+  search_target?: SearchTarget;
   index_types?: string;
   date_field?: "created" | "modified";
   sort_by?: "created" | "modified" | "click_count";
@@ -280,6 +282,7 @@ function App() {
     }
     return stored;
   });
+  const [searchTarget, setSearchTarget] = useState<SearchTarget>("all");
   const [dateField, setDateField] = useState<"created" | "modified">("modified");
   const [sortBy, setSortBy] = useState<"created" | "modified" | "click_count">("modified");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
@@ -467,6 +470,7 @@ function App() {
     sortOrder,
     createdFrom,
     createdTo,
+    searchTarget,
   ]);
 
   useEffect(() => {
@@ -506,6 +510,7 @@ function App() {
       indexDepth,
       refreshWindowMinutes,
       String(isRegexEnabled),
+      searchTarget,
       selectedIndexExtensions.join(" "),
       dateField,
       sortBy,
@@ -614,6 +619,7 @@ function App() {
       index_depth: parsedDepth,
       refresh_window_minutes: parsedWindow,
       regex_enabled: isRegexEnabled,
+      search_target: searchTarget,
       index_types: selectedIndexExtensions.join(" "),
       date_field: dateField,
       sort_by: sortBy,
@@ -714,6 +720,10 @@ function App() {
    */
   function handleFullPathChange(value: string): void {
     setFullPath(value);
+  }
+
+  function handleSearchTargetChange(value: SearchTarget): void {
+    setSearchTarget(value);
   }
 
   /**
@@ -1089,6 +1099,7 @@ function App() {
             fullPath={fullPath}
             indexDepth={indexDepth}
             searchFilterText={searchFilterText}
+            searchTarget={searchTarget}
             dateField={dateField}
             sortBy={sortBy}
             sortOrder={sortOrder}
@@ -1105,6 +1116,7 @@ function App() {
             onFullPathChange={handleFullPathChange}
             onIndexDepthChange={setIndexDepth}
             onSearchFilterTextChange={setSearchFilterText}
+            onSearchTargetChange={handleSearchTargetChange}
             onDateFieldChange={setDateField}
             onSortByChange={setSortBy}
             onSortOrderChange={setSortOrder}

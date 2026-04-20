@@ -143,6 +143,20 @@ def test_search_query_params_accepts_sort_options() -> None:
     assert params.sort_order == "asc"
 
 
+def test_search_query_params_accepts_search_target_mode() -> None:
+    """
+    検索種別は本文・ファイル名・フォルダ名の切り替え値を受け付ける。
+    """
+    params = SearchQueryParams(
+        q="alpha",
+        full_path="",
+        index_depth=5,
+        search_target="filename_and_folder",
+    )
+
+    assert params.search_target == "filename_and_folder"
+
+
 def test_indexed_search_request_accepts_absolute_folder_path() -> None:
     """
     既存 DB 検索用の folder_path は絶対パスなら受け付ける。

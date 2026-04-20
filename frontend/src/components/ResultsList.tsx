@@ -97,7 +97,8 @@ export function ResultsList({ items, dateField, onResultOpen, onResultDelete }: 
       {items.map((item) => {
         const folderPath = getFolderPath(item.full_path);
         const fullPathUrl = `http://localhost:8001/api/fullpath?path=${encodeURIComponent(item.full_path)}`;
-        const folderUrl = `http://localhost:8001/?path=${encodeURIComponent(folderPath)}`;
+        const folderUrl = `http://localhost:8001/?path=${encodeURIComponent(item.result_kind === "folder" ? item.full_path : folderPath)}`;
+        const primaryUrl = item.result_kind === "folder" ? folderUrl : fullPathUrl;
 
         return (
           <article className="result-card" key={item.file_id}>
@@ -119,18 +120,20 @@ export function ResultsList({ items, dateField, onResultOpen, onResultDelete }: 
                   href={folderUrl}
                   target="_blank"
                   rel="noreferrer"
-                  title="親フォルダを開く"
+                  title={item.result_kind === "folder" ? "フォルダを開く" : "親フォルダを開く"}
                 >
                   フォルダを開く
                 </a>
-                <button
-                  type="button"
-                  className="result-delete-button"
-                  onClick={() => onResultDelete(item.file_id, item.full_path)}
-                  title="ファイルを完全に削除"
-                >
-                  削除
-                </button>
+                {item.result_kind === "file" ? (
+                  <button
+                    type="button"
+                    className="result-delete-button"
+                    onClick={() => onResultDelete(item.file_id, item.full_path)}
+                    title="ファイルを完全に削除"
+                  >
+                    削除
+                  </button>
+                ) : null}
                 {copiedFileId === item.file_id ? (
                   <span className="result-path-status">コピーしました</span>
                 ) : null}
@@ -140,17 +143,21 @@ export function ResultsList({ items, dateField, onResultOpen, onResultDelete }: 
               <h3>
                 <a
                   className="result-file-link"
-                  href={fullPathUrl}
+                  href={primaryUrl}
                   target="_blank"
                   rel="noreferrer"
-                  onClick={() => onResultOpen(item.file_id)}
+                  onClick={() => {
+                    if (item.result_kind === "file") {
+                      onResultOpen(item.file_id);
+                    }
+                  }}
                 >
                   {item.file_name}
                 </a>
               </h3>
               <div className="result-meta">
                 <span>{dateField === "created" ? "作成" : "編集"}: {new Date(dateField === "created" ? item.created_at : item.mtime).toLocaleString()}</span>
-                <span>アクセス: {item.click_count}</span>
+                {item.result_kind === "file" ? <span>アクセス: {item.click_count}</span> : <span>種別: フォルダ</span>}
               </div>
             </div>
             <p

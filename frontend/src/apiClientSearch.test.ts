@@ -173,3 +173,34 @@ test("search は全件取得のため複数ページを順に取得する", asyn
     globalThis.fetch = originalFetch;
   }
 });
+
+test("search は検索種別フィルタをそのまま API へ渡す", async () => {
+  let capturedBody: Record<string, unknown> | null = null;
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return new Response(
+      JSON.stringify({
+        total: 0,
+        items: [],
+        used_existing_index: false,
+        background_refresh_scheduled: false,
+      }),
+    );
+  }) as typeof fetch;
+
+  try {
+    await search({
+      q: "alpha",
+      full_path: "/tmp/docs",
+      index_depth: 5,
+      refresh_window_minutes: 60,
+      search_target: "folder",
+    });
+
+    assert.equal(capturedBody?.search_target, "folder");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

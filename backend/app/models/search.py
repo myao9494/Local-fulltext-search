@@ -21,6 +21,7 @@ def _validate_absolute_path_or_unc(value: str, *, field_name: str) -> str:
 
 class SearchResultItem(BaseModel):
     file_id: int
+    result_kind: Literal["file", "folder"] = "file"
     target_path: str
     file_name: str
     full_path: str
@@ -46,6 +47,7 @@ class SearchQueryParams(BaseModel):
     index_depth: int = Field(ge=0, le=128)
     refresh_window_minutes: int = Field(default=60, ge=0, le=1440)
     regex_enabled: bool = False
+    search_target: Literal["all", "body", "filename", "folder", "filename_and_folder"] = "all"
     index_types: str | None = None
     types: str | None = None
     exclude_keywords: str | None = None

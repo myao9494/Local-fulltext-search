@@ -46,6 +46,17 @@ test("検索結果には親フォルダを開くリンクを含める", () => {
   const source = readFileSync(resultsListPath, "utf-8");
 
   assert.match(source, /getFolderPath\(item\.full_path\)/);
-  assert.match(source, /http:\/\/localhost:8001\/\?path=\$\{encodeURIComponent\(folderPath\)\}/);
+  assert.match(source, /http:\/\/localhost:8001\/\?path=\$\{encodeURIComponent\(item\.result_kind === "folder" \? item\.full_path : folderPath\)\}/);
   assert.match(source, /フォルダを開く/);
+});
+
+/**
+ * フォルダ結果では削除やクリック記録を行わず、フォルダ自体を開く導線を使う。
+ */
+test("フォルダ結果はフォルダ種別として表示を切り替える", () => {
+  const source = readFileSync(resultsListPath, "utf-8");
+
+  assert.match(source, /item\.result_kind === "folder"/);
+  assert.match(source, /種別: フォルダ/);
+  assert.match(source, /if \(item\.result_kind === "file"\) \{/);
 });

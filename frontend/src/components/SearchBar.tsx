@@ -5,6 +5,7 @@ type SearchBarProps = {
   fullPath: string;
   indexDepth: string;
   searchFilterText: string;
+  searchTarget: "all" | "body" | "filename" | "folder" | "filename_and_folder";
   dateField: "created" | "modified";
   sortBy: "created" | "modified" | "click_count";
   sortOrder: "asc" | "desc";
@@ -21,6 +22,7 @@ type SearchBarProps = {
   onFullPathChange: (value: string) => void;
   onIndexDepthChange: (value: string) => void;
   onSearchFilterTextChange: (value: string) => void;
+  onSearchTargetChange: (value: "all" | "body" | "filename" | "folder" | "filename_and_folder") => void;
   onDateFieldChange: (value: "created" | "modified") => void;
   onSortByChange: (value: "created" | "modified" | "click_count") => void;
   onSortOrderChange: (value: "asc" | "desc") => void;
@@ -40,6 +42,7 @@ export function SearchBar({
   fullPath,
   indexDepth,
   searchFilterText,
+  searchTarget,
   dateField,
   sortBy,
   sortOrder,
@@ -56,6 +59,7 @@ export function SearchBar({
   onFullPathChange,
   onIndexDepthChange,
   onSearchFilterTextChange,
+  onSearchTargetChange,
   onDateFieldChange,
   onSortByChange,
   onSortOrderChange,
@@ -175,6 +179,23 @@ export function SearchBar({
 
       <div className="search-subfilters">
         <div className="date-filter-panel">
+          <div className="date-filter-group">
+            <label className="date-filter-label" htmlFor="search-target-select">検索種別</label>
+            <select
+              id="search-target-select"
+              className="small-input date-field-select"
+              value={searchTarget}
+              onChange={(event) => onSearchTargetChange(event.target.value as "all" | "body" | "filename" | "folder" | "filename_and_folder")}
+              aria-label="検索種別"
+            >
+              <option value="all">すべて</option>
+              <option value="body">中身のみ</option>
+              <option value="filename">ファイル名</option>
+              <option value="folder">フォルダ名</option>
+              <option value="filename_and_folder">ファイル名+フォルダ名</option>
+            </select>
+            <div className="date-filter-hint">本文・ファイル名・親フォルダ名のどこを検索対象にするか切り替えます。</div>
+          </div>
           <div className="date-filter-group">
             <label className="date-filter-label" htmlFor="date-field-select">日付種別</label>
             <select

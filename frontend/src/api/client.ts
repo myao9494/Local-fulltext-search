@@ -119,6 +119,7 @@ export async function search(params: {
   index_depth: number;
   refresh_window_minutes: number;
   regex_enabled?: boolean;
+  search_target?: "all" | "body" | "filename" | "folder" | "filename_and_folder";
   index_types?: string;
   types?: string;
   date_field?: "created" | "modified";

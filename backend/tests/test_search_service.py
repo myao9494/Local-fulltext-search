@@ -499,6 +499,53 @@ def test_search_matches_filename_only_image_in_normal_mode(tmp_path: Path) -> No
     assert [item.file_name for item in result.items] == ["architecture-overview.png"]
 
 
+def test_search_matches_content_indexed_file_by_filename_in_normal_mode(tmp_path: Path) -> None:
+    """
+    本文抽出対象のファイルでも、本文だけでなくファイル名一致で通常検索できる。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "project-alpha.md").write_text("body does not include the keyword", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(target),
+            index_depth=0,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["project-alpha.md"]
+
+
+def test_search_matches_parent_folder_name_in_normal_mode(tmp_path: Path) -> None:
+    """
+    親フォルダー名に一致したときは、通常検索でフォルダー自体を結果に出す。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    folder = target / "meeting-notes"
+    folder.mkdir(parents=True)
+    (folder / "memo.md").write_text("body does not include the folder keyword", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="meeting",
+            full_path=str(target),
+            index_depth=5,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["meeting-notes"]
+    assert [item.result_kind for item in result.items] == ["folder"]
+    assert [item.full_path for item in result.items] == [folder.as_posix()]
+
+
 def test_build_scoped_files_cte_keeps_target_filters_outside_each_term(tmp_path: Path) -> None:
     """
     フォルダ・拡張子・日付の対象絞り込みは scoped_files CTE に集約し、各語句クエリへ重複埋め込みしない。
@@ -545,6 +592,151 @@ def test_search_matches_filename_only_image_in_regex_mode(tmp_path: Path) -> Non
 
     assert result.total == 1
     assert [item.file_name for item in result.items] == ["architecture-overview.png"]
+
+
+def test_search_matches_content_indexed_file_by_filename_in_regex_mode(tmp_path: Path) -> None:
+    """
+    本文抽出対象のファイルでも、正規表現モードでファイル名一致できる。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "project-alpha.md").write_text("body does not include the keyword", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q=r"project.*alpha",
+            full_path=str(target),
+            index_depth=0,
+            refresh_window_minutes=60,
+            regex_enabled=True,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["project-alpha.md"]
+
+
+def test_search_matches_parent_folder_name_in_regex_mode(tmp_path: Path) -> None:
+    """
+    親フォルダー名に一致したときは、正規表現モードでもフォルダー自体を結果に出す。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    folder = target / "meeting-notes"
+    folder.mkdir(parents=True)
+    (folder / "memo.md").write_text("body does not include the folder keyword", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q=r"meeting.*notes",
+            full_path=str(target),
+            index_depth=5,
+            refresh_window_minutes=60,
+            regex_enabled=True,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["meeting-notes"]
+    assert [item.result_kind for item in result.items] == ["folder"]
+    assert [item.full_path for item in result.items] == [folder.as_posix()]
+
+
+def test_search_target_body_only_excludes_filename_and_folder_matches(tmp_path: Path) -> None:
+    """
+    中身のみ指定では、ファイル名やフォルダー名だけの一致は検索結果に含めない。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    folder = target / "meeting-notes"
+    folder.mkdir(parents=True)
+    (folder / "project-alpha.md").write_text("body does not include the keyword", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(target),
+            index_depth=5,
+            refresh_window_minutes=60,
+            search_target="body",
+        )
+    )
+
+    assert result.total == 0
+
+
+def test_search_target_filename_only_excludes_body_and_folder_matches(tmp_path: Path) -> None:
+    """
+    ファイル名のみ指定では、本文やフォルダー名だけの一致は検索結果に含めない。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "plain.md").write_text("alpha appears only in body", encoding="utf-8")
+    folder = target / "meeting-notes"
+    folder.mkdir()
+    (folder / "memo.md").write_text("body without keyword", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="meeting",
+            full_path=str(target),
+            index_depth=5,
+            refresh_window_minutes=60,
+            search_target="filename",
+        )
+    )
+
+    assert result.total == 0
+
+
+def test_search_target_folder_only_excludes_body_and_filename_matches(tmp_path: Path) -> None:
+    """
+    フォルダー名のみ指定では、本文やファイル名だけの一致は検索結果に含めない。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "project-alpha.md").write_text("body without keyword", encoding="utf-8")
+    (target / "plain.md").write_text("alpha appears only in body", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(target),
+            index_depth=5,
+            refresh_window_minutes=60,
+            search_target="folder",
+        )
+    )
+
+    assert result.total == 0
+
+
+def test_search_target_filename_and_folder_excludes_body_only_matches(tmp_path: Path) -> None:
+    """
+    ファイル名+フォルダー名指定では、本文だけの一致は検索結果に含めない。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    folder = target / "meeting-notes"
+    folder.mkdir(parents=True)
+    (folder / "project-alpha.md").write_text("body without keyword", encoding="utf-8")
+    (target / "plain.md").write_text("alpha appears only in body", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(target),
+            index_depth=5,
+            refresh_window_minutes=60,
+            search_target="filename_and_folder",
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["project-alpha.md"]
 
 
 def test_search_filters_results_by_created_date_range(tmp_path: Path) -> None:
@@ -1304,8 +1496,10 @@ def test_search_without_full_path_excludes_relative_nested_directory_path(tmp_pa
         )
     )
 
-    assert result.total == 1
-    assert [item.file_name for item in result.items] == ["keep.md"]
+    assert result.total == 2
+    assert "/workspace/Agent_Skills/.roo/secret.md" not in [item.full_path for item in result.items]
+    assert "/workspace/Agent_SkillsX/.roo/keep.md" in [item.full_path for item in result.items]
+    assert "/workspace/Agent_SkillsX/.roo" in [item.full_path for item in result.items]
 
 
 def test_search_without_full_path_excludes_dot_prefixed_directory_keyword(tmp_path: Path) -> None:
