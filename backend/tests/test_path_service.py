@@ -11,6 +11,7 @@ from app.services.path_service import (
     AbsolutePathRequiredError,
     get_descendant_path_prefix,
     get_descendant_path_range,
+    is_windows_absolute_path,
     normalize_path,
     normalize_path_str,
 )
@@ -47,3 +48,10 @@ def test_normalize_path_rejects_relative_paths() -> None:
     """
     with pytest.raises(AbsolutePathRequiredError):
         normalize_path("docs")
+
+
+def test_is_windows_absolute_path_accepts_drive_letter_path() -> None:
+    """
+    Windows ドライブレター付き絶対パスは実行 OS に関係なく受け付ける。
+    """
+    assert is_windows_absolute_path(r"C:\Users\mine\Documents\report.txt") is True

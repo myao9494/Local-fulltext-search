@@ -291,6 +291,8 @@ class SchedulerService:
             self.set_current_path(folder_path)
             self.append_log(level="info", message="フォルダのインデックスを開始します。", folder_path=folder_path)
             try:
+                # スケジューラーで指定したパスは実行時に検索対象へ有効追加してから処理する。
+                index_service.set_search_target_enabled(folder_path=folder_path, is_enabled=True)
                 index_service.ensure_fresh_target(
                     full_path=folder_path,
                     refresh_window_minutes=0,

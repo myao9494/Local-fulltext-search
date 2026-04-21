@@ -3,7 +3,11 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.services.path_service import AbsolutePathRequiredError, normalize_path
+from app.services.path_service import (
+    AbsolutePathRequiredError,
+    is_windows_absolute_path,
+    normalize_path,
+)
 
 
 def _validate_absolute_path_or_unc(value: str, *, field_name: str) -> str:
@@ -11,6 +15,8 @@ def _validate_absolute_path_or_unc(value: str, *, field_name: str) -> str:
     API で受け取る検索対象パスは、絶対パスまたは UNC パスだけを許可する。
     """
     if value == "":
+        return value
+    if is_windows_absolute_path(value):
         return value
     try:
         normalize_path(value)

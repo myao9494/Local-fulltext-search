@@ -1208,6 +1208,51 @@ def test_search_with_existing_stale_index_uses_current_results_and_schedules_bac
     ]
 
 
+def test_search_under_registered_parent_does_not_create_child_search_target(tmp_path: Path) -> None:
+    """
+    親フォルダが検索対象にある状態で子フォルダ検索しても、targets に子フォルダは追加しない。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    parent = tmp_path / "docs"
+    child = parent / "team" / "backup"
+    child.mkdir(parents=True)
+    (child / "memo.md").write_text("alpha memo", encoding="utf-8")
+    service.index_service.get_app_settings = lambda: AppSettingsResponse(
+        exclude_keywords="",
+        synonym_groups="",
+        index_selected_extensions=".md",
+        custom_content_extensions="",
+        custom_filename_extensions="",
+    )
+    service.index_service.ensure_fresh_target(full_path=str(parent), refresh_window_minutes=60, index_depth=5)
+
+    scheduled_calls: list[dict[str, object]] = []
+    service._schedule_background_refresh = lambda **kwargs: scheduled_calls.append(kwargs) or True
+    service.index_service._needs_refresh = lambda *args, **kwargs: True
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path=str(child),
+            index_depth=5,
+            refresh_window_minutes=0,
+        )
+    )
+
+    assert result.total == 1
+    assert scheduled_calls == [
+        {
+            "normalized_target_path": str(parent),
+            "effective_exclude_keywords": "",
+            "index_depth": 5,
+            "index_types": None,
+        }
+    ]
+    target_paths = connection.execute("SELECT full_path FROM targets ORDER BY full_path").fetchall()
+    assert [str(row["full_path"]) for row in target_paths] == [str(parent)]
+
+
 def test_search_with_unindexed_folder_keeps_synchronous_refresh(tmp_path: Path) -> None:
     """
     初回検索で未インデックスのフォルダは従来どおり同期インデックスする。

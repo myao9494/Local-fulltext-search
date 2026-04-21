@@ -73,6 +73,72 @@ class IndexedTargetListResponse(BaseModel):
     items: list[IndexedTargetItem]
 
 
+class SearchTargetItem(BaseModel):
+    """
+    検索対象フォルダ一覧の 1 行分情報。
+    """
+
+    full_path: str
+    is_enabled: bool
+    last_indexed_at: datetime | None
+    indexed_file_count: int
+
+
+class SearchTargetListResponse(BaseModel):
+    items: list[SearchTargetItem]
+
+
+class SearchTargetCoverageResponse(BaseModel):
+    """
+    指定パスが有効な検索対象フォルダ配下に含まれるかを返す。
+    """
+
+    normalized_path: str
+    is_covered: bool
+    covering_path: str | None
+
+
+class SearchTargetUpdateRequest(BaseModel):
+    """
+    検索対象フォルダの有効/無効を切り替える。
+    """
+
+    folder_path: str
+    is_enabled: bool
+
+
+class SearchTargetAddRequest(BaseModel):
+    """
+    検索対象フォルダへ新規追加する。
+    """
+
+    folder_path: str
+
+
+class ReindexSearchTargetsRequest(BaseModel):
+    """
+    指定した検索対象フォルダ群を再インデックスする。
+    """
+
+    folder_paths: list[str]
+
+
+class ReindexSearchTargetsResponse(BaseModel):
+    reindexed_count: int
+
+
+class DeleteSearchTargetsRequest(BaseModel):
+    """
+    検索対象フォルダ一覧から削除するパス群を受け取る。
+    """
+
+    folder_paths: list[str]
+
+
+class DeleteSearchTargetsResponse(BaseModel):
+    deleted_count: int
+
+
 class DeleteIndexedFoldersResponse(BaseModel):
     deleted_count: int
 

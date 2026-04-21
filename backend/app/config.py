@@ -20,6 +20,7 @@ class Settings(BaseModel):
     database_name: str = os.getenv("SEARCH_APP_DB_NAME", "search.db")
     exclude_keywords_name: str = os.getenv("SEARCH_APP_EXCLUDE_KEYWORDS_NAME", "exclude_keywords.txt")
     synonym_groups_name: str = os.getenv("SEARCH_APP_SYNONYM_GROUPS_NAME", "synonym_groups.txt")
+    search_target_folders_name: str = os.getenv("SEARCH_APP_SEARCH_TARGET_FOLDERS_NAME", "search_target_folders.txt")
     index_selected_extensions_name: str = os.getenv("SEARCH_APP_INDEX_SELECTED_EXTENSIONS_NAME", "index_selected_extensions.txt")
     custom_content_extensions_name: str = os.getenv("SEARCH_APP_CUSTOM_CONTENT_EXTENSIONS_NAME", "custom_content_extensions.txt")
     custom_filename_extensions_name: str = os.getenv(
@@ -45,6 +46,7 @@ class Settings(BaseModel):
         "database_name",
         "exclude_keywords_name",
         "synonym_groups_name",
+        "search_target_folders_name",
         "index_selected_extensions_name",
         "custom_content_extensions_name",
         "custom_filename_extensions_name",
@@ -69,6 +71,10 @@ class Settings(BaseModel):
     @property
     def synonym_groups_path(self) -> Path:
         return (self.data_dir / self.synonym_groups_name).resolve()
+
+    @property
+    def search_target_folders_path(self) -> Path:
+        return (self.data_dir / self.search_target_folders_name).resolve()
 
     @property
     def index_selected_extensions_path(self) -> Path:

@@ -80,9 +80,12 @@ class SearchService:
             custom_content_extensions=custom_content_extensions,
             custom_filename_extensions=custom_filename_extensions,
         )
+        effective_target_path = (
+            self.index_service._resolve_enabled_target_covering_path(normalized_target_path) or normalized_target_path
+        )
         try:
             target = self.index_service._ensure_target(
-                full_path=normalized_target_path,
+                full_path=effective_target_path,
                 exclude_keywords=effective_exclude_keywords,
                 index_depth=index_depth,
                 selected_extensions=normalized_extensions,
@@ -109,7 +112,7 @@ class SearchService:
         if not has_existing_index:
             try:
                 self.index_service.ensure_fresh_target(
-                    full_path=normalized_target_path,
+                    full_path=effective_target_path,
                     refresh_window_minutes=refresh_window_minutes,
                     exclude_keywords=effective_keywords,
                     index_depth=index_depth,
@@ -121,7 +124,7 @@ class SearchService:
             return {"used_existing_index": False, "background_refresh_scheduled": False}
 
         scheduled = self._schedule_background_refresh(
-            normalized_target_path=normalized_target_path,
+            normalized_target_path=effective_target_path,
             effective_exclude_keywords=effective_keywords,
             index_depth=index_depth,
             index_types=index_types,

@@ -18,7 +18,7 @@ from concurrent.futures import ALL_COMPLETED, FIRST_COMPLETED, Future, ThreadPoo
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from sqlite3 import Connection
+from sqlite3 import Connection, OperationalError
 
 from fastapi import HTTPException, status
 
@@ -37,11 +37,16 @@ from app.models.indexing import (
     AppSettingsResponse,
     DEFAULT_EXCLUDE_KEYWORDS,
     DeleteIndexedFoldersResponse,
+    DeleteSearchTargetsResponse,
     FailedFileItem,
     FailedFileListResponse,
     IndexedTargetItem,
     IndexedTargetListResponse,
     IndexStatusResponse,
+    ReindexSearchTargetsResponse,
+    SearchTargetCoverageResponse,
+    SearchTargetItem,
+    SearchTargetListResponse,
 )
 from app.services.cjk_bigram import build_cjk_bigram_index_content
 from app.services.path_service import (
@@ -124,6 +129,9 @@ class IndexService:
         if self._is_running():
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Indexing is already running.")
 
+        normalized_full_path = self._normalize_target_path_or_raise(full_path)
+        self._assert_indexing_allowed_for_search_target(normalized_full_path)
+        effective_full_path = self._resolve_enabled_target_covering_path(normalized_full_path) or normalized_full_path
         app_settings = self.get_app_settings()
         normalized_keywords = self._normalize_exclude_keywords(exclude_keywords)
         normalized_extensions = self._normalize_selected_extensions(
@@ -136,7 +144,7 @@ class IndexService:
         error_count = 0
         try:
             target = self._ensure_target(
-                full_path=full_path,
+                full_path=effective_full_path,
                 exclude_keywords=normalized_keywords,
                 index_depth=index_depth,
                 selected_extensions=normalized_extensions,
@@ -207,6 +215,64 @@ class IndexService:
             total_files=total_files,
             error_count=error_count,
             last_error=None,
+        )
+
+    def _normalize_target_path_or_raise(self, full_path: str) -> str:
+        """
+        対象パスを正規化し、絶対パス以外は 400 エラーに変換する。
+        """
+        try:
+            return normalize_path(full_path).as_posix()
+        except AbsolutePathRequiredError as error:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Folder path must be an absolute path or Windows UNC path.",
+            ) from error
+
+    def _resolve_enabled_target_covering_path(self, normalized_path: str) -> str | None:
+        """
+        有効な検索対象フォルダのうち、指定パスを包含する最も深い親フォルダを返す。
+        """
+        try:
+            enabled_rows = self.connection.execute(
+                """
+                SELECT full_path
+                FROM targets
+                WHERE is_search_target_enabled = 1
+                ORDER BY length(full_path) DESC
+                """
+            ).fetchall()
+        except OperationalError as error:
+            if "no such column: is_search_target_enabled" in str(error):
+                return None
+            raise
+        for row in enabled_rows:
+            root_path = str(row["full_path"])
+            if normalized_path == root_path or normalized_path.startswith(f"{root_path}/"):
+                return root_path
+        return None
+
+    def _assert_indexing_allowed_for_search_target(self, full_path: str) -> None:
+        """
+        検索対象フォルダが設定済みなら、その配下パスだけをインデックス許可する。
+        """
+        normalized_path = self._normalize_target_path_or_raise(full_path)
+        covering_path = self._resolve_enabled_target_covering_path(normalized_path)
+        if covering_path is not None:
+            return
+        try:
+            enabled_count = self.connection.execute(
+                "SELECT COUNT(*) AS count FROM targets WHERE is_search_target_enabled = 1"
+            ).fetchone()
+        except OperationalError as error:
+            if "no such column: is_search_target_enabled" in str(error):
+                return
+            raise
+        if enabled_count is None or int(enabled_count["count"] or 0) == 0:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Folder path is outside enabled search target folders.",
         )
 
     def cancel_indexing(self) -> None:
@@ -505,6 +571,127 @@ class IndexService:
         ]
         return IndexedTargetListResponse(items=items)
 
+    def list_search_targets(self) -> SearchTargetListResponse:
+        """
+        検索対象フォルダ一覧を返す。インデックス対象有効フラグも含める。
+        """
+        rows = self.connection.execute(
+            """
+            SELECT full_path, is_search_target_enabled, last_indexed_at, indexed_file_count
+            FROM targets
+            ORDER BY is_search_target_enabled DESC, full_path ASC
+            """
+        ).fetchall()
+        items = [
+            SearchTargetItem(
+                full_path=str(row["full_path"]),
+                is_enabled=bool(row["is_search_target_enabled"]),
+                last_indexed_at=row["last_indexed_at"],
+                indexed_file_count=int(row["indexed_file_count"] or 0),
+            )
+            for row in rows
+        ]
+        return SearchTargetListResponse(items=items)
+
+    def get_search_target_coverage(self, *, folder_path: str) -> SearchTargetCoverageResponse:
+        """
+        指定パスが有効な検索対象フォルダでカバーされるか判定する。
+        """
+        normalized_path = self._normalize_target_path_or_raise(folder_path)
+        covering_path = self._resolve_enabled_target_covering_path(normalized_path)
+        return SearchTargetCoverageResponse(
+            normalized_path=normalized_path,
+            is_covered=covering_path is not None,
+            covering_path=covering_path,
+        )
+
+    def set_search_target_enabled(self, *, folder_path: str, is_enabled: bool) -> SearchTargetListResponse:
+        """
+        検索対象フォルダの有効/無効を切り替える。未登録パスは新規追加してから更新する。
+        """
+        target = self._ensure_target(
+            full_path=folder_path,
+            exclude_keywords="",
+            index_depth=1,
+            selected_extensions="",
+        )
+        now = datetime.now(UTC).isoformat()
+        self.connection.execute(
+            """
+            UPDATE targets
+            SET is_search_target_enabled = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (1 if is_enabled else 0, now, int(target["id"])),
+        )
+        self.connection.commit()
+        return self.list_search_targets()
+
+    def add_search_target(self, *, folder_path: str) -> SearchTargetListResponse:
+        """
+        検索対象フォルダへ新規追加し、有効状態にする。
+        """
+        return self.set_search_target_enabled(folder_path=folder_path, is_enabled=True)
+
+    def delete_search_targets(self, folder_paths: list[str]) -> DeleteSearchTargetsResponse:
+        """
+        検索対象フォルダ一覧から指定パスを削除する。
+        インデックスデータ自体は削除せず、対象設定のみ外す。
+        """
+        if self._is_running():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Indexing is already running.")
+        normalized_paths = sorted(
+            {
+                normalize_path(folder_path).as_posix()
+                for folder_path in folder_paths
+                if str(folder_path).strip()
+            }
+        )
+        if not normalized_paths:
+            return DeleteSearchTargetsResponse(deleted_count=0)
+
+        deleted_count = 0
+        for folder_path in normalized_paths:
+            cursor = self.connection.execute(
+                """
+                DELETE FROM targets
+                WHERE full_path = ?
+                """,
+                (folder_path,),
+            )
+            deleted_count += int(cursor.rowcount or 0)
+
+        self.connection.commit()
+        return DeleteSearchTargetsResponse(deleted_count=deleted_count)
+
+    def reindex_search_targets(self, folder_paths: list[str]) -> ReindexSearchTargetsResponse:
+        """
+        指定フォルダ群を順次再インデックスする。未選択フォルダは実行しない。
+        """
+        if self._is_running():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Indexing is already running.")
+        reindexed_count = 0
+        for folder_path in folder_paths:
+            normalized_folder_path = normalize_path(folder_path).as_posix()
+            target_row = self.connection.execute(
+                """
+                SELECT index_depth, selected_extensions
+                FROM targets
+                WHERE full_path = ? AND is_search_target_enabled = 1
+                """,
+                (normalized_folder_path,),
+            ).fetchone()
+            if target_row is None:
+                continue
+            self.ensure_fresh_target(
+                full_path=normalized_folder_path,
+                refresh_window_minutes=0,
+                index_depth=int(target_row["index_depth"] or 1),
+                types=str(target_row["selected_extensions"] or ""),
+            )
+            reindexed_count += 1
+        return ReindexSearchTargetsResponse(reindexed_count=reindexed_count)
+
     def delete_indexed_folders(self, folder_paths: list[str]) -> DeleteIndexedFoldersResponse:
         """
         選択したフォルダ群配下のインデックスを削除し、重なる targets は次回再取得される状態へ戻す。
@@ -554,6 +741,7 @@ class IndexService:
             """
             SELECT
                 id, full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
+                is_search_target_enabled,
                 indexed_file_count, index_version, created_at, updated_at
             FROM targets
             WHERE full_path = ?
@@ -568,9 +756,9 @@ class IndexService:
             """
             INSERT INTO targets(
                 full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
-                indexed_file_count, index_version, created_at, updated_at
+                is_search_target_enabled, indexed_file_count, index_version, created_at, updated_at
             )
-            VALUES (?, NULL, ?, ?, ?, 0, 0, ?, ?)
+            VALUES (?, NULL, ?, ?, ?, 1, 0, 0, ?, ?)
             """,
             (normalized_path.as_posix(), exclude_keywords, index_depth, selected_extensions, now, now),
         )
@@ -579,6 +767,7 @@ class IndexService:
             """
             SELECT
                 id, full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
+                is_search_target_enabled,
                 indexed_file_count, index_version, created_at, updated_at
             FROM targets
             WHERE id = ?
@@ -1068,7 +1257,7 @@ class IndexService:
                 self.connection.execute(
                     """
                     UPDATE targets
-                    SET last_indexed_at = NULL, updated_at = ?
+                    SET last_indexed_at = NULL, indexed_file_count = 0, updated_at = ?
                     WHERE id = ?
                     """,
                     (now, int(row["id"])),

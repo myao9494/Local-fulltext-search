@@ -47,7 +47,11 @@ test("検索結果には親フォルダを開くリンクを含める", () => {
 
   assert.match(source, /getFolderPath\(item\.full_path\)/);
   assert.match(source, /http:\/\/localhost:8001\/\?path=\$\{encodeURIComponent\(item\.result_kind === "folder" \? item\.full_path : folderPath\)\}/);
+  assert.match(source, /result-folder-link/);
   assert.match(source, /フォルダを開く/);
+  assert.match(source, /openFileLocation/);
+  assert.match(source, /result-open-location-button/);
+  assert.match(source, /Finderで開く|Explorerで開く/);
 });
 
 /**

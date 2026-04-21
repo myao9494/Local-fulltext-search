@@ -49,6 +49,23 @@ export type IndexedTargetListResponse = {
   items: IndexedTarget[];
 };
 
+export type SearchTargetFolder = {
+  full_path: string;
+  is_enabled: boolean;
+  last_indexed_at: string | null;
+  indexed_file_count: number;
+};
+
+export type SearchTargetListResponse = {
+  items: SearchTargetFolder[];
+};
+
+export type SearchTargetCoverage = {
+  normalized_path: string;
+  is_covered: boolean;
+  covering_path: string | null;
+};
+
 export type AppSettings = {
   exclude_keywords: string;
   synonym_groups: string;

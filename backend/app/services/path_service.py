@@ -18,7 +18,7 @@ def normalize_path(raw_path: str | Path) -> Path:
     Windows の UNC パスは `resolve()` で壊さないよう、そのまま `Path` として扱う。
     """
     raw_value = str(raw_path)
-    if _is_windows_unc_path(raw_value):
+    if is_windows_absolute_path(raw_value):
         return Path(raw_value).expanduser()
     candidate = Path(raw_path).expanduser()
     if not candidate.is_absolute():
@@ -31,7 +31,7 @@ def normalize_path_str(raw_path: str | Path) -> str:
     DB 保存や検索比較用に、Windows の UNC パスを `//server/share/...` 形式へ正規化する。
     """
     raw_value = str(raw_path)
-    if _is_windows_unc_path(raw_value):
+    if is_windows_absolute_path(raw_value):
         return PureWindowsPath(raw_value).as_posix()
     return normalize_path(raw_path).as_posix()
 
@@ -66,3 +66,10 @@ def _is_windows_unc_path(raw_path: str) -> bool:
     Windows の UNC 共有パスかどうかを判定する。
     """
     return raw_path.startswith("\\\\") or raw_path.startswith("//")
+
+
+def is_windows_absolute_path(raw_path: str) -> bool:
+    """
+    Windows の UNC パスまたはドライブレター付き絶対パスかどうかを OS 非依存で判定する。
+    """
+    return _is_windows_unc_path(raw_path) or PureWindowsPath(raw_path).is_absolute()

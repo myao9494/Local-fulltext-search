@@ -759,7 +759,9 @@ def test_delete_indexed_folders_removes_selected_folder_indexes_and_marks_target
     deleted_count = service.delete_indexed_folders([drop.as_posix()]).deleted_count
 
     assert deleted_count == 1
-    remaining_targets = connection.execute("SELECT full_path, last_indexed_at FROM targets ORDER BY full_path").fetchall()
+    remaining_targets = connection.execute(
+        "SELECT full_path, last_indexed_at, indexed_file_count FROM targets ORDER BY full_path"
+    ).fetchall()
     remaining_files = connection.execute("SELECT normalized_path FROM files ORDER BY normalized_path").fetchall()
     remaining_segments = connection.execute("SELECT COUNT(*) AS count FROM file_segments").fetchone()
 
@@ -767,6 +769,109 @@ def test_delete_indexed_folders_removes_selected_folder_indexes_and_marks_target
     assert remaining_segments["count"] == 1
     assert [row["full_path"] for row in remaining_targets] == [root.as_posix()]
     assert remaining_targets[0]["last_indexed_at"] is None
+    assert remaining_targets[0]["indexed_file_count"] == 0
+
+
+def test_list_search_targets_returns_targets_with_enabled_flag(tmp_path: Path) -> None:
+    """
+    検索対象フォルダ一覧には、有効フラグ・最終取得日時・ファイル件数を含める。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "memo.md").write_text("hello", encoding="utf-8")
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+
+    service.set_search_target_enabled(folder_path=target.as_posix(), is_enabled=False)
+
+    items = service.list_search_targets().items
+    assert len(items) == 1
+    assert items[0].full_path == target.as_posix()
+    assert items[0].is_enabled is False
+    assert items[0].indexed_file_count == 1
+    assert items[0].last_indexed_at is not None
+
+
+def test_delete_search_targets_removes_target_only(tmp_path: Path) -> None:
+    """
+    検索対象フォルダの削除は targets のみ外し、既存インデックスデータは保持する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "memo.md").write_text("hello", encoding="utf-8")
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+
+    response = service.delete_search_targets([target.as_posix()])
+
+    assert response.deleted_count == 1
+    assert connection.execute("SELECT COUNT(*) AS count FROM targets").fetchone()["count"] == 0
+    assert connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"] == 1
+
+
+def test_ensure_fresh_target_rejects_path_outside_enabled_search_targets(tmp_path: Path) -> None:
+    """
+    検索対象フォルダが1件以上ある場合、対象外パスのインデックス作成は拒否する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    allowed = tmp_path / "allowed"
+    denied = tmp_path / "denied"
+    allowed.mkdir()
+    denied.mkdir()
+    (allowed / "a.md").write_text("a", encoding="utf-8")
+    (denied / "b.md").write_text("b", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(allowed), refresh_window_minutes=0)
+    service.set_search_target_enabled(folder_path=allowed.as_posix(), is_enabled=True)
+
+    with patch.object(service, "_is_running", return_value=False):
+        try:
+            service.ensure_fresh_target(full_path=str(denied), refresh_window_minutes=0)
+        except HTTPException as error:
+            assert error.status_code == 400
+            assert "search target" in str(error.detail).lower()
+        else:
+            raise AssertionError("HTTPException was not raised for disabled search target path")
+
+
+def test_ensure_fresh_target_uses_registered_parent_target_without_creating_child_target(tmp_path: Path) -> None:
+    """
+    親フォルダが検索対象にある場合、子フォルダで再インデックスしても targets に子を追加しない。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    parent = tmp_path / "workspace"
+    child = parent / "team" / "backup"
+    child.mkdir(parents=True)
+    (child / "memo.md").write_text("hello", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(parent), refresh_window_minutes=0)
+    service.ensure_fresh_target(full_path=str(child), refresh_window_minutes=0)
+
+    target_paths = connection.execute("SELECT full_path FROM targets ORDER BY full_path").fetchall()
+    assert [str(row["full_path"]) for row in target_paths] == [parent.as_posix()]
+
+
+def test_get_search_target_coverage_returns_parent_for_descendant(tmp_path: Path) -> None:
+    """
+    子フォルダ指定でも、有効な親検索対象があればカバー済みとして親パスを返す。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    parent = tmp_path / "workspace"
+    child = parent / "team" / "backup"
+    child.mkdir(parents=True)
+    (child / "memo.md").write_text("hello", encoding="utf-8")
+    service.ensure_fresh_target(full_path=str(parent), refresh_window_minutes=0)
+
+    coverage = service.get_search_target_coverage(folder_path=str(child))
+
+    assert coverage.is_covered is True
+    assert coverage.covering_path == parent.as_posix()
+    assert coverage.normalized_path == child.as_posix()
 
 
 def test_selected_types_limit_indexed_extensions_and_include_filename_only_files(tmp_path: Path) -> None:

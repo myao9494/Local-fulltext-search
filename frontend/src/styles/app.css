@@ -643,6 +643,22 @@ h1, h2, h3 {
   font-size: 0.88rem;
 }
 
+.target-list-main-compact {
+  align-items: center;
+}
+
+.target-list-content-compact {
+  gap: 6px;
+}
+
+.target-list-actions {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .target-list-keywords {
   color: #cbd5e1;
   font-size: 0.88rem;
@@ -1072,6 +1088,19 @@ h1, h2, h3 {
 .path-picker-row.top-path-picker {
   flex: 1;
   display: flex;
+}
+
+.path-picker-block {
+  flex: 1;
+}
+
+.search-target-inline-hint {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: #facc15;
 }
 
 input.small-input {

@@ -51,6 +51,17 @@ def test_settings_default_synonym_groups_path_does_not_depend_on_cwd(monkeypatch
     assert Settings().synonym_groups_path == expected
 
 
+def test_settings_default_search_target_folders_path_does_not_depend_on_cwd(monkeypatch, tmp_path: Path) -> None:
+    """
+    既定の検索対象フォルダ保存先は起動ディレクトリに依存せず、backend/data/search_target_folders.txt を指す。
+    """
+    expected = (Path(__file__).resolve().parents[1] / "data" / "search_target_folders.txt").resolve()
+
+    monkeypatch.chdir(tmp_path)
+
+    assert Settings().search_target_folders_path == expected
+
+
 def test_settings_relative_paths_are_normalized_to_absolute_stable_locations() -> None:
     """
     設定のパス項目は相対指定でも内部では安定した絶対パスへ正規化する。
@@ -88,3 +99,11 @@ def test_settings_synonym_groups_name_rejects_path_segments() -> None:
     """
     with pytest.raises(ValidationError):
         Settings(synonym_groups_name="../synonym_groups.txt")
+
+
+def test_settings_search_target_folders_name_rejects_path_segments() -> None:
+    """
+    search_target_folders_name にはファイル名のみを許可し、パス区切りを混入させない。
+    """
+    with pytest.raises(ValidationError):
+        Settings(search_target_folders_name="../search_target_folders.txt")

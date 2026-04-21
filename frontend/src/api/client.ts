@@ -3,6 +3,8 @@ import type {
   FailedFileListResponse,
   IndexedTargetListResponse,
   IndexStatus,
+  SearchTargetListResponse,
+  SearchTargetCoverage,
   SchedulerSettings,
   SearchResponse,
 } from "../types";
@@ -86,6 +88,46 @@ export async function fetchIndexedTargets(): Promise<IndexedTargetListResponse> 
 export async function deleteIndexedTargets(folderPaths: string[]): Promise<{ deleted_count: number }> {
   return request<{ deleted_count: number }>("/api/index/targets", {
     method: "DELETE",
+    body: JSON.stringify({ folder_paths: folderPaths }),
+  });
+}
+
+export async function fetchSearchTargets(): Promise<SearchTargetListResponse> {
+  return request<SearchTargetListResponse>("/api/index/search-targets");
+}
+
+export async function fetchSearchTargetCoverage(folderPath: string): Promise<SearchTargetCoverage> {
+  const query = new URLSearchParams({ folder_path: folderPath });
+  return request<SearchTargetCoverage>(`/api/index/search-targets/coverage?${query.toString()}`);
+}
+
+export async function setSearchTargetEnabled(payload: {
+  folder_path: string;
+  is_enabled: boolean;
+}): Promise<SearchTargetListResponse> {
+  return request<SearchTargetListResponse>("/api/index/search-targets", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function addSearchTarget(folderPath: string): Promise<SearchTargetListResponse> {
+  return request<SearchTargetListResponse>("/api/index/search-targets", {
+    method: "POST",
+    body: JSON.stringify({ folder_path: folderPath }),
+  });
+}
+
+export async function deleteSearchTargets(folderPaths: string[]): Promise<{ deleted_count: number }> {
+  return request<{ deleted_count: number }>("/api/index/search-targets", {
+    method: "DELETE",
+    body: JSON.stringify({ folder_paths: folderPaths }),
+  });
+}
+
+export async function reindexSearchTargets(folderPaths: string[]): Promise<{ reindexed_count: number }> {
+  return request<{ reindexed_count: number }>("/api/index/search-targets/reindex", {
+    method: "POST",
     body: JSON.stringify({ folder_paths: folderPaths }),
   });
 }
@@ -184,5 +226,12 @@ export async function recordSearchClick(fileId: number): Promise<{ file_id: numb
 export async function deleteFile(fileId: number): Promise<{ status: string; file_id: number }> {
   return request<{ status: string; file_id: number }>(`/api/files/${fileId}`, {
     method: "DELETE",
+  });
+}
+
+export async function openFileLocation(path: string): Promise<{ status: string }> {
+  return request<{ status: string }>("/api/files/open-location", {
+    method: "POST",
+    body: JSON.stringify({ path }),
   });
 }

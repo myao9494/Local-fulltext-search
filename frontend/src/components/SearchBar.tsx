@@ -33,6 +33,9 @@ type SearchBarProps = {
   onRegexToggle: () => void;
   onSearchAllToggle: () => void;
   onPickFolder: () => void;
+  showSearchTargetHint: boolean;
+  isAddingSearchTarget: boolean;
+  onAddSearchTarget: () => void;
   onSubmit: () => void;
   onToggleMenu: () => void;
 };
@@ -70,6 +73,9 @@ export function SearchBar({
   onRegexToggle,
   onSearchAllToggle,
   onPickFolder,
+  showSearchTargetHint,
+  isAddingSearchTarget,
+  onAddSearchTarget,
   onSubmit,
   onToggleMenu,
 }: SearchBarProps) {
@@ -79,24 +85,34 @@ export function SearchBar({
         <div className="top-filters-main">
           <div className="filter-group path-group">
             <label className="filter-label">フォルダ:</label>
-            <div className="path-picker-row top-path-picker">
-              <button
-                className={`secondary-button small-btn search-all-button ${isSearchAllEnabled ? "active" : ""}`}
-                onClick={onSearchAllToggle}
-                type="button"
-                aria-pressed={isSearchAllEnabled}
-              >
-                全データベース
-              </button>
-              <input
-                className="small-input path-input"
-                value={fullPath}
-                onChange={(event) => onFullPathChange(event.target.value)}
-                placeholder="フルパス"
-              />
-              <button className="secondary-button small-btn" onClick={onPickFolder} type="button">
-                選択
-              </button>
+            <div className="path-picker-block">
+              <div className="path-picker-row top-path-picker">
+                <button
+                  className={`secondary-button small-btn search-all-button ${isSearchAllEnabled ? "active" : ""}`}
+                  onClick={onSearchAllToggle}
+                  type="button"
+                  aria-pressed={isSearchAllEnabled}
+                >
+                  全データベース
+                </button>
+                <input
+                  className="small-input path-input"
+                  value={fullPath}
+                  onChange={(event) => onFullPathChange(event.target.value)}
+                  placeholder="フルパス"
+                />
+                <button className="secondary-button small-btn" onClick={onPickFolder} type="button">
+                  選択
+                </button>
+              </div>
+              {showSearchTargetHint ? (
+                <div className="search-target-inline-hint">
+                  <span>このフォルダはまだ検索対象フォルダに含まれていません。</span>
+                  <button className="secondary-button small-btn" onClick={onAddSearchTarget} type="button" disabled={isAddingSearchTarget}>
+                    {isAddingSearchTarget ? "追加中..." : "検索対象に追加"}
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
 

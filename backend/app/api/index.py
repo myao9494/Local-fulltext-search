@@ -5,9 +5,18 @@
 """
 
 from fastapi import APIRouter, Depends
+from fastapi import Query
 
 from app.api.deps import get_index_service, get_scheduler_service
-from app.models.indexing import AppSettingsUpdateRequest, DeleteIndexedFoldersRequest, SchedulerUpdateRequest
+from app.models.indexing import (
+    AppSettingsUpdateRequest,
+    DeleteSearchTargetsRequest,
+    DeleteIndexedFoldersRequest,
+    ReindexSearchTargetsRequest,
+    SchedulerUpdateRequest,
+    SearchTargetAddRequest,
+    SearchTargetUpdateRequest,
+)
 from app.services.index_service import IndexService
 from app.services.scheduler_service import SchedulerService
 
@@ -66,6 +75,69 @@ def delete_indexed_targets(
     選択したフォルダ群のインデックスをまとめて削除する。
     """
     return service.delete_indexed_folders(payload.folder_paths).model_dump()
+
+
+@router.get("/search-targets")
+def get_search_targets(service: IndexService = Depends(get_index_service)) -> dict[str, object]:
+    """
+    検索対象フォルダ一覧（有効/無効フラグ付き）を返す。
+    """
+    return service.list_search_targets().model_dump()
+
+
+@router.get("/search-targets/coverage")
+def get_search_target_coverage(
+    folder_path: str = Query(...),
+    service: IndexService = Depends(get_index_service),
+) -> dict[str, object]:
+    """
+    指定パスが有効な検索対象フォルダ配下かどうかを返す。
+    """
+    return service.get_search_target_coverage(folder_path=folder_path).model_dump()
+
+
+@router.put("/search-targets")
+def set_search_target_enabled(
+    payload: SearchTargetUpdateRequest,
+    service: IndexService = Depends(get_index_service),
+) -> dict[str, object]:
+    """
+    検索対象フォルダの有効/無効を更新する。
+    """
+    return service.set_search_target_enabled(folder_path=payload.folder_path, is_enabled=payload.is_enabled).model_dump()
+
+
+@router.post("/search-targets")
+def add_search_target(
+    payload: SearchTargetAddRequest,
+    service: IndexService = Depends(get_index_service),
+) -> dict[str, object]:
+    """
+    検索対象フォルダへ新規追加する。
+    """
+    return service.add_search_target(folder_path=payload.folder_path).model_dump()
+
+
+@router.delete("/search-targets")
+def delete_search_targets(
+    payload: DeleteSearchTargetsRequest,
+    service: IndexService = Depends(get_index_service),
+) -> dict[str, object]:
+    """
+    検索対象フォルダ一覧から指定パスを削除する。
+    """
+    return service.delete_search_targets(payload.folder_paths).model_dump()
+
+
+@router.post("/search-targets/reindex")
+def reindex_search_targets(
+    payload: ReindexSearchTargetsRequest,
+    service: IndexService = Depends(get_index_service),
+) -> dict[str, object]:
+    """
+    指定した検索対象フォルダ群を順次再インデックスする。
+    """
+    return service.reindex_search_targets(payload.folder_paths).model_dump()
 
 
 @router.post("/cancel")

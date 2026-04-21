@@ -8,18 +8,29 @@ from pathlib import Path
 from starlette.routing import Match
 
 from app.api.index import (
+    add_search_target,
     cancel_indexing,
+    delete_search_targets,
     delete_indexed_targets,
     get_app_settings,
     get_indexed_targets,
+    get_search_targets,
     get_scheduler_settings,
     reset_database,
+    set_search_target_enabled,
     start_scheduler,
     update_app_settings,
 )
 from app.config import settings
 from app.main import create_app
-from app.models.indexing import AppSettingsUpdateRequest, DeleteIndexedFoldersRequest, SchedulerUpdateRequest
+from app.models.indexing import (
+    AppSettingsUpdateRequest,
+    DeleteIndexedFoldersRequest,
+    SchedulerUpdateRequest,
+    DeleteSearchTargetsRequest,
+    SearchTargetAddRequest,
+    SearchTargetUpdateRequest,
+)
 
 
 class StubIndexService:
@@ -36,6 +47,14 @@ class StubIndexService:
         self.saved_index_selected_extensions = ".md\n.json"
         self.saved_custom_content_extensions = ".py\n.dat"
         self.saved_custom_filename_extensions = ".CAE"
+        self.search_targets = [
+            {
+                "full_path": "/tmp/docs",
+                "is_enabled": True,
+                "last_indexed_at": "2026-04-15T00:00:00+00:00",
+                "indexed_file_count": 4,
+            }
+        ]
         self.scheduler_payload = {
             "paths": ["/tmp/docs", "/tmp/share"],
             "start_at": "2026-04-20T00:00:00+00:00",
@@ -168,6 +187,51 @@ class StubIndexService:
         }
         return self.get_scheduler_settings()
 
+    def list_search_targets(self) -> object:
+        class SearchTargets:
+            def __init__(self, items: list[dict[str, object]]) -> None:
+                self.items = items
+
+            def model_dump(self) -> dict[str, object]:
+                return {"items": self.items}
+
+        return SearchTargets(self.search_targets)
+
+    def set_search_target_enabled(self, *, folder_path: str, is_enabled: bool) -> object:
+        for item in self.search_targets:
+            if item["full_path"] == folder_path:
+                item["is_enabled"] = is_enabled
+                return self.list_search_targets()
+        self.search_targets.append(
+            {
+                "full_path": folder_path,
+                "is_enabled": is_enabled,
+                "last_indexed_at": None,
+                "indexed_file_count": 0,
+            }
+        )
+        return self.list_search_targets()
+
+    def add_search_target(self, *, folder_path: str) -> object:
+        return self.set_search_target_enabled(folder_path=folder_path, is_enabled=True)
+
+    def delete_search_targets(self, folder_paths: list[str]) -> object:
+        removed = 0
+        for folder_path in folder_paths:
+            current_count = len(self.search_targets)
+            self.search_targets = [item for item in self.search_targets if item["full_path"] != folder_path]
+            if len(self.search_targets) < current_count:
+                removed += 1
+
+        class DeleteResult:
+            def __init__(self, deleted_count: int) -> None:
+                self.deleted_count = deleted_count
+
+            def model_dump(self) -> dict[str, object]:
+                return {"deleted_count": self.deleted_count}
+
+        return DeleteResult(removed)
+
 
 def test_reset_database_endpoint_returns_status_payload() -> None:
     """
@@ -209,6 +273,55 @@ def test_get_indexed_targets_endpoint_returns_folder_list() -> None:
 
     assert payload["items"][0]["full_path"] == "/tmp/docs"
     assert payload["items"][0]["indexed_file_count"] == 4
+
+
+def test_get_search_targets_endpoint_returns_folder_list() -> None:
+    """
+    ルート関数は検索対象フォルダ一覧をそのまま返す。
+    """
+    service = StubIndexService()
+
+    payload = get_search_targets(service)
+
+    assert payload["items"][0]["full_path"] == "/tmp/docs"
+    assert payload["items"][0]["is_enabled"] is True
+
+
+def test_set_search_target_enabled_endpoint_updates_flag() -> None:
+    """
+    ルート関数は指定フォルダの有効/無効を更新した一覧を返す。
+    """
+    service = StubIndexService()
+
+    payload = set_search_target_enabled(
+        SearchTargetUpdateRequest(folder_path="/tmp/docs", is_enabled=False),
+        service,
+    )
+
+    assert payload["items"][0]["full_path"] == "/tmp/docs"
+    assert payload["items"][0]["is_enabled"] is False
+
+
+def test_add_search_target_endpoint_adds_target() -> None:
+    """
+    ルート関数は検索対象フォルダを有効状態で追加した一覧を返す。
+    """
+    service = StubIndexService()
+
+    payload = add_search_target(SearchTargetAddRequest(folder_path="/tmp/new"), service)
+
+    assert any(item["full_path"] == "/tmp/new" and item["is_enabled"] is True for item in payload["items"])
+
+
+def test_delete_search_targets_endpoint_removes_targets() -> None:
+    """
+    ルート関数は検索対象フォルダの削除件数を返す。
+    """
+    service = StubIndexService()
+
+    payload = delete_search_targets(DeleteSearchTargetsRequest(folder_paths=["/tmp/docs"]), service)
+
+    assert payload["deleted_count"] == 1
 
 
 def test_delete_indexed_targets_endpoint_returns_deleted_count() -> None:
@@ -355,6 +468,49 @@ def test_indexed_targets_routes_are_registered(tmp_path: Path, monkeypatch) -> N
 
     assert first_get_match.path == "/api/index/targets"
     assert first_delete_match.path == "/api/index/targets"
+
+
+def test_search_targets_routes_are_registered(tmp_path: Path, monkeypatch) -> None:
+    """
+    create_app 後のルータに検索対象フォルダ一覧・更新・追加 API が登録される。
+    """
+    frontend_dist = tmp_path / "dist"
+    frontend_dist.mkdir()
+    (frontend_dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    monkeypatch.setattr(settings, "frontend_dist_dir", frontend_dist)
+
+    app = create_app()
+    get_scope = {"type": "http", "path": "/api/index/search-targets", "method": "GET"}
+    put_scope = {"type": "http", "path": "/api/index/search-targets", "method": "PUT"}
+    post_scope = {"type": "http", "path": "/api/index/search-targets", "method": "POST"}
+    delete_scope = {"type": "http", "path": "/api/index/search-targets", "method": "DELETE"}
+
+    first_get_match = next(route for route in app.router.routes if route.matches(get_scope)[0] == Match.FULL)
+    first_put_match = next(route for route in app.router.routes if route.matches(put_scope)[0] == Match.FULL)
+    first_post_match = next(route for route in app.router.routes if route.matches(post_scope)[0] == Match.FULL)
+    first_delete_match = next(route for route in app.router.routes if route.matches(delete_scope)[0] == Match.FULL)
+
+    assert first_get_match.path == "/api/index/search-targets"
+    assert first_put_match.path == "/api/index/search-targets"
+    assert first_post_match.path == "/api/index/search-targets"
+    assert first_delete_match.path == "/api/index/search-targets"
+
+
+def test_search_target_coverage_route_is_registered(tmp_path: Path, monkeypatch) -> None:
+    """
+    create_app 後のルータに検索対象カバー判定 API が登録される。
+    """
+    frontend_dist = tmp_path / "dist"
+    frontend_dist.mkdir()
+    (frontend_dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    monkeypatch.setattr(settings, "frontend_dist_dir", frontend_dist)
+
+    app = create_app()
+    scope = {"type": "http", "path": "/api/index/search-targets/coverage", "method": "GET"}
+
+    first_match = next(route for route in app.router.routes if route.matches(scope)[0] == Match.FULL)
+
+    assert first_match.path == "/api/index/search-targets/coverage"
 
 
 def test_app_settings_routes_are_registered(tmp_path: Path, monkeypatch) -> None:

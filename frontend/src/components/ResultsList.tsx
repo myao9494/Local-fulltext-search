@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { openFileLocation } from "../api/client";
 import type { SearchResult } from "../types";
 
 type ResultsListProps = {
@@ -56,6 +57,12 @@ function fallbackCopyTextToClipboard(text: string): boolean {
 
 export function ResultsList({ items, dateField, onResultOpen, onResultDelete }: ResultsListProps) {
   const [copiedFileId, setCopiedFileId] = useState<number | null>(null);
+  const [openingLocationFileId, setOpeningLocationFileId] = useState<number | null>(null);
+
+  const openLocationLabel =
+    typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("windows")
+      ? "Explorerで開く"
+      : "Finderで開く";
 
   useEffect(() => {
     if (copiedFileId === null) {
@@ -88,6 +95,17 @@ export function ResultsList({ items, dateField, onResultOpen, onResultDelete }: 
     }
   };
 
+  const handleOpenLocation = async (fileId: number, fullPath: string) => {
+    setOpeningLocationFileId(fileId);
+    try {
+      await openFileLocation(fullPath);
+    } catch (error) {
+      console.error("Failed to open file location.", error);
+    } finally {
+      setOpeningLocationFileId((currentFileId) => (currentFileId === fileId ? null : currentFileId));
+    }
+  };
+
   if (items.length === 0) {
     return <div className="empty-panel">一致する結果はありません。</div>;
   }
@@ -114,6 +132,15 @@ export function ResultsList({ items, dateField, onResultOpen, onResultDelete }: 
                   title="フルパスをコピー"
                 >
                   パスをコピー
+                </button>
+                <button
+                  type="button"
+                  className="result-open-location-button"
+                  onClick={() => void handleOpenLocation(item.file_id, item.result_kind === "folder" ? item.full_path : folderPath)}
+                  title={item.result_kind === "folder" ? openLocationLabel : `${openLocationLabel}（親フォルダ）`}
+                  disabled={openingLocationFileId === item.file_id}
+                >
+                  {openingLocationFileId === item.file_id ? "開いています..." : openLocationLabel}
                 </button>
                 <a
                   className="result-folder-link"

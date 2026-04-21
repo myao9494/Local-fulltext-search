@@ -3,16 +3,22 @@ import { useEffect, useState } from "react";
 import {
   cancelIndexing,
   deleteFile,
+  deleteSearchTargets,
   fetchAppSettings,
+  fetchSearchTargetCoverage,
   deleteIndexedTargets,
   fetchFailedFiles,
   fetchIndexedTargets,
+  fetchSearchTargets,
   fetchIndexStatus,
   fetchSchedulerSettings,
+  addSearchTarget,
   pickFolder,
+  reindexSearchTargets,
   resetDatabase,
   recordSearchClick,
   search,
+  setSearchTargetEnabled,
   startScheduler,
   updateAppSettings,
 } from "./api/client";
@@ -20,7 +26,7 @@ import { ResultsList } from "./components/ResultsList";
 import { SearchBar } from "./components/SearchBar";
 import { filterSearchResultsByExtensions, normalizeExtensionToken } from "./extensionFilter";
 import { parseLaunchParams, shouldAutoSearch } from "./launchParams";
-import type { FailedFile, IndexedTarget, IndexStatus, SchedulerSettings, SearchResult } from "./types";
+import type { FailedFile, IndexedTarget, IndexStatus, SchedulerSettings, SearchResult, SearchTargetFolder } from "./types";
 
 const BASE_CONTENT_EXTENSIONS = [
   ".md",
@@ -82,9 +88,8 @@ const DEFAULT_EXCLUDE_KEYWORDS = [
 ].join("\n");
 const DEFAULT_SYNONYM_GROUPS = "";
 const DEFAULT_SEARCH_FILTER_TEXT = "";
-const DEFAULT_SEARCH_PATH = "";
 
-type PageView = "search" | "indexed-targets" | "scheduler";
+type PageView = "search" | "indexed-targets" | "search-targets" | "scheduler";
 type SearchTarget = "all" | "body" | "filename" | "folder" | "filename_and_folder";
 type SearchExecutionParams = {
   q: string;
@@ -166,13 +171,6 @@ function normalizeSynonymGroups(value: string | null | undefined): string {
 }
 
 /**
- * 既定検索フォルダは前後空白だけ落として保存し、空文字なら未設定として扱う。
- */
-function normalizeDefaultSearchPath(value: string): string {
-  return value.trim();
-}
-
-/**
  * 拡張子一覧は前後空白除去・ドット補完・重複排除を行う。
  */
 function normalizeCustomExtensions(extensions: readonly string[]): string[] {
@@ -248,6 +246,32 @@ function getSortableValue(item: SearchResult, sortBy: "created" | "modified" | "
   return new Date(item.mtime).getTime();
 }
 
+/**
+ * 検索対象フォルダの親子判定用に、区切りを統一して末尾スラッシュを除去する。
+ */
+function normalizeComparablePath(path: string): string {
+  const trimmed = path.trim().replace(/\\/g, "/");
+  if (trimmed.length <= 1) {
+    return trimmed;
+  }
+  return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
+}
+
+/**
+ * 検索対象フォルダ一覧に、指定パス（または親）が含まれるか判定する。
+ * 有効/無効に関わらず、親フォルダが登録済みなら子の自動追加候補は表示しない。
+ */
+function isPathCoveredByTarget(path: string, searchTargets: readonly SearchTargetFolder[]): boolean {
+  const normalizedPath = normalizeComparablePath(path);
+  if (!normalizedPath) {
+    return false;
+  }
+  const registeredPaths = searchTargets
+    .map((item) => normalizeComparablePath(item.full_path))
+    .filter(Boolean);
+  return registeredPaths.some((rootPath) => normalizedPath === rootPath || normalizedPath.startsWith(`${rootPath}/`));
+}
+
 function App() {
   const [launchParams] = useState(() => parseLaunchParams(window.location.search));
   const [pageView, setPageView] = useState<PageView>("search");
@@ -261,12 +285,6 @@ function App() {
   const [excludeKeywordsDraft, setExcludeKeywordsDraft] = useState(DEFAULT_EXCLUDE_KEYWORDS);
   const [savedSynonymGroups, setSavedSynonymGroups] = useState(DEFAULT_SYNONYM_GROUPS);
   const [synonymGroupsDraft, setSynonymGroupsDraft] = useState(DEFAULT_SYNONYM_GROUPS);
-  const [savedDefaultSearchPath, setSavedDefaultSearchPath] = useState(
-    () => localStorage.getItem("default_search_path") ?? DEFAULT_SEARCH_PATH,
-  );
-  const [defaultSearchPathDraft, setDefaultSearchPathDraft] = useState(
-    () => localStorage.getItem("default_search_path") ?? DEFAULT_SEARCH_PATH,
-  );
   const [savedCustomContentExtensions, setSavedCustomContentExtensions] = useState<string[]>([]);
   const [customContentExtensions, setCustomContentExtensions] = useState<string[]>([]);
   const [savedCustomFilenameExtensions, setSavedCustomFilenameExtensions] = useState<string[]>([]);
@@ -298,6 +316,8 @@ function App() {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [failedFiles, setFailedFiles] = useState<FailedFile[]>([]);
   const [indexedTargets, setIndexedTargets] = useState<IndexedTarget[]>([]);
+  const [searchTargets, setSearchTargets] = useState<SearchTargetFolder[]>([]);
+  const [isCurrentPathCovered, setIsCurrentPathCovered] = useState(false);
   const [selectedTargetPaths, setSelectedTargetPaths] = useState<string[]>([]);
   const [targetKeyword, setTargetKeyword] = useState("");
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
@@ -309,6 +329,10 @@ function App() {
   const [isCancellingIndex, setIsCancellingIndex] = useState(false);
   const [isLoadingTargets, setIsLoadingTargets] = useState(false);
   const [isDeletingTargets, setIsDeletingTargets] = useState(false);
+  const [isUpdatingSearchTargets, setIsUpdatingSearchTargets] = useState(false);
+  const [isReindexingSearchTargets, setIsReindexingSearchTargets] = useState(false);
+  const [isAddingLaunchPath, setIsAddingLaunchPath] = useState(false);
+  const [searchTargetActionPath, setSearchTargetActionPath] = useState<string | null>(null);
   const [isSavingExcludeKeywords, setIsSavingExcludeKeywords] = useState(false);
   const [isSavingSynonymGroups, setIsSavingSynonymGroups] = useState(false);
   const [isSavingIndexExtensions, setIsSavingIndexExtensions] = useState(false);
@@ -326,15 +350,20 @@ function App() {
         return item.full_path.toLowerCase().includes(keyword);
       });
   const filteredTargetPaths = filteredTargets.map((item) => item.full_path);
+  const filteredSearchTargets = !keyword
+    ? searchTargets
+    : searchTargets.filter((item) => item.full_path.toLowerCase().includes(keyword));
+  const filteredEnabledSearchTargets = filteredSearchTargets.filter((item) => item.is_enabled);
+  const filteredSearchTargetPaths = filteredSearchTargets.map((item) => item.full_path);
   const selectedTargetPathSet = new Set(selectedTargetPaths);
   const selectedFilteredCount = filteredTargetPaths.filter((path) => selectedTargetPathSet.has(path)).length;
   const isAllFilteredSelected = filteredTargetPaths.length > 0 && selectedFilteredCount === filteredTargetPaths.length;
+  const isAllFilteredSearchTargetsSelected =
+    filteredSearchTargets.length > 0 && filteredSearchTargets.every((item) => item.is_enabled);
   const normalizedExcludeKeywordsDraft = normalizeExcludeKeywords(excludeKeywordsDraft);
   const hasUnsavedExcludeKeywords = normalizedExcludeKeywordsDraft !== savedExcludeKeywords;
   const normalizedSynonymGroupsDraft = normalizeSynonymGroups(synonymGroupsDraft);
   const hasUnsavedSynonymGroups = normalizedSynonymGroupsDraft !== savedSynonymGroups;
-  const normalizedDefaultSearchPath = normalizeDefaultSearchPath(defaultSearchPathDraft);
-  const hasUnsavedDefaultSearchPath = normalizedDefaultSearchPath !== savedDefaultSearchPath;
   const hasUnsavedIndexExtensions =
     selectedIndexExtensions.join(" ") !== savedIndexExtensions.join(" ") ||
     customContentExtensions.join(" ") !== savedCustomContentExtensions.join(" ") ||
@@ -342,6 +371,13 @@ function App() {
   const sortedResults = sortSearchResults(results, { sortBy, sortOrder });
   const visibleResults = filterSearchResultsByExtensions(sortedResults, searchFilterText);
   const isSchedulerPage = pageView === "scheduler";
+  const isSearchTargetsPage = pageView === "search-targets";
+  const candidateSearchTargetPath = fullPath.trim();
+  const fallbackCoveredByLocalTargets = isPathCoveredByTarget(candidateSearchTargetPath, searchTargets);
+  const isLaunchPathAddable = Boolean(
+    candidateSearchTargetPath &&
+    !(isCurrentPathCovered || fallbackCoveredByLocalTargets),
+  );
 
   async function refreshIndexStatus(): Promise<IndexStatus> {
     const response = await fetchIndexStatus();
@@ -365,6 +401,19 @@ function App() {
       const response = await fetchIndexedTargets();
       setIndexedTargets(response.items);
       setSelectedTargetPaths((current) => current.filter((path) => response.items.some((item) => item.full_path === path)));
+    } finally {
+      setIsLoadingTargets(false);
+    }
+  }
+
+  /**
+   * 検索対象フォルダ一覧を取得し、消えた選択状態を外す。
+   */
+  async function refreshSearchTargets(): Promise<void> {
+    setIsLoadingTargets(true);
+    try {
+      const response = await fetchSearchTargets();
+      setSearchTargets(response.items);
     } finally {
       setIsLoadingTargets(false);
     }
@@ -394,6 +443,7 @@ function App() {
       setSelectedIndexExtensions(loadedSelectedIndexExtensions);
       await refreshIndexStatus();
       await refreshSchedulerState();
+      await refreshSearchTargets();
     } catch (error) {
       setNoticeMessage("");
       setErrorMessage(error instanceof Error ? error.message : "初期データ取得に失敗しました。");
@@ -407,6 +457,36 @@ function App() {
   useEffect(() => {
     localStorage.setItem("regex_enabled", String(isRegexEnabled));
   }, [isRegexEnabled]);
+
+  /**
+   * 検索欄のパスが有効な検索対象フォルダに内包されるかをバックエンド基準で確認する。
+   */
+  useEffect(() => {
+    const targetPath = fullPath.trim();
+    if (!targetPath) {
+      setIsCurrentPathCovered(false);
+      return;
+    }
+    let isActive = true;
+    setIsCurrentPathCovered(isPathCoveredByTarget(targetPath, searchTargets));
+    const timerId = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const coverage = await fetchSearchTargetCoverage(targetPath);
+          if (isActive) {
+            setIsCurrentPathCovered(coverage.is_covered);
+          }
+        } catch {
+          // 通信失敗時はローカル判定のまま継続する。
+        }
+      })();
+    }, 200);
+
+    return () => {
+      isActive = false;
+      window.clearTimeout(timerId);
+    };
+  }, [fullPath, searchTargets]);
 
   /**
    * 検索中やインデックス実行中はステータスを定期取得し、中止ボタンの表示状態を追従させる。
@@ -505,7 +585,7 @@ function App() {
   function buildSearchKeyFromState(): string {
     return [
       query,
-      fullPath.trim() || savedDefaultSearchPath,
+      fullPath.trim(),
       String(isSearchAllEnabled),
       indexDepth,
       refreshWindowMinutes,
@@ -578,13 +658,13 @@ function App() {
       return;
     }
     const normalizedInputPath = fullPath.trim();
-    const resolvedSearchPath = normalizedInputPath || (isSearchAllEnabled ? "" : savedDefaultSearchPath);
+    const resolvedSearchPath = normalizedInputPath;
     if (!query.trim()) {
       setErrorMessage("検索語を入力してください。");
       return;
     }
     if (!isSearchAllEnabled && !resolvedSearchPath) {
-      setErrorMessage("検索対象フォルダのフルパスを入力してください。（※上の検索バーか設定メニューで指定可能です）");
+      setErrorMessage("検索対象フォルダのフルパスを入力してください。");
       return;
     }
     if (!indexDepth.trim()) {
@@ -904,21 +984,6 @@ function App() {
     }
   }
 
-  /**
-   * パス未入力検索で使う既定フォルダを localStorage に保存する。
-   */
-  function handleSaveDefaultSearchPath(): void {
-    localStorage.setItem("default_search_path", normalizedDefaultSearchPath);
-    setSavedDefaultSearchPath(normalizedDefaultSearchPath);
-    setDefaultSearchPathDraft(normalizedDefaultSearchPath);
-    setErrorMessage("");
-    setNoticeMessage(
-      normalizedDefaultSearchPath
-        ? "検索既定フォルダを保存しました。パス未入力の検索で利用します。"
-        : "検索既定フォルダをクリアしました。",
-    );
-  }
-
   async function handleToggleFailedFiles(): Promise<void> {
     const nextOpen = !isFailedFilesOpen;
     setIsFailedFilesOpen(nextOpen);
@@ -948,6 +1013,13 @@ function App() {
         await refreshIndexedTargets();
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : "インデックス済みフォルダの取得に失敗しました。");
+      }
+    }
+    if (nextView === "search-targets") {
+      try {
+        await refreshSearchTargets();
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : "検索対象フォルダの取得に失敗しました。");
       }
     }
     if (nextView === "scheduler") {
@@ -980,6 +1052,174 @@ function App() {
     setSelectedTargetPaths((current) =>
       current.includes(folderPath) ? current.filter((item) => item !== folderPath) : [...current, folderPath],
     );
+  }
+
+  async function handleToggleAllSearchTargets(): Promise<void> {
+    if (isUpdatingSearchTargets || filteredSearchTargetPaths.length === 0) {
+      return;
+    }
+    const nextEnabled = !isAllFilteredSearchTargetsSelected;
+    try {
+      setIsUpdatingSearchTargets(true);
+      setErrorMessage("");
+      setNoticeMessage("");
+      for (const folderPath of filteredSearchTargetPaths) {
+        const response = await setSearchTargetEnabled({ folder_path: folderPath, is_enabled: nextEnabled });
+        setSearchTargets(response.items);
+      }
+      setNoticeMessage(
+        nextEnabled
+          ? `${filteredSearchTargetPaths.length}件を検索対象として有効化しました。`
+          : `${filteredSearchTargetPaths.length}件を検索対象から除外しました。`,
+      );
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "検索対象フォルダの更新に失敗しました。");
+    } finally {
+      setIsUpdatingSearchTargets(false);
+    }
+  }
+
+  async function handleToggleSearchTarget(folderPath: string, isEnabled: boolean): Promise<void> {
+    if (isUpdatingSearchTargets) {
+      return;
+    }
+    try {
+      setIsUpdatingSearchTargets(true);
+      setErrorMessage("");
+      setNoticeMessage("");
+      const response = await setSearchTargetEnabled({ folder_path: folderPath, is_enabled: isEnabled });
+      setSearchTargets(response.items);
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "検索対象フォルダの更新に失敗しました。");
+    } finally {
+      setIsUpdatingSearchTargets(false);
+    }
+  }
+
+  async function handleReindexSelectedSearchTargets(): Promise<void> {
+    if (isReindexingSearchTargets || filteredEnabledSearchTargets.length === 0) {
+      return;
+    }
+    try {
+      setIsReindexingSearchTargets(true);
+      setErrorMessage("");
+      setNoticeMessage("");
+      const response = await reindexSearchTargets(filteredEnabledSearchTargets.map((item) => item.full_path));
+      await refreshIndexedTargets();
+      await refreshSearchTargets();
+      await refreshIndexStatus().catch(() => undefined);
+      setNoticeMessage(`${response.reindexed_count}件の検索対象フォルダをインデックス取得しました。`);
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "検索対象フォルダのインデックス取得に失敗しました。");
+    } finally {
+      setIsReindexingSearchTargets(false);
+    }
+  }
+
+  async function handleDeleteSearchTarget(folderPath: string): Promise<void> {
+    if (searchTargetActionPath) {
+      return;
+    }
+    const confirmed = window.confirm(`検索対象フォルダから削除しますか？\n\n${folderPath}`);
+    if (!confirmed) {
+      return;
+    }
+    try {
+      setSearchTargetActionPath(folderPath);
+      setErrorMessage("");
+      setNoticeMessage("");
+      const response = await deleteSearchTargets([folderPath]);
+      await refreshSearchTargets();
+      const coverage = await fetchSearchTargetCoverage(folderPath).catch(() => null);
+      if (coverage?.is_covered && coverage.covering_path) {
+        setNoticeMessage(
+          `${response.deleted_count}件の個別設定を削除しました。このフォルダは親フォルダ（${coverage.covering_path}）で引き続き検索対象です。`,
+        );
+      } else {
+        setNoticeMessage(`${response.deleted_count}件の検索対象フォルダを削除しました。`);
+      }
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "検索対象フォルダの削除に失敗しました。");
+    } finally {
+      setSearchTargetActionPath(null);
+    }
+  }
+
+  async function handleDeleteSearchTargetIndex(folderPath: string): Promise<void> {
+    if (searchTargetActionPath) {
+      return;
+    }
+    const confirmed = window.confirm(`このフォルダ配下のインデックスを削除しますか？\n\n${folderPath}`);
+    if (!confirmed) {
+      return;
+    }
+    try {
+      setSearchTargetActionPath(folderPath);
+      setErrorMessage("");
+      setNoticeMessage("");
+      const response = await deleteIndexedTargets([folderPath]);
+      await refreshIndexedTargets();
+      await refreshSearchTargets();
+      await refreshIndexStatus().catch(() => undefined);
+      setNoticeMessage(`${response.deleted_count}件のインデックスを削除しました。`);
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "インデックス削除に失敗しました。");
+    } finally {
+      setSearchTargetActionPath(null);
+    }
+  }
+
+  async function handleReindexSearchTarget(folderPath: string): Promise<void> {
+    if (searchTargetActionPath) {
+      return;
+    }
+    try {
+      setSearchTargetActionPath(folderPath);
+      setErrorMessage("");
+      setNoticeMessage("");
+      const response = await reindexSearchTargets([folderPath]);
+      await refreshIndexedTargets();
+      await refreshSearchTargets();
+      await refreshIndexStatus().catch(() => undefined);
+      setNoticeMessage(`${response.reindexed_count}件のインデックスを再取得しました。`);
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "インデックス再取得に失敗しました。");
+    } finally {
+      setSearchTargetActionPath(null);
+    }
+  }
+
+  async function handleAddCurrentPathToSearchTarget(): Promise<void> {
+    const targetPath = fullPath.trim();
+    if (!targetPath || isAddingLaunchPath) {
+      return;
+    }
+    try {
+      setIsAddingLaunchPath(true);
+      setErrorMessage("");
+      setNoticeMessage("");
+      const coverage = await fetchSearchTargetCoverage(targetPath);
+      if (coverage.is_covered) {
+        setNoticeMessage(`このフォルダはすでに検索対象です（親フォルダ: ${coverage.covering_path}）。`);
+        return;
+      }
+      const response = await addSearchTarget(targetPath);
+      setSearchTargets(response.items);
+      setIsCurrentPathCovered(true);
+      setIsSearchAllEnabled(false);
+      setNoticeMessage("指定したフォルダを検索対象に追加しました。全データベース検索を解除し、このフォルダを対象に検索します。");
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "検索対象フォルダの追加に失敗しました。");
+    } finally {
+      setIsAddingLaunchPath(false);
+    }
   }
 
   /**
@@ -1061,6 +1301,7 @@ function App() {
       setResults([]);
       setFailedFiles([]);
       setIndexedTargets([]);
+      setSearchTargets([]);
       setSelectedTargetPaths([]);
       setIsFailedFilesOpen(false);
       setIndexStatus(response.status);
@@ -1090,6 +1331,13 @@ function App() {
             type="button"
           >
             インデックス済みフォルダ
+          </button>
+          <button
+            className={`secondary-button page-tab ${pageView === "search-targets" ? "active" : ""}`}
+            onClick={() => void handleChangePage("search-targets")}
+            type="button"
+          >
+            検索対象フォルダ
           </button>
         </div>
 
@@ -1127,6 +1375,9 @@ function App() {
             onRegexToggle={() => setIsRegexEnabled((value) => !value)}
             onSearchAllToggle={handleToggleSearchAll}
             onPickFolder={() => void handlePickFolder()}
+            showSearchTargetHint={isLaunchPathAddable}
+            isAddingSearchTarget={isAddingLaunchPath}
+            onAddSearchTarget={() => void handleAddCurrentPathToSearchTarget()}
             onSubmit={() => void handleSearch()}
             onToggleMenu={() => setIsMenuOpen((value) => !value)}
           />
@@ -1145,16 +1396,20 @@ function App() {
             </div>
             <ResultsList items={visibleResults} dateField={dateField} onResultOpen={handleResultOpen} onResultDelete={handleResultDelete} />
           </section>
-        ) : pageView === "indexed-targets" ? (
+        ) : pageView === "indexed-targets" || pageView === "search-targets" ? (
           <section className="indexed-targets-panel">
             <div className="indexed-targets-panel-header">
               <div className="section-header">
                 <div>
-                  <h2>インデックス済みフォルダ</h2>
-                  <div className="form-help">どのフォルダがインデックスされているか確認し、選択して削除できます。</div>
+                  <h2>{isSearchTargetsPage ? "検索対象フォルダ" : "インデックス済みフォルダ"}</h2>
+                  <div className="form-help">
+                    {isSearchTargetsPage
+                      ? "検索対象フォルダを有効/無効で管理し、必要なら再インデックスできます。"
+                      : "どのフォルダがインデックスされているか確認し、選択して削除できます。"}
+                  </div>
                 </div>
                 <div className="section-header-actions">
-                  <span>{filteredTargets.length}件</span>
+                  <span>{isSearchTargetsPage ? filteredSearchTargets.length : filteredTargets.length}件</span>
                   <button className="menu-button" onClick={() => setIsMenuOpen((value) => !value)} type="button" aria-label="設定">
                     <svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24">
                       <path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path>
@@ -1170,51 +1425,143 @@ function App() {
                   onChange={(event) => setTargetKeyword(event.target.value)}
                   placeholder="キーワードで絞り込み"
                 />
-                <button className="secondary-button" onClick={handleToggleAllIndexedTargets} type="button">
-                  {isAllFilteredSelected ? "選択解除" : "すべて選択"}
-                </button>
-                <button className="secondary-button" onClick={() => void refreshIndexedTargets()} type="button" disabled={isLoadingTargets}>
+                {isSearchTargetsPage ? (
+                  <button className="secondary-button" onClick={() => void handleToggleAllSearchTargets()} type="button" disabled={isUpdatingSearchTargets}>
+                    {isAllFilteredSearchTargetsSelected ? "選択解除" : "すべて選択"}
+                  </button>
+                ) : (
+                  <button className="secondary-button" onClick={handleToggleAllIndexedTargets} type="button">
+                    {isAllFilteredSelected ? "選択解除" : "すべて選択"}
+                  </button>
+                )}
+                <button
+                  className="secondary-button"
+                  onClick={() => void (isSearchTargetsPage ? refreshSearchTargets() : refreshIndexedTargets())}
+                  type="button"
+                  disabled={isLoadingTargets}
+                >
                   {isLoadingTargets ? "再読込中..." : "再読込"}
                 </button>
-                <button
-                  className="secondary-button danger"
-                  onClick={() => void handleDeleteIndexedTargets()}
-                  type="button"
-                  disabled={selectedTargetPaths.length === 0 || isDeletingTargets}
-                >
-                  {isDeletingTargets ? "削除中..." : "選択したフォルダのインデックスを削除"}
-                </button>
+                {isSearchTargetsPage ? (
+                  <>
+                    <button
+                      className="secondary-button"
+                      onClick={() => void handleReindexSelectedSearchTargets()}
+                      type="button"
+                      disabled={filteredEnabledSearchTargets.length === 0 || isReindexingSearchTargets}
+                    >
+                      {isReindexingSearchTargets ? "取得中..." : "インデックス取得"}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="secondary-button danger"
+                    onClick={() => void handleDeleteIndexedTargets()}
+                    type="button"
+                    disabled={selectedTargetPaths.length === 0 || isDeletingTargets}
+                  >
+                    {isDeletingTargets ? "削除中..." : "選択したフォルダのインデックスを削除"}
+                  </button>
+                )}
               </div>
 
-              <div className="form-help indexed-targets-selection-status">選択中: {selectedTargetPaths.length}件</div>
+              <div className="form-help indexed-targets-selection-status">
+                {isSearchTargetsPage
+                  ? `対象中: ${filteredEnabledSearchTargets.length}件 / 全${filteredSearchTargets.length}件`
+                  : `選択中: ${selectedTargetPaths.length}件`}
+              </div>
             </div>
 
             <div className="indexed-targets-list">
-              {filteredTargets.length === 0 ? (
-                <div className="empty-panel">
-                  <div>{indexedTargets.length === 0 ? "まだインデックス済みフォルダはありません。" : "条件に一致するフォルダはありません。"}</div>
-                </div>
-              ) : (
-                filteredTargets.map((item) => (
-                  <label className="target-list-item" key={item.full_path}>
-                    <div className="target-list-main">
-                      <input
-                        checked={selectedTargetPathSet.has(item.full_path)}
-                        onChange={() => handleToggleIndexedTarget(item.full_path)}
-                        type="checkbox"
-                      />
-                      <div className="target-list-content">
-                        <div className="target-list-path">{item.full_path}</div>
-                        <div className="target-list-meta">
-                          <span>ファイル数: {item.indexed_file_count}</span>
-                          <span>
-                            最終取得: {item.last_indexed_at ? new Date(item.last_indexed_at).toLocaleString() : "-"}
-                          </span>
+              {isSearchTargetsPage ? (
+                filteredSearchTargets.length === 0 ? (
+                  <div className="empty-panel">
+                    <div>{searchTargets.length === 0 ? "まだ検索対象フォルダはありません。" : "条件に一致するフォルダはありません。"}</div>
+                  </div>
+                ) : (
+                  filteredSearchTargets.map((item) => (
+                    <label className="target-list-item" key={item.full_path}>
+                      <div className="target-list-main target-list-main-compact">
+                        <input
+                          checked={item.is_enabled}
+                          onChange={(event) => void handleToggleSearchTarget(item.full_path, event.target.checked)}
+                          type="checkbox"
+                          disabled={isUpdatingSearchTargets}
+                        />
+                        <div className="target-list-content target-list-content-compact">
+                          <div className="target-list-path">{item.full_path}</div>
+                          <div className="target-list-meta">
+                            <span>状態: {item.is_enabled ? "対象" : "対象外"}</span>
+                            <span>ファイル数: {item.indexed_file_count}</span>
+                            <span>最終取得: {item.last_indexed_at ? new Date(item.last_indexed_at).toLocaleString() : "-"}</span>
+                          </div>
+                        </div>
+                        <div className="target-list-actions">
+                          <button
+                            className="secondary-button small-btn"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              void handleDeleteSearchTarget(item.full_path);
+                            }}
+                            type="button"
+                            disabled={Boolean(searchTargetActionPath)}
+                          >
+                            削除
+                          </button>
+                          <button
+                            className="secondary-button small-btn"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              void handleDeleteSearchTargetIndex(item.full_path);
+                            }}
+                            type="button"
+                            disabled={Boolean(searchTargetActionPath)}
+                          >
+                            インデックス削除
+                          </button>
+                          <button
+                            className="secondary-button small-btn"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              void handleReindexSearchTarget(item.full_path);
+                            }}
+                            type="button"
+                            disabled={Boolean(searchTargetActionPath)}
+                          >
+                            インデックス再取得
+                          </button>
                         </div>
                       </div>
-                    </div>
-                  </label>
-                ))
+                    </label>
+                  ))
+                )
+              ) : (
+                filteredTargets.length === 0 ? (
+                  <div className="empty-panel">
+                    <div>{indexedTargets.length === 0 ? "まだインデックス済みフォルダはありません。" : "条件に一致するフォルダはありません。"}</div>
+                  </div>
+                ) : (
+                  filteredTargets.map((item) => (
+                    <label className="target-list-item" key={item.full_path}>
+                      <div className="target-list-main">
+                        <input
+                          checked={selectedTargetPathSet.has(item.full_path)}
+                          onChange={() => handleToggleIndexedTarget(item.full_path)}
+                          type="checkbox"
+                        />
+                        <div className="target-list-content">
+                          <div className="target-list-path">{item.full_path}</div>
+                          <div className="target-list-meta">
+                            <span>ファイル数: {item.indexed_file_count}</span>
+                            <span>
+                              最終取得: {item.last_indexed_at ? new Date(item.last_indexed_at).toLocaleString() : "-"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </label>
+                  ))
+                )
               )}
             </div>
           </section>
@@ -1361,30 +1708,6 @@ function App() {
               <div className="form-help">
                 同じフルパスと階層数の組み合わせで、この分数以内に更新済みなら再走査しません。既定は 60 分です。
               </div>
-
-              <label className="form-help" htmlFor="default-search-path">
-                検索既定フォルダ
-              </label>
-              <input
-                id="default-search-path"
-                value={defaultSearchPathDraft}
-                onChange={(event) => setDefaultSearchPathDraft(event.target.value)}
-                placeholder="/Users/name/Documents"
-              />
-              <div className="settings-action-row">
-                <button
-                  className="secondary-button settings-save-button"
-                  onClick={handleSaveDefaultSearchPath}
-                  type="button"
-                  disabled={!hasUnsavedDefaultSearchPath}
-                >
-                  保存
-                </button>
-                <div className={`settings-save-status ${hasUnsavedDefaultSearchPath ? "dirty" : "saved"}`}>
-                  {hasUnsavedDefaultSearchPath ? "未保存の変更があります" : "保存済み"}
-                </div>
-              </div>
-              <div className="form-help">パス未入力で検索したとき、このフォルダを使います。</div>
 
               <div className="extension-panel">
                 <button

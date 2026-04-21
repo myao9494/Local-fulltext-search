@@ -10,6 +10,7 @@ SCHEMA_STATEMENTS: list[str] = [
         exclude_keywords TEXT NOT NULL DEFAULT '',
         index_depth INTEGER NOT NULL DEFAULT 1,
         selected_extensions TEXT NOT NULL DEFAULT '',
+        is_search_target_enabled INTEGER NOT NULL DEFAULT 1,
         indexed_file_count INTEGER NOT NULL DEFAULT 0,
         index_version INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
@@ -186,6 +187,8 @@ def _apply_non_destructive_migrations(connection: Connection) -> None:
         connection.execute("ALTER TABLE targets ADD COLUMN indexed_file_count INTEGER NOT NULL DEFAULT 0;")
     if "index_version" not in target_columns:
         connection.execute("ALTER TABLE targets ADD COLUMN index_version INTEGER NOT NULL DEFAULT 0;")
+    if "is_search_target_enabled" not in target_columns:
+        connection.execute("ALTER TABLE targets ADD COLUMN is_search_target_enabled INTEGER NOT NULL DEFAULT 1;")
 
 
 def _needs_schema_reset(connection: Connection) -> bool:
@@ -204,6 +207,7 @@ def _needs_schema_reset(connection: Connection) -> bool:
         "exclude_keywords",
         "index_depth",
         "selected_extensions",
+        "is_search_target_enabled",
         "indexed_file_count",
         "index_version",
         "created_at",
