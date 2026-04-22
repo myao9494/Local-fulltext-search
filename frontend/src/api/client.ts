@@ -66,6 +66,7 @@ export async function startScheduler(payload: { paths: string[]; start_at: strin
 
 export async function updateAppSettings(payload: {
   exclude_keywords?: string;
+  hidden_indexed_targets?: string;
   synonym_groups?: string;
   index_selected_extensions?: string;
   custom_content_extensions?: string;

@@ -43,6 +43,7 @@ class StubIndexService:
         self.did_cancel = False
         self.deleted_target_ids: list[int] = []
         self.saved_exclude_keywords = ".git\nnode_modules"
+        self.saved_hidden_indexed_targets = "obsidian\nAgent_Skills"
         self.saved_synonym_groups = "スマートフォン,スマホ,モバイル"
         self.saved_index_selected_extensions = ".md\n.json"
         self.saved_custom_content_extensions = ".py\n.dat"
@@ -117,12 +118,14 @@ class StubIndexService:
             def __init__(
                 self,
                 exclude_keywords: str,
+                hidden_indexed_targets: str,
                 synonym_groups: str,
                 index_selected_extensions: str,
                 custom_content_extensions: str,
                 custom_filename_extensions: str,
             ) -> None:
                 self.exclude_keywords = exclude_keywords
+                self.hidden_indexed_targets = hidden_indexed_targets
                 self.synonym_groups = synonym_groups
                 self.index_selected_extensions = index_selected_extensions
                 self.custom_content_extensions = custom_content_extensions
@@ -131,6 +134,7 @@ class StubIndexService:
             def model_dump(self) -> dict[str, object]:
                 return {
                     "exclude_keywords": self.exclude_keywords,
+                    "hidden_indexed_targets": self.hidden_indexed_targets,
                     "synonym_groups": self.synonym_groups,
                     "index_selected_extensions": self.index_selected_extensions,
                     "custom_content_extensions": self.custom_content_extensions,
@@ -139,6 +143,7 @@ class StubIndexService:
 
         return AppSettings(
             self.saved_exclude_keywords,
+            self.saved_hidden_indexed_targets,
             self.saved_synonym_groups,
             self.saved_index_selected_extensions,
             self.saved_custom_content_extensions,
@@ -149,6 +154,7 @@ class StubIndexService:
         self,
         *,
         exclude_keywords: str | None = None,
+        hidden_indexed_targets: str | None = None,
         synonym_groups: str | None = None,
         index_selected_extensions: str | None = None,
         custom_content_extensions: str | None = None,
@@ -156,6 +162,8 @@ class StubIndexService:
     ) -> object:
         if exclude_keywords is not None:
             self.saved_exclude_keywords = exclude_keywords
+        if hidden_indexed_targets is not None:
+            self.saved_hidden_indexed_targets = hidden_indexed_targets
         if synonym_groups is not None:
             self.saved_synonym_groups = synonym_groups
         if index_selected_extensions is not None:
@@ -344,6 +352,7 @@ def test_get_app_settings_endpoint_returns_saved_settings() -> None:
     payload = get_app_settings(service)
 
     assert payload["exclude_keywords"] == ".git\nnode_modules"
+    assert payload["hidden_indexed_targets"] == "obsidian\nAgent_Skills"
     assert payload["synonym_groups"] == "スマートフォン,スマホ,モバイル"
     assert payload["index_selected_extensions"] == ".md\n.json"
     assert payload["custom_content_extensions"] == ".py\n.dat"
@@ -359,6 +368,7 @@ def test_update_app_settings_endpoint_returns_updated_settings() -> None:
     payload = update_app_settings(
         AppSettingsUpdateRequest(
             exclude_keywords="dist\nbuild",
+            hidden_indexed_targets="obsidian\nAgent_Skills\nnotes",
             synonym_groups="スマートフォン,スマホ,モバイル\nノートPC,ラップトップ",
             index_selected_extensions=".md\n.py",
             custom_content_extensions=".py\n.dat",
@@ -368,7 +378,9 @@ def test_update_app_settings_endpoint_returns_updated_settings() -> None:
     )
 
     assert payload["exclude_keywords"] == "dist\nbuild"
+    assert payload["hidden_indexed_targets"] == "obsidian\nAgent_Skills\nnotes"
     assert service.saved_exclude_keywords == "dist\nbuild"
+    assert service.saved_hidden_indexed_targets == "obsidian\nAgent_Skills\nnotes"
     assert payload["synonym_groups"] == "スマートフォン,スマホ,モバイル\nノートPC,ラップトップ"
     assert service.saved_synonym_groups == "スマートフォン,スマホ,モバイル\nノートPC,ラップトップ"
     assert payload["index_selected_extensions"] == ".md\n.py"

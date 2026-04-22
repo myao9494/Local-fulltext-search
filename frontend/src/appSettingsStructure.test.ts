@@ -402,9 +402,49 @@ test("インデックス済みフォルダ管理ページの UI を表示する"
 
   assert.match(source, /インデックス済みフォルダ/);
   assert.match(source, /キーワードで絞り込み/);
+  assert.match(source, /必要フォルダを隠すキーワード/);
+  assert.match(source, /rows=\{5\}/);
+  assert.match(source, /絞り込みをクリア/);
+  assert.match(source, /非表示をクリア/);
+  assert.match(source, /除外キーワードへ追加/);
+  assert.match(source, /handleOpenIndexedTargetLocation/);
+  assert.match(source, /Finderで開く|Explorerで開く/);
   assert.match(source, /すべて選択/);
   assert.match(source, /選択したフォルダのインデックスを削除/);
   assert.match(source, /handleDeleteIndexedTargets/);
+});
+
+/**
+ * インデックス済みフォルダ画面では、絞り込みキーワードから除外キーワードへ転記できる。
+ */
+test("インデックス済みフォルダ画面のキーワードを除外キーワードへ追加できる", () => {
+  const source = readFileSync(appPath, "utf-8");
+
+  assert.match(source, /function handleClearFilterKeyword\(\): void/);
+  assert.match(source, /function handleClearHideKeyword\(\): void/);
+  assert.match(source, /function handleAppendFilterKeywordToExcludeKeywords\(\): void/);
+  assert.match(source, /setExcludeKeywordsDraft\(\(current\) => normalizeExcludeKeywords/);
+  assert.match(source, /setFilterKeyword\(""\)/);
+});
+
+/**
+ * インデックス済みフォルダ一覧は、絞り込みと非表示キーワードを別々に扱いつつ件数順で表示する。
+ */
+test("インデックス済みフォルダ一覧は除外キーワードを適用して件数順に並べる", () => {
+  const source = readFileSync(appPath, "utf-8");
+  const clientSource = readFileSync(clientPath, "utf-8");
+
+  assert.match(source, /const normalizedFilterKeyword = filterKeyword\.trim\(\);/);
+  assert.match(source, /const loweredFilterKeyword = normalizedFilterKeyword\.toLowerCase\(\);/);
+  assert.match(source, /const hiddenKeywordList = normalizeHiddenIndexedTargets\(hideKeyword\)/);
+  assert.match(source, /map\(\(item\) => item\.toLowerCase\(\)\)/);
+  assert.match(source, /normalizeHiddenIndexedTargets\(appSettings\.hidden_indexed_targets\)/);
+  assert.match(source, /updateAppSettings\(\{ hidden_indexed_targets: normalized \}\)/);
+  assert.match(clientSource, /hidden_indexed_targets\?: string;/);
+  assert.match(source, /const filteredTargets = indexedTargets/);
+  assert.match(source, /if \(loweredFilterKeyword && !normalizedPath\.includes\(loweredFilterKeyword\)\) \{/);
+  assert.match(source, /if \(hiddenKeywordList\.some\(\(keyword\) => normalizedPath\.includes\(keyword\)\)\) \{/);
+  assert.match(source, /\.sort\(\(left, right\) => right\.indexed_file_count - left\.indexed_file_count \|\| left\.full_path\.localeCompare\(right\.full_path\)\)/);
 });
 
 /**

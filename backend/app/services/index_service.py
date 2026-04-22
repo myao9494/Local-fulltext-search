@@ -303,6 +303,7 @@ class IndexService:
         custom_filename_extensions = self._read_persisted_custom_filename_extensions()
         return AppSettingsResponse(
             exclude_keywords=self._read_persisted_exclude_keywords(),
+            hidden_indexed_targets=self._read_persisted_hidden_indexed_targets(),
             synonym_groups=self._read_persisted_synonym_groups(),
             index_selected_extensions=self._read_persisted_index_selected_extensions(
                 custom_content_extensions=custom_content_extensions,
@@ -316,6 +317,7 @@ class IndexService:
         self,
         *,
         exclude_keywords: str | None = None,
+        hidden_indexed_targets: str | None = None,
         synonym_groups: str | None = None,
         index_selected_extensions: str | None = None,
         custom_content_extensions: str | None = None,
@@ -327,6 +329,11 @@ class IndexService:
         current = self.get_app_settings()
         normalized_exclude_keywords = (
             self._normalize_exclude_keywords(exclude_keywords) if exclude_keywords is not None else current.exclude_keywords
+        )
+        normalized_hidden_indexed_targets = (
+            self._normalize_hidden_indexed_targets(hidden_indexed_targets)
+            if hidden_indexed_targets is not None
+            else current.hidden_indexed_targets
         )
         normalized_synonym_groups = (
             self._normalize_synonym_groups(synonym_groups) if synonym_groups is not None else current.synonym_groups
@@ -355,12 +362,14 @@ class IndexService:
             )
         )
         self._write_persisted_exclude_keywords(normalized_exclude_keywords)
+        self._write_persisted_hidden_indexed_targets(normalized_hidden_indexed_targets)
         self._write_persisted_synonym_groups(normalized_synonym_groups)
         self._write_persisted_custom_content_extensions(normalized_custom_content_extensions)
         self._write_persisted_custom_filename_extensions(normalized_custom_filename_extensions)
         self._write_persisted_index_selected_extensions(normalized_index_selected_extensions)
         return AppSettingsResponse(
             exclude_keywords=normalized_exclude_keywords,
+            hidden_indexed_targets=normalized_hidden_indexed_targets,
             synonym_groups=normalized_synonym_groups,
             index_selected_extensions=normalized_index_selected_extensions,
             custom_content_extensions=normalized_custom_content_extensions,
@@ -402,6 +411,27 @@ class IndexService:
 
         self._write_persisted_synonym_groups("")
         return ""
+
+    def _read_persisted_hidden_indexed_targets(self) -> str:
+        """
+        一覧から隠したい確認済みフォルダ用キーワードをテキストファイルから読み込む。
+        """
+        ensure_data_dir()
+        path = settings.hidden_indexed_targets_path
+        if path.exists():
+            return self._normalize_hidden_indexed_targets(path.read_text(encoding="utf-8"))
+
+        self._write_persisted_hidden_indexed_targets("")
+        return ""
+
+    def _write_persisted_hidden_indexed_targets(self, value: str) -> None:
+        """
+        一覧から隠したいキーワードを改行区切りテキストとして保存する。
+        """
+        ensure_data_dir()
+        path = settings.hidden_indexed_targets_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._normalize_hidden_indexed_targets(value), encoding="utf-8")
 
     def _write_persisted_synonym_groups(self, value: str) -> None:
         """
@@ -524,6 +554,7 @@ class IndexService:
     def list_indexed_targets(self) -> IndexedTargetListResponse:
         """
         UI 向けに、実際にインデックス済みファイルが存在する全フォルダ一覧を返す。
+        件数は各フォルダ直下のファイル数とし、子孫フォルダの件数は親へ合算しない。
         """
         rows = self.connection.execute(
             """
@@ -546,17 +577,20 @@ class IndexService:
         folder_map: dict[str, dict[str, object]] = {}
         for row in rows:
             file_path = normalize_path(str(row["normalized_path"]))
-            for folder_path in self._expand_indexed_folder_paths(file_path, target_roots):
+            expanded_paths = self._expand_indexed_folder_paths(file_path, target_roots)
+            direct_folder_path = str(Path(file_path).parent.as_posix())
+            indexed_at = row["indexed_at"]
+            for folder_path in expanded_paths:
                 folder_entry = folder_map.get(folder_path)
-                indexed_at = row["indexed_at"]
                 if folder_entry is None:
                     folder_map[folder_path] = {
                         "full_path": folder_path,
                         "last_indexed_at": indexed_at,
-                        "indexed_file_count": 1,
+                        "indexed_file_count": 0,
                     }
-                    continue
-                folder_entry["indexed_file_count"] = int(folder_entry["indexed_file_count"]) + 1
+                    folder_entry = folder_map[folder_path]
+                if folder_path == direct_folder_path:
+                    folder_entry["indexed_file_count"] = int(folder_entry["indexed_file_count"]) + 1
                 current_last = folder_entry["last_indexed_at"]
                 if current_last is None or str(indexed_at) > str(current_last):
                     folder_entry["last_indexed_at"] = indexed_at
@@ -1385,6 +1419,9 @@ class IndexService:
         self.connection.commit()
 
     def _normalize_exclude_keywords(self, value: str | None) -> str:
+        return "\n".join(self._parse_exclude_keywords(value))
+
+    def _normalize_hidden_indexed_targets(self, value: str | None) -> str:
         return "\n".join(self._parse_exclude_keywords(value))
 
     def _normalize_keyword_list(self, keywords: list[str]) -> str:

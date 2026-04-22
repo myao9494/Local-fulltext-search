@@ -68,6 +68,7 @@ export type SearchTargetCoverage = {
 
 export type AppSettings = {
   exclude_keywords: string;
+  hidden_indexed_targets: string;
   synonym_groups: string;
   index_selected_extensions: string;
   custom_content_extensions: string;

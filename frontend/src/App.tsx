@@ -17,6 +17,7 @@ import {
   reindexSearchTargets,
   resetDatabase,
   recordSearchClick,
+  openFileLocation,
   search,
   setSearchTargetEnabled,
   startScheduler,
@@ -163,6 +164,13 @@ function normalizeExcludeKeywords(value: string): string {
 }
 
 /**
+ * 一覧から隠したい確認済みキーワードも改行区切りで正規化し、再起動後も同じ順序で扱えるようにする。
+ */
+function normalizeHiddenIndexedTargets(value: string): string {
+  return [...new Set(value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean))].join("\n");
+}
+
+/**
  * 同義語リストは 1 行を 1 グループとして扱い、カンマ区切りの語を整形して重複を除く。
  */
 function normalizeSynonymGroups(value: string | null | undefined): string {
@@ -299,6 +307,7 @@ function App() {
   const [refreshWindowMinutes, setRefreshWindowMinutes] = useState(() => localStorage.getItem("refresh_window_minutes") ?? "60");
   const [savedExcludeKeywords, setSavedExcludeKeywords] = useState(DEFAULT_EXCLUDE_KEYWORDS);
   const [excludeKeywordsDraft, setExcludeKeywordsDraft] = useState(DEFAULT_EXCLUDE_KEYWORDS);
+  const [savedHiddenIndexedTargets, setSavedHiddenIndexedTargets] = useState("");
   const [savedSynonymGroups, setSavedSynonymGroups] = useState(DEFAULT_SYNONYM_GROUPS);
   const [synonymGroupsDraft, setSynonymGroupsDraft] = useState(DEFAULT_SYNONYM_GROUPS);
   const [savedCustomContentExtensions, setSavedCustomContentExtensions] = useState<string[]>([]);
@@ -335,7 +344,8 @@ function App() {
   const [searchTargets, setSearchTargets] = useState<SearchTargetFolder[]>([]);
   const [isCurrentPathCovered, setIsCurrentPathCovered] = useState(false);
   const [selectedTargetPaths, setSelectedTargetPaths] = useState<string[]>([]);
-  const [targetKeyword, setTargetKeyword] = useState("");
+  const [filterKeyword, setFilterKeyword] = useState("");
+  const [hideKeyword, setHideKeyword] = useState("");
   const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [noticeMessage, setNoticeMessage] = useState("");
@@ -349,26 +359,44 @@ function App() {
   const [isReindexingSearchTargets, setIsReindexingSearchTargets] = useState(false);
   const [isAddingLaunchPath, setIsAddingLaunchPath] = useState(false);
   const [searchTargetActionPath, setSearchTargetActionPath] = useState<string | null>(null);
+  const [openingIndexedTargetPath, setOpeningIndexedTargetPath] = useState<string | null>(null);
   const [isSavingExcludeKeywords, setIsSavingExcludeKeywords] = useState(false);
   const [isSavingSynonymGroups, setIsSavingSynonymGroups] = useState(false);
   const [isSavingIndexExtensions, setIsSavingIndexExtensions] = useState(false);
   const [isStartingScheduler, setIsStartingScheduler] = useState(false);
+  const [hasLoadedAppSettings, setHasLoadedAppSettings] = useState(false);
   const isIndexCancelling = Boolean(indexStatus?.is_running && indexStatus?.cancel_requested);
   const isIndexRunning = Boolean(indexStatus?.is_running && !indexStatus?.cancel_requested);
   const indexStatusLabel = isIndexCancelling ? "インデックス取得を中止中" : isIndexRunning ? "インデックス取得中" : "インデックス待機中";
   const indexStatusTone = isIndexCancelling ? "cancelling" : isIndexRunning ? "running" : "idle";
   const availableIndexExtensions = buildAvailableExtensions(customContentExtensions, customFilenameExtensions);
+  const openLocationLabel =
+    typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("windows")
+      ? "Explorerで開く"
+      : "Finderで開く";
 
-  const keyword = targetKeyword.trim().toLowerCase();
-  const filteredTargets = !keyword
-    ? indexedTargets
-    : indexedTargets.filter((item) => {
-        return item.full_path.toLowerCase().includes(keyword);
-      });
+  const normalizedFilterKeyword = filterKeyword.trim();
+  const loweredFilterKeyword = normalizedFilterKeyword.toLowerCase();
+  const hiddenKeywordList = normalizeHiddenIndexedTargets(hideKeyword)
+    .split(/\r?\n/)
+    .map((item) => item.toLowerCase())
+    .filter(Boolean);
+  const filteredTargets = indexedTargets
+    .filter((item) => {
+      const normalizedPath = item.full_path.toLowerCase();
+      if (loweredFilterKeyword && !normalizedPath.includes(loweredFilterKeyword)) {
+        return false;
+      }
+      if (hiddenKeywordList.some((keyword) => normalizedPath.includes(keyword))) {
+        return false;
+      }
+      return true;
+    })
+    .sort((left, right) => right.indexed_file_count - left.indexed_file_count || left.full_path.localeCompare(right.full_path));
   const filteredTargetPaths = filteredTargets.map((item) => item.full_path);
-  const filteredSearchTargets = !keyword
+  const filteredSearchTargets = !loweredFilterKeyword
     ? searchTargets
-    : searchTargets.filter((item) => item.full_path.toLowerCase().includes(keyword));
+    : searchTargets.filter((item) => item.full_path.toLowerCase().includes(loweredFilterKeyword));
   const filteredEnabledSearchTargets = filteredSearchTargets.filter((item) => item.is_enabled);
   const filteredSearchTargetPaths = filteredSearchTargets.map((item) => item.full_path);
   const selectedTargetPathSet = new Set(selectedTargetPaths);
@@ -439,6 +467,7 @@ function App() {
     try {
       const appSettings = await fetchAppSettings();
       const normalizedExcludeKeywords = normalizeExcludeKeywords(appSettings.exclude_keywords);
+      const normalizedHiddenIndexedTargets = normalizeHiddenIndexedTargets(appSettings.hidden_indexed_targets);
       const normalizedSynonymGroups = normalizeSynonymGroups(appSettings.synonym_groups);
       const loadedCustomContentExtensions = parseExtensionText(appSettings.custom_content_extensions);
       const loadedCustomFilenameExtensions = parseExtensionText(appSettings.custom_filename_extensions);
@@ -449,6 +478,8 @@ function App() {
       );
       setSavedExcludeKeywords(normalizedExcludeKeywords);
       setExcludeKeywordsDraft(normalizedExcludeKeywords);
+      setSavedHiddenIndexedTargets(normalizedHiddenIndexedTargets);
+      setHideKeyword(normalizedHiddenIndexedTargets);
       setSavedSynonymGroups(normalizedSynonymGroups);
       setSynonymGroupsDraft(normalizedSynonymGroups);
       setSavedCustomContentExtensions(loadedCustomContentExtensions);
@@ -457,6 +488,7 @@ function App() {
       setCustomFilenameExtensions(loadedCustomFilenameExtensions);
       setSavedIndexExtensions(loadedSelectedIndexExtensions);
       setSelectedIndexExtensions(loadedSelectedIndexExtensions);
+      setHasLoadedAppSettings(true);
       await refreshIndexStatus();
       await refreshSchedulerState();
       await refreshSearchTargets();
@@ -473,6 +505,32 @@ function App() {
   useEffect(() => {
     localStorage.setItem("regex_enabled", String(isRegexEnabled));
   }, [isRegexEnabled]);
+
+  useEffect(() => {
+    if (!hasLoadedAppSettings) {
+      return;
+    }
+    const normalized = normalizeHiddenIndexedTargets(hideKeyword);
+    if (normalized === savedHiddenIndexedTargets) {
+      return;
+    }
+
+    const timerId = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const savedSettings = await updateAppSettings({ hidden_indexed_targets: normalized });
+          const savedValue = normalizeHiddenIndexedTargets(savedSettings.hidden_indexed_targets);
+          setSavedHiddenIndexedTargets(savedValue);
+          setHideKeyword(savedValue);
+        } catch (error) {
+          setNoticeMessage("");
+          setErrorMessage(error instanceof Error ? error.message : "非表示キーワードの保存に失敗しました。");
+        }
+      })();
+    }, 400);
+
+    return () => window.clearTimeout(timerId);
+  }, [hasLoadedAppSettings, hideKeyword, savedHiddenIndexedTargets]);
 
   /**
    * 検索欄のパスが有効な検索対象フォルダに内包されるかをバックエンド基準で確認する。
@@ -1080,6 +1138,50 @@ function App() {
     );
   }
 
+  /**
+   * インデックス済みフォルダ一覧から、そのフォルダ位置を OS のファイルマネージャーで開く。
+   */
+  async function handleOpenIndexedTargetLocation(folderPath: string): Promise<void> {
+    setOpeningIndexedTargetPath(folderPath);
+    try {
+      await openFileLocation(folderPath);
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "フォルダを開けませんでした。");
+    } finally {
+      setOpeningIndexedTargetPath((currentPath) => (currentPath === folderPath ? null : currentPath));
+    }
+  }
+
+  /**
+   * 画面内の確認用キーワードだけを消し、除外キーワードの設定値は保持する。
+   */
+  function handleClearFilterKeyword(): void {
+    setFilterKeyword("");
+  }
+
+  /**
+   * 必要フォルダを隠すキーワードだけを消し、不要候補抽出の絞り込みは維持する。
+   */
+  function handleClearHideKeyword(): void {
+    setHideKeyword("");
+  }
+
+  /**
+   * 不要候補抽出に使った絞り込みキーワードを除外キーワードへ追記し、入力欄だけ空に戻す。
+   */
+  function handleAppendFilterKeywordToExcludeKeywords(): void {
+    const nextKeyword = filterKeyword.trim();
+    if (!nextKeyword) {
+      return;
+    }
+    setExcludeKeywordsDraft((current) => normalizeExcludeKeywords([current, nextKeyword].filter(Boolean).join("\n")));
+    setFilterKeyword("");
+    setErrorMessage("");
+    setNoticeMessage(`「${nextKeyword}」を除外キーワードへ追加しました。保存すると次回検索から反映されます。`);
+    setIsMenuOpen(true);
+  }
+
   async function handleToggleAllSearchTargets(): Promise<void> {
     if (isUpdatingSearchTargets || filteredSearchTargetPaths.length === 0) {
       return;
@@ -1446,12 +1548,53 @@ function App() {
               </div>
 
               <div className="indexed-targets-toolbar">
-                <input
-                  className="search-input indexed-targets-search"
-                  value={targetKeyword}
-                  onChange={(event) => setTargetKeyword(event.target.value)}
-                  placeholder="キーワードで絞り込み"
-                />
+                <div className="indexed-targets-search-group">
+                  <input
+                    className="search-input indexed-targets-search"
+                    value={filterKeyword}
+                    onChange={(event) => setFilterKeyword(event.target.value)}
+                    placeholder="キーワードで絞り込み"
+                  />
+                  <button
+                    className="secondary-button indexed-targets-inline-button"
+                    onClick={handleClearFilterKeyword}
+                    type="button"
+                    disabled={!filterKeyword.trim()}
+                    aria-label="絞り込みをクリア"
+                  >
+                    クリア
+                  </button>
+                  {!isSearchTargetsPage ? (
+                    <button
+                      className="secondary-button indexed-targets-inline-button"
+                      onClick={handleAppendFilterKeywordToExcludeKeywords}
+                      type="button"
+                      disabled={!filterKeyword.trim()}
+                    >
+                      除外キーワードへ追加
+                    </button>
+                  ) : null}
+                </div>
+                {!isSearchTargetsPage ? (
+                  <div className="indexed-targets-search-group indexed-targets-hide-group">
+                    <textarea
+                      className="indexed-targets-hide-box"
+                      value={hideKeyword}
+                      onChange={(event) => setHideKeyword(event.target.value)}
+                      placeholder="必要フォルダを隠すキーワード"
+                      rows={5}
+                    />
+                    <button
+                      className="secondary-button indexed-targets-inline-button"
+                      onClick={handleClearHideKeyword}
+                      type="button"
+                      disabled={!hideKeyword.trim()}
+                      aria-label="非表示をクリア"
+                    >
+                      クリア
+                    </button>
+                  </div>
+                ) : null}
                 {isSearchTargetsPage ? (
                   <button className="secondary-button" onClick={() => void handleToggleAllSearchTargets()} type="button" disabled={isUpdatingSearchTargets}>
                     {isAllFilteredSearchTargetsSelected ? "選択解除" : "すべて選択"}
@@ -1495,7 +1638,9 @@ function App() {
               <div className="form-help indexed-targets-selection-status">
                 {isSearchTargetsPage
                   ? `対象中: ${filteredEnabledSearchTargets.length}件 / 全${filteredSearchTargets.length}件`
-                  : `選択中: ${selectedTargetPaths.length}件`}
+                  : normalizedFilterKeyword || hiddenKeywordList.length > 0
+                    ? `絞り込み: ${normalizedFilterKeyword || "なし"} / 非表示: ${hiddenKeywordList.length}件 / 選択中: ${selectedTargetPaths.length}件`
+                    : `選択中: ${selectedTargetPaths.length}件`}
               </div>
             </div>
 
@@ -1584,6 +1729,19 @@ function App() {
                               最終取得: {item.last_indexed_at ? new Date(item.last_indexed_at).toLocaleString() : "-"}
                             </span>
                           </div>
+                        </div>
+                        <div className="target-list-actions">
+                          <button
+                            className="secondary-button small-btn"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              void handleOpenIndexedTargetLocation(item.full_path);
+                            }}
+                            type="button"
+                            disabled={openingIndexedTargetPath === item.full_path}
+                          >
+                            {openingIndexedTargetPath === item.full_path ? "開いています..." : openLocationLabel}
+                          </button>
                         </div>
                       </div>
                     </label>

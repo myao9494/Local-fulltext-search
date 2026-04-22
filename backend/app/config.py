@@ -19,6 +19,9 @@ class Settings(BaseModel):
     data_dir: Path = Path(os.getenv("SEARCH_APP_DATA_DIR", str(BACKEND_DIR / "data")))
     database_name: str = os.getenv("SEARCH_APP_DB_NAME", "search.db")
     exclude_keywords_name: str = os.getenv("SEARCH_APP_EXCLUDE_KEYWORDS_NAME", "exclude_keywords.txt")
+    hidden_indexed_targets_name: str = os.getenv(
+        "SEARCH_APP_HIDDEN_INDEXED_TARGETS_NAME", "hidden_indexed_targets.txt"
+    )
     synonym_groups_name: str = os.getenv("SEARCH_APP_SYNONYM_GROUPS_NAME", "synonym_groups.txt")
     search_target_folders_name: str = os.getenv("SEARCH_APP_SEARCH_TARGET_FOLDERS_NAME", "search_target_folders.txt")
     index_selected_extensions_name: str = os.getenv("SEARCH_APP_INDEX_SELECTED_EXTENSIONS_NAME", "index_selected_extensions.txt")
@@ -45,6 +48,7 @@ class Settings(BaseModel):
     @field_validator(
         "database_name",
         "exclude_keywords_name",
+        "hidden_indexed_targets_name",
         "synonym_groups_name",
         "search_target_folders_name",
         "index_selected_extensions_name",
@@ -67,6 +71,10 @@ class Settings(BaseModel):
     @property
     def exclude_keywords_path(self) -> Path:
         return (self.data_dir / self.exclude_keywords_name).resolve()
+
+    @property
+    def hidden_indexed_targets_path(self) -> Path:
+        return (self.data_dir / self.hidden_indexed_targets_name).resolve()
 
     @property
     def synonym_groups_path(self) -> Path:

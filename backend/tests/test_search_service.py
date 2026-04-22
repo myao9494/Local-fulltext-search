@@ -1277,6 +1277,7 @@ def test_search_with_existing_stale_index_uses_current_results_and_schedules_bac
     (target / "memo.md").write_text("alpha memo", encoding="utf-8")
     service.index_service.get_app_settings = lambda: AppSettingsResponse(
         exclude_keywords="",
+        hidden_indexed_targets="",
         synonym_groups="",
         index_selected_extensions=".md",
         custom_content_extensions="",
@@ -1325,6 +1326,7 @@ def test_search_under_registered_parent_does_not_create_child_search_target(tmp_
     (child / "memo.md").write_text("alpha memo", encoding="utf-8")
     service.index_service.get_app_settings = lambda: AppSettingsResponse(
         exclude_keywords="",
+        hidden_indexed_targets="",
         synonym_groups="",
         index_selected_extensions=".md",
         custom_content_extensions="",
@@ -1369,6 +1371,7 @@ def test_search_with_unindexed_folder_keeps_synchronous_refresh(tmp_path: Path) 
     (target / "memo.md").write_text("alpha memo", encoding="utf-8")
     service.index_service.get_app_settings = lambda: AppSettingsResponse(
         exclude_keywords="",
+        hidden_indexed_targets="",
         synonym_groups="",
         index_selected_extensions=".md",
         custom_content_extensions="",

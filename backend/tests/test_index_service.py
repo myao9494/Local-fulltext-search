@@ -715,28 +715,35 @@ def test_reset_database_clears_indexed_files_targets_and_failures(tmp_path: Path
 
 def test_list_indexed_targets_returns_all_indexed_folders_from_files(tmp_path: Path) -> None:
     """
-    インデックス済みフォルダ一覧は files から祖先フォルダを展開して返す。
+    インデックス済みフォルダ一覧は files から祖先フォルダを展開して返し、件数は直下ファイル数を返す。
     """
     connection = _create_connection(tmp_path)
     service = IndexService(connection=connection)
     target = tmp_path / "alpha"
     nested = target / "nested"
+    nested_child = nested / "child"
     nested.mkdir(parents=True)
+    nested_child.mkdir()
     (target / "root.md").write_text("alpha", encoding="utf-8")
     (nested / "child.md").write_text("beta", encoding="utf-8")
+    (nested_child / "leaf.md").write_text("gamma", encoding="utf-8")
 
-    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, index_depth=2, types=".md")
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, index_depth=3, types=".md")
 
     targets = service.list_indexed_targets().items
 
     folder_paths = [item.full_path for item in targets]
     assert target.as_posix() in folder_paths
     assert nested.as_posix() in folder_paths
+    assert nested_child.as_posix() in folder_paths
     assert tmp_path.as_posix() not in folder_paths
+    root_item = next(item for item in targets if item.full_path == target.as_posix())
     nested_item = next(item for item in targets if item.full_path == nested.as_posix())
-    target_item = next(item for item in targets if item.full_path == target.as_posix())
+    nested_child_item = next(item for item in targets if item.full_path == nested_child.as_posix())
     assert nested_item.indexed_file_count == 1
-    assert target_item.indexed_file_count == 2
+    assert nested_child_item.indexed_file_count == 1
+    assert root_item.indexed_file_count == 1
+    assert root_item.last_indexed_at is not None
     assert nested_item.last_indexed_at is not None
 
 
@@ -951,6 +958,22 @@ def test_app_settings_can_store_exclude_keywords(tmp_path: Path, monkeypatch) ->
     assert exclude_keywords_path.read_text(encoding="utf-8") == "dist\nbuild\n.dist"
 
 
+def test_app_settings_can_store_hidden_indexed_targets(tmp_path: Path, monkeypatch) -> None:
+    """
+    インデックス済みフォルダ一覧で隠したいキーワードは専用テキストファイルへ正規化して保持される。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    hidden_keywords_path = tmp_path / "hidden_indexed_targets.txt"
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "hidden_indexed_targets_name", "hidden_indexed_targets.txt")
+
+    saved_settings = service.update_app_settings(hidden_indexed_targets="obsidian\n\n Agent_Skills \nobsidian")
+
+    assert saved_settings.hidden_indexed_targets == "obsidian\nAgent_Skills"
+    assert hidden_keywords_path.read_text(encoding="utf-8") == "obsidian\nAgent_Skills"
+
+
 def test_app_settings_can_store_synonym_groups(tmp_path: Path, monkeypatch) -> None:
     """
     アプリ設定として保存した同義語リストは、CSV 風 1 行 1 グループのテキストへ正規化して保持される。
@@ -1019,8 +1042,10 @@ def test_reset_database_keeps_app_settings(tmp_path: Path, monkeypatch) -> None:
     connection = _create_connection(tmp_path)
     service = IndexService(connection=connection)
     exclude_keywords_path = tmp_path / "exclude_keywords.txt"
+    hidden_keywords_path = tmp_path / "hidden_indexed_targets.txt"
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     monkeypatch.setattr(settings, "exclude_keywords_name", "exclude_keywords.txt")
+    monkeypatch.setattr(settings, "hidden_indexed_targets_name", "hidden_indexed_targets.txt")
     monkeypatch.setattr(settings, "synonym_groups_name", "synonym_groups.txt")
     monkeypatch.setattr(settings, "index_selected_extensions_name", "index_selected_extensions.txt")
     monkeypatch.setattr(settings, "custom_content_extensions_name", "custom_content_extensions.txt")
@@ -1028,6 +1053,7 @@ def test_reset_database_keeps_app_settings(tmp_path: Path, monkeypatch) -> None:
 
     service.update_app_settings(
         exclude_keywords=".cache\ndist",
+        hidden_indexed_targets="obsidian\nAgent_Skills",
         synonym_groups="スマートフォン,スマホ,モバイル",
         index_selected_extensions=".md\n.py",
         custom_content_extensions=".py",
@@ -1037,10 +1063,13 @@ def test_reset_database_keeps_app_settings(tmp_path: Path, monkeypatch) -> None:
 
     loaded_settings = service.get_app_settings()
     assert loaded_settings.exclude_keywords == ".cache\ndist"
+    assert loaded_settings.hidden_indexed_targets == "obsidian\nAgent_Skills"
     assert loaded_settings.synonym_groups == "スマートフォン,スマホ,モバイル"
     assert loaded_settings.index_selected_extensions == ".md\n.py"
     assert loaded_settings.custom_content_extensions == ".py"
     assert loaded_settings.custom_filename_extensions == ".cae"
+    assert exclude_keywords_path.read_text(encoding="utf-8") == ".cache\ndist"
+    assert hidden_keywords_path.read_text(encoding="utf-8") == "obsidian\nAgent_Skills"
 
 
 def test_app_settings_migrates_legacy_sqlite_value_to_text_file(tmp_path: Path, monkeypatch) -> None:

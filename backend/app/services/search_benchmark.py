@@ -158,6 +158,7 @@ def run_benchmark(database_path: Path, config: BenchmarkConfig) -> BenchmarkSumm
         service = SearchService(connection=connection)
         service.index_service.get_app_settings = lambda: AppSettingsResponse(
             exclude_keywords="",
+            hidden_indexed_targets="",
             synonym_groups="",
             index_selected_extensions=".md",
             custom_content_extensions="",
