@@ -119,11 +119,32 @@ def test_open_file_location_uses_explorer_on_windows(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(platform, "system", lambda: "Windows")
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("os.path.isdir", lambda path: False)
 
     result = open_file_location(OpenFileLocationRequest(path="C:/docs/file.txt"))
 
     assert result == {"status": "success"}
-    assert captured["command"] == ["explorer.exe", "/select,", "C:/docs/file.txt"]
+    assert captured["command"] == ["explorer.exe", "/select,", "C:\\docs\\file.txt"]
+
+
+def test_open_file_location_opens_folder_directly_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Windows ではフォルダを選択表示ではなく、そのフォルダ自体を開く。
+    """
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(platform, "system", lambda: "Windows")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("os.path.isdir", lambda path: True)
+
+    result = open_file_location(OpenFileLocationRequest(path="C:/docs"))
+
+    assert result == {"status": "success"}
+    assert captured["command"] == ["explorer.exe", "C:\\docs"]
 
 
 def test_open_file_location_rejects_unsupported_platform(monkeypatch: pytest.MonkeyPatch) -> None:

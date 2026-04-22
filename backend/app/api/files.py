@@ -1,5 +1,6 @@
 import os
 import platform
+from pathlib import PureWindowsPath
 import subprocess
 from sqlite3 import Connection
 
@@ -90,10 +91,13 @@ def _open_folder_macos(path: str) -> None:
 
 def _open_folder_windows(path: str) -> None:
     """
-    Explorer で対象ファイルまたはフォルダの位置を表示する。
+    Explorer でフォルダを直接開き、ファイルは選択表示する。
+    Windows では `/` 区切りのまま渡すと誤解釈されることがあるため、`\\` 区切りへ正規化する。
     """
+    normalized_path = str(PureWindowsPath(path))
+    command = ["explorer.exe", normalized_path] if os.path.isdir(path) else ["explorer.exe", "/select,", normalized_path]
     result = subprocess.run(
-        ["explorer.exe", "/select,", path],
+        command,
         check=False,
         capture_output=True,
         text=True,

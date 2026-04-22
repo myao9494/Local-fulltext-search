@@ -28,6 +28,7 @@ type SearchBarProps = {
   onSortOrderChange: (value: "asc" | "desc") => void;
   onCreatedFromChange: (value: string) => void;
   onCreatedToChange: (value: string) => void;
+  onApplyDateShortcut: (days: number) => void;
   onClearCreatedDateFilter: () => void;
   onCancelIndexing: () => void;
   onRegexToggle: () => void;
@@ -68,6 +69,7 @@ export function SearchBar({
   onSortOrderChange,
   onCreatedFromChange,
   onCreatedToChange,
+  onApplyDateShortcut,
   onClearCreatedDateFilter,
   onCancelIndexing,
   onRegexToggle,
@@ -257,6 +259,29 @@ export function SearchBar({
               type="date"
               aria-label={dateField === "created" ? "作成日以前" : "編集日以前"}
             />
+            <div className="date-filter-shortcuts">
+              <button
+                className="secondary-button date-filter-shortcut-button"
+                onClick={() => onApplyDateShortcut(3)}
+                type="button"
+              >
+                3日以内
+              </button>
+              <button
+                className="secondary-button date-filter-shortcut-button"
+                onClick={() => onApplyDateShortcut(7)}
+                type="button"
+              >
+                1週間以内
+              </button>
+              <button
+                className="secondary-button date-filter-shortcut-button"
+                onClick={() => onApplyDateShortcut(30)}
+                type="button"
+              >
+                1ヶ月以内
+              </button>
+            </div>
             <button className="secondary-button date-filter-cancel-button" onClick={onClearCreatedDateFilter} type="button">
               日付指定をキャンセル
             </button>

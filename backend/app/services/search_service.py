@@ -1,5 +1,7 @@
 from datetime import UTC, date, datetime, time, timedelta
 from html import escape
+import json
+from pathlib import Path
 import re
 from sqlite3 import Connection
 import threading
@@ -18,6 +20,9 @@ _BACKGROUND_REFRESH_LOCK = threading.Lock()
 _BACKGROUND_REFRESH_KEYS: set[tuple[str, str, int, str]] = set()
 _BACKGROUND_REFRESH_LAST_SCHEDULED_AT: dict[tuple[str, str, int, str], float] = {}
 BACKGROUND_REFRESH_RETRY_COOLDOWN_SECONDS = 30.0
+OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH = Path(
+    "/Users/mine/000_work/obsidian-dagnetz/.obsidian/plugins/obsidian-sidebar-explorer/data.json"
+)
 
 
 class SearchService:
@@ -225,6 +230,7 @@ class SearchService:
         """
         FTS / 正規表現の分岐だけをまとめ、共通前処理を再利用する。
         """
+        obsidian_access_counts = self._load_obsidian_access_counts()
         if params.regex_enabled:
             return self._search_with_regex(
                 params=params,
@@ -232,6 +238,7 @@ class SearchService:
                 excluded_keywords=excluded_keywords,
                 app_settings=app_settings,
                 path_depth_limit=path_depth_limit,
+                obsidian_access_counts=obsidian_access_counts,
             )
 
         return self._search_with_fts(
@@ -240,6 +247,7 @@ class SearchService:
             excluded_keywords=excluded_keywords,
             app_settings=app_settings,
             path_depth_limit=path_depth_limit,
+            obsidian_access_counts=obsidian_access_counts,
         )
 
     def record_click(self, file_id: int) -> int:
@@ -269,6 +277,7 @@ class SearchService:
         excluded_keywords: list[str],
         app_settings,
         path_depth_limit: int | None,
+        obsidian_access_counts: dict[str, int],
     ) -> SearchResponse:
         """
         通常モードでは既存の FTS5 ベース全文検索を利用する。
@@ -427,7 +436,12 @@ class SearchService:
                 )
             """
             all_query_values = [*scoped_file_values, *query_values]
-            should_fetch_all_files = search_folder or exclude_terms or (not normalized_target_path and excluded_keywords)
+            should_fetch_all_files = (
+                search_folder
+                or exclude_terms
+                or (not normalized_target_path and excluded_keywords)
+                or (params.sort_by == "click_count" and bool(obsidian_access_counts))
+            )
 
             if should_fetch_all_files:
                 rows = self.connection.execute(
@@ -471,7 +485,20 @@ class SearchService:
                     )
                 ]
                 if not search_folder:
-                    return SearchResponse(total=len(file_items), items=file_items[params.offset : params.offset + params.limit])
+                    finalized_items = self._merge_obsidian_access_counts(
+                        file_items,
+                        obsidian_access_counts=obsidian_access_counts,
+                    )
+                    if params.sort_by == "click_count":
+                        finalized_items = self._sort_search_result_items(
+                            finalized_items,
+                            sort_by=params.sort_by,
+                            sort_order=params.sort_order,
+                        )
+                    return SearchResponse(
+                        total=len(finalized_items),
+                        items=finalized_items[params.offset : params.offset + params.limit],
+                    )
             else:
                 paged_query_values = [*all_query_values, params.limit, params.offset]
                 rows = self.connection.execute(
@@ -542,7 +569,13 @@ class SearchService:
                         exclude_terms=exclude_terms,
                     )
                 ]
-                return SearchResponse(total=total, items=items)
+                return SearchResponse(
+                    total=total,
+                    items=self._merge_obsidian_access_counts(
+                        items,
+                        obsidian_access_counts=obsidian_access_counts,
+                    ),
+                )
 
         if not search_folder:
             return SearchResponse(total=0, items=[])
@@ -558,7 +591,10 @@ class SearchService:
             sort_order=params.sort_order,
         )
         merged_items = self._sort_search_result_items(
-            [*file_items, *folder_items],
+            self._merge_obsidian_access_counts(
+                [*file_items, *folder_items],
+                obsidian_access_counts=obsidian_access_counts,
+            ),
             sort_by=params.sort_by,
             sort_order=params.sort_order,
         )
@@ -572,6 +608,7 @@ class SearchService:
         excluded_keywords: list[str],
         app_settings,
         path_depth_limit: int | None,
+        obsidian_access_counts: dict[str, int],
     ) -> SearchResponse:
         """
         正規表現モードでは Python の re で本文とファイル名を評価する。
@@ -686,11 +723,70 @@ class SearchService:
                 )
 
         all_items = self._sort_search_result_items(
-            [*file_items, *folder_items_by_path.values()],
+            self._merge_obsidian_access_counts(
+                [*file_items, *folder_items_by_path.values()],
+                obsidian_access_counts=obsidian_access_counts,
+            ),
             sort_by=params.sort_by,
             sort_order=params.sort_order,
         )
         return SearchResponse(total=len(all_items), items=all_items[params.offset : params.offset + params.limit])
+
+    def _load_obsidian_access_counts(self) -> dict[str, int]:
+        """
+        Obsidian sidebar-explorer のアクセス数を、Vault 内の絶対パスへ解決して返す。
+        """
+        data_path = OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH
+        if not data_path.exists():
+            return {}
+
+        try:
+            payload = json.loads(data_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+        raw_access_counts = payload.get("accessCounts")
+        if not isinstance(raw_access_counts, dict):
+            return {}
+
+        vault_root = data_path.parents[3]
+        resolved_counts: dict[str, int] = {}
+        for relative_path, raw_count in raw_access_counts.items():
+            if not isinstance(relative_path, str):
+                continue
+            try:
+                access_count = int(raw_count)
+            except (TypeError, ValueError):
+                continue
+            if access_count <= 0:
+                continue
+            normalized_full_path = normalize_path_str(vault_root / Path(relative_path))
+            resolved_counts[normalized_full_path] = access_count
+        return resolved_counts
+
+    def _merge_obsidian_access_counts(
+        self,
+        items: list[SearchResultItem],
+        *,
+        obsidian_access_counts: dict[str, int],
+    ) -> list[SearchResultItem]:
+        """
+        Obsidian Vault 配下のファイル結果には、外部プラグインのアクセス数を合算する。
+        """
+        if not obsidian_access_counts:
+            return items
+
+        merged_items: list[SearchResultItem] = []
+        for item in items:
+            if item.result_kind != "file":
+                merged_items.append(item)
+                continue
+            extra_access_count = obsidian_access_counts.get(item.full_path, 0)
+            if extra_access_count <= 0:
+                merged_items.append(item)
+                continue
+            merged_items.append(item.model_copy(update={"click_count": item.click_count + extra_access_count}))
+        return merged_items
 
     def _resolve_snippet(
         self,

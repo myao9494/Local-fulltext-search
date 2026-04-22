@@ -135,6 +135,22 @@ function toSchedulerStartAtIso(value: string): string {
 }
 
 /**
+ * 日付入力のショートカット用に、今日の日付を `YYYY-MM-DD` 形式で返す。
+ */
+function resolveTodayDateInputValue(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * 今日から指定日数ぶんさかのぼった日付を `YYYY-MM-DD` 形式で返す。
+ */
+function resolveRelativeDateInputValue(days: number): string {
+  const baseDate = new Date();
+  baseDate.setDate(baseDate.getDate() - days);
+  return baseDate.toISOString().slice(0, 10);
+}
+
+/**
  * React Strict Mode の開発時二重実行でも初回 URL 検索を重複発火させない。
  */
 let lastAutoSearchKey = "";
@@ -816,6 +832,16 @@ function App() {
   }
 
   /**
+   * よく使う相対日付のボタンから開始日と終了日を一度に入力する。
+   */
+  function handleApplyDateShortcut(days: number): void {
+    setCreatedFrom(resolveRelativeDateInputValue(days));
+    setCreatedTo(resolveTodayDateInputValue());
+    setErrorMessage("");
+    setNoticeMessage("");
+  }
+
+  /**
    * 検索結果を開いた回数を記録し、次回以降のアクセス数順ソートへ反映する。
    */
   function handleResultOpen(fileId: number): void {
@@ -1370,6 +1396,7 @@ function App() {
             onSortOrderChange={setSortOrder}
             onCreatedFromChange={setCreatedFrom}
             onCreatedToChange={setCreatedTo}
+            onApplyDateShortcut={handleApplyDateShortcut}
             onClearCreatedDateFilter={handleClearCreatedDateFilter}
             onCancelIndexing={() => void handleCancelIndexing()}
             onRegexToggle={() => setIsRegexEnabled((value) => !value)}

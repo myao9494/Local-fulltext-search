@@ -4,6 +4,7 @@
 """
 
 from datetime import UTC, date, datetime
+import json
 from pathlib import Path
 from sqlite3 import Connection
 
@@ -374,6 +375,110 @@ def test_search_sorts_by_click_count_desc(tmp_path: Path) -> None:
 
     assert [item.file_name for item in result.items] == ["high.md", "low.md"]
     assert [item.click_count for item in result.items] == [8, 1]
+
+
+def test_search_adds_obsidian_sidebar_access_counts_to_click_count(tmp_path: Path, monkeypatch) -> None:
+    """
+    Obsidian Vault 配下の結果は sidebar-explorer の accessCounts を加算して返す。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    vault_root = tmp_path / "obsidian-vault"
+    notes_dir = vault_root / "notes"
+    notes_dir.mkdir(parents=True)
+    note_path = notes_dir / "daily.md"
+    stats_path = vault_root / ".obsidian" / "plugins" / "obsidian-sidebar-explorer" / "data.json"
+    stats_path.parent.mkdir(parents=True)
+    stats_path.write_text(
+        json.dumps({"accessCounts": {"notes/daily.md": 7}, "lastOpened": {}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("app.services.search_service.OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH", stats_path)
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="daily.md",
+        full_path=str(note_path),
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="alpha",
+        click_count=3,
+    )
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            index_depth=5,
+        )
+    )
+
+    assert result.total == 1
+    assert result.items[0].click_count == 10
+
+
+def test_search_sorts_by_combined_obsidian_access_count_desc(tmp_path: Path, monkeypatch) -> None:
+    """
+    アクセス数順では DB の click_count と Obsidian accessCounts の合算値で並び替える。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    vault_root = tmp_path / "obsidian-vault"
+    notes_dir = vault_root / "notes"
+    notes_dir.mkdir(parents=True)
+    stats_path = vault_root / ".obsidian" / "plugins" / "obsidian-sidebar-explorer" / "data.json"
+    stats_path.parent.mkdir(parents=True)
+    stats_path.write_text(
+        json.dumps(
+            {
+                "accessCounts": {
+                    "notes/low.md": 10,
+                    "notes/high.md": 1,
+                },
+                "lastOpened": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("app.services.search_service.OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH", stats_path)
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="low.md",
+        full_path=str(notes_dir / "low.md"),
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="alpha",
+        click_count=1,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="high.md",
+        full_path=str(notes_dir / "high.md"),
+        created_at=datetime(2026, 4, 9, tzinfo=UTC),
+        mtime=datetime(2026, 4, 9, tzinfo=UTC),
+        body="alpha",
+        click_count=8,
+    )
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            index_depth=5,
+            sort_by="click_count",
+            sort_order="desc",
+        )
+    )
+
+    assert [item.file_name for item in result.items] == ["low.md", "high.md"]
+    assert [item.click_count for item in result.items] == [11, 9]
 
 
 def test_record_click_increments_click_count(tmp_path: Path) -> None:

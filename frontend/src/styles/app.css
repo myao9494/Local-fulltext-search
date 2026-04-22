@@ -877,6 +877,20 @@ h1, h2, h3 {
   border-radius: 999px;
 }
 
+.date-filter-shortcuts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.date-filter-shortcut-button {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 0.76rem;
+  min-height: 34px;
+}
+
 .date-filter-cancel-button {
   flex-shrink: 0;
   padding: 6px 12px;
