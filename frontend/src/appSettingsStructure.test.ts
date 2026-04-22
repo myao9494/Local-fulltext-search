@@ -403,7 +403,7 @@ test("インデックス済みフォルダ管理ページの UI を表示する"
   assert.match(source, /インデックス済みフォルダ/);
   assert.match(source, /キーワードで絞り込み/);
   assert.match(source, /必要フォルダを隠すキーワード/);
-  assert.match(source, /rows=\{5\}/);
+  assert.match(source, /rows=\{4\}/);
   assert.match(source, /絞り込みをクリア/);
   assert.match(source, /非表示をクリア/);
   assert.match(source, /除外キーワードへ追加/);

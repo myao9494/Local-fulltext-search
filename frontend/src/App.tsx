@@ -1548,32 +1548,77 @@ function App() {
               </div>
 
               <div className="indexed-targets-toolbar">
-                <div className="indexed-targets-search-group">
-                  <input
-                    className="search-input indexed-targets-search"
-                    value={filterKeyword}
-                    onChange={(event) => setFilterKeyword(event.target.value)}
-                    placeholder="キーワードで絞り込み"
-                  />
-                  <button
-                    className="secondary-button indexed-targets-inline-button"
-                    onClick={handleClearFilterKeyword}
-                    type="button"
-                    disabled={!filterKeyword.trim()}
-                    aria-label="絞り込みをクリア"
-                  >
-                    クリア
-                  </button>
-                  {!isSearchTargetsPage ? (
+                <div className="indexed-targets-left-controls">
+                  <div className="indexed-targets-search-group">
+                    <input
+                      className="search-input indexed-targets-search"
+                      value={filterKeyword}
+                      onChange={(event) => setFilterKeyword(event.target.value)}
+                      placeholder="キーワードで絞り込み"
+                    />
                     <button
                       className="secondary-button indexed-targets-inline-button"
-                      onClick={handleAppendFilterKeywordToExcludeKeywords}
+                      onClick={handleClearFilterKeyword}
                       type="button"
                       disabled={!filterKeyword.trim()}
+                      aria-label="絞り込みをクリア"
                     >
-                      除外キーワードへ追加
+                      クリア
                     </button>
-                  ) : null}
+                    {!isSearchTargetsPage ? (
+                      <button
+                        className="secondary-button indexed-targets-inline-button"
+                        onClick={handleAppendFilterKeywordToExcludeKeywords}
+                        type="button"
+                        disabled={!filterKeyword.trim()}
+                      >
+                        除外キーワードへ追加
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="indexed-targets-action-row">
+                    {isSearchTargetsPage ? (
+                      <button
+                        className="secondary-button indexed-targets-secondary-action"
+                        onClick={() => void handleToggleAllSearchTargets()}
+                        type="button"
+                        disabled={isUpdatingSearchTargets}
+                      >
+                        {isAllFilteredSearchTargetsSelected ? "選択解除" : "すべて選択"}
+                      </button>
+                    ) : (
+                      <button className="secondary-button indexed-targets-secondary-action" onClick={handleToggleAllIndexedTargets} type="button">
+                        {isAllFilteredSelected ? "選択解除" : "すべて選択"}
+                      </button>
+                    )}
+                    <button
+                      className="secondary-button indexed-targets-secondary-action"
+                      onClick={() => void (isSearchTargetsPage ? refreshSearchTargets() : refreshIndexedTargets())}
+                      type="button"
+                      disabled={isLoadingTargets}
+                    >
+                      {isLoadingTargets ? "再読込中..." : "再読込"}
+                    </button>
+                    {isSearchTargetsPage ? (
+                      <button
+                        className="secondary-button indexed-targets-primary-action"
+                        onClick={() => void handleReindexSelectedSearchTargets()}
+                        type="button"
+                        disabled={filteredEnabledSearchTargets.length === 0 || isReindexingSearchTargets}
+                      >
+                        {isReindexingSearchTargets ? "取得中..." : "インデックス取得"}
+                      </button>
+                    ) : (
+                      <button
+                        className="secondary-button danger indexed-targets-primary-action"
+                        onClick={() => void handleDeleteIndexedTargets()}
+                        type="button"
+                        disabled={selectedTargetPaths.length === 0 || isDeletingTargets}
+                      >
+                        {isDeletingTargets ? "削除中..." : "選択したフォルダのインデックスを削除"}
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {!isSearchTargetsPage ? (
                   <div className="indexed-targets-search-group indexed-targets-hide-group">
@@ -1582,7 +1627,7 @@ function App() {
                       value={hideKeyword}
                       onChange={(event) => setHideKeyword(event.target.value)}
                       placeholder="必要フォルダを隠すキーワード"
-                      rows={5}
+                      rows={4}
                     />
                     <button
                       className="secondary-button indexed-targets-inline-button"
@@ -1595,44 +1640,6 @@ function App() {
                     </button>
                   </div>
                 ) : null}
-                {isSearchTargetsPage ? (
-                  <button className="secondary-button" onClick={() => void handleToggleAllSearchTargets()} type="button" disabled={isUpdatingSearchTargets}>
-                    {isAllFilteredSearchTargetsSelected ? "選択解除" : "すべて選択"}
-                  </button>
-                ) : (
-                  <button className="secondary-button" onClick={handleToggleAllIndexedTargets} type="button">
-                    {isAllFilteredSelected ? "選択解除" : "すべて選択"}
-                  </button>
-                )}
-                <button
-                  className="secondary-button"
-                  onClick={() => void (isSearchTargetsPage ? refreshSearchTargets() : refreshIndexedTargets())}
-                  type="button"
-                  disabled={isLoadingTargets}
-                >
-                  {isLoadingTargets ? "再読込中..." : "再読込"}
-                </button>
-                {isSearchTargetsPage ? (
-                  <>
-                    <button
-                      className="secondary-button"
-                      onClick={() => void handleReindexSelectedSearchTargets()}
-                      type="button"
-                      disabled={filteredEnabledSearchTargets.length === 0 || isReindexingSearchTargets}
-                    >
-                      {isReindexingSearchTargets ? "取得中..." : "インデックス取得"}
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    className="secondary-button danger"
-                    onClick={() => void handleDeleteIndexedTargets()}
-                    type="button"
-                    disabled={selectedTargetPaths.length === 0 || isDeletingTargets}
-                  >
-                    {isDeletingTargets ? "削除中..." : "選択したフォルダのインデックスを削除"}
-                  </button>
-                )}
               </div>
 
               <div className="form-help indexed-targets-selection-status">
