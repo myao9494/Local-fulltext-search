@@ -16,13 +16,15 @@ from app.services.cjk_bigram import build_cjk_bigram_match_query
 from app.services.index_service import IndexService
 from app.services.path_service import get_descendant_path_prefix, get_descendant_path_range, normalize_path, normalize_path_str
 
+DEFAULT_OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH = Path(
+    "/Users/mine/000_work/obsidian-dagnetz/.obsidian/plugins/obsidian-sidebar-explorer/data.json"
+)
 _BACKGROUND_REFRESH_LOCK = threading.Lock()
 _BACKGROUND_REFRESH_KEYS: set[tuple[str, str, int, str]] = set()
 _BACKGROUND_REFRESH_LAST_SCHEDULED_AT: dict[tuple[str, str, int, str], float] = {}
+_OBSIDIAN_SYNC_LOCK = threading.Lock()
+_OBSIDIAN_SYNC_RUNNING = False
 BACKGROUND_REFRESH_RETRY_COOLDOWN_SECONDS = 30.0
-OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH = Path(
-    "/Users/mine/000_work/obsidian-dagnetz/.obsidian/plugins/obsidian-sidebar-explorer/data.json"
-)
 
 
 class SearchService:
@@ -63,6 +65,7 @@ class SearchService:
             app_settings=app_settings,
             path_depth_limit=params.index_depth,
         )
+        self._schedule_obsidian_access_sync()
         return response.model_copy(update=refresh_flags)
 
     def _refresh_target_for_search(
@@ -230,7 +233,6 @@ class SearchService:
         """
         FTS / 正規表現の分岐だけをまとめ、共通前処理を再利用する。
         """
-        obsidian_access_counts = self._load_obsidian_access_counts()
         if params.regex_enabled:
             return self._search_with_regex(
                 params=params,
@@ -238,7 +240,6 @@ class SearchService:
                 excluded_keywords=excluded_keywords,
                 app_settings=app_settings,
                 path_depth_limit=path_depth_limit,
-                obsidian_access_counts=obsidian_access_counts,
             )
 
         return self._search_with_fts(
@@ -247,7 +248,6 @@ class SearchService:
             excluded_keywords=excluded_keywords,
             app_settings=app_settings,
             path_depth_limit=path_depth_limit,
-            obsidian_access_counts=obsidian_access_counts,
         )
 
     def record_click(self, file_id: int) -> int:
@@ -277,7 +277,6 @@ class SearchService:
         excluded_keywords: list[str],
         app_settings,
         path_depth_limit: int | None,
-        obsidian_access_counts: dict[str, int],
     ) -> SearchResponse:
         """
         通常モードでは既存の FTS5 ベース全文検索を利用する。
@@ -371,24 +370,45 @@ class SearchService:
                         query_values.append(cjk_bigram_query)
 
                 if search_filename:
-                    matched_queries.append(
-                        f"""
-                        SELECT
-                            scoped_files.id AS file_id,
-                            {term_index} AS term_index,
-                            2 AS match_rank,
-                            1000000.0 AS score,
-                            NULL AS snippet,
-                            'filename' AS segment_type,
-                            body_segments.content AS body_content
-                        FROM scoped_files
-                        LEFT JOIN file_segments AS body_segments
-                          ON body_segments.file_id = scoped_files.id
-                         AND body_segments.segment_type = 'body'
-                        WHERE lower(scoped_files.file_name) LIKE ? ESCAPE '\\'
-                        """
-                    )
-                    query_values.append(f"%{escaped_term}%")
+                    if self._should_use_filename_fts(term):
+                        matched_queries.append(
+                            f"""
+                            SELECT
+                                scoped_files.id AS file_id,
+                                {term_index} AS term_index,
+                                2 AS match_rank,
+                                1000000.0 AS score,
+                                NULL AS snippet,
+                                'filename' AS segment_type,
+                                body_segments.content AS body_content
+                            FROM scoped_files
+                            JOIN files_name_fts ON files_name_fts.rowid = scoped_files.id
+                            LEFT JOIN file_segments AS body_segments
+                              ON body_segments.file_id = scoped_files.id
+                             AND body_segments.segment_type = 'body'
+                            WHERE files_name_fts MATCH ?
+                            """
+                        )
+                        query_values.append(self._quote_fts_term(term))
+                    else:
+                        matched_queries.append(
+                            f"""
+                            SELECT
+                                scoped_files.id AS file_id,
+                                {term_index} AS term_index,
+                                2 AS match_rank,
+                                1000000.0 AS score,
+                                NULL AS snippet,
+                                'filename' AS segment_type,
+                                body_segments.content AS body_content
+                            FROM scoped_files
+                            LEFT JOIN file_segments AS body_segments
+                              ON body_segments.file_id = scoped_files.id
+                             AND body_segments.segment_type = 'body'
+                            WHERE lower(scoped_files.file_name) LIKE ? ESCAPE '\\'
+                            """
+                        )
+                        query_values.append(f"%{escaped_term}%")
 
         file_items: list[SearchResultItem] = []
         order_by_clause = self._build_order_by_clause(
@@ -396,6 +416,7 @@ class SearchService:
             sort_order=params.sort_order,
             table_alias="scoped_files",
         )
+        highlight_terms = self._flatten_highlight_terms(expanded_include_terms)
 
         if matched_queries:
             matched_files_cte = f"""
@@ -440,11 +461,10 @@ class SearchService:
                 search_folder
                 or exclude_terms
                 or (not normalized_target_path and excluded_keywords)
-                or (params.sort_by == "click_count" and bool(obsidian_access_counts))
             )
 
             if should_fetch_all_files:
-                rows = self.connection.execute(
+                cursor = self.connection.execute(
                     f"""
                     {matched_files_cte}
                     SELECT
@@ -456,6 +476,7 @@ class SearchService:
                         scoped_files.created_at,
                         scoped_files.mtime,
                         scoped_files.click_count,
+                        scoped_files.obsidian_click_count,
                         filtered.snippet,
                         filtered.segment_type,
                         filtered.body_content
@@ -464,43 +485,42 @@ class SearchService:
                     ORDER BY {order_by_clause}
                     """,
                     tuple(all_query_values),
-                ).fetchall()
-                file_items = [
-                    self._build_search_result_item(
-                        row=row,
-                        normalized_target_path=normalized_target_path,
-                        highlight_terms=self._flatten_highlight_terms(expanded_include_terms),
-                    )
-                    for row in rows
-                    if not self._should_exclude_search_result(
+                )
+                file_items = []
+                for row in cursor:
+                    if self._should_exclude_search_result(
                         target_path=normalized_target_path,
                         candidate_path=str(row["normalized_path"]),
                         excluded_keywords=excluded_keywords,
-                    )
-                    and not self._matches_excluded_search_terms(
+                    ):
+                        continue
+                    if self._matches_excluded_search_terms(
                         file_name=str(row["file_name"]),
                         body_content=str(row["body_content"] or ""),
                         folder_path=self._resolve_folder_path(str(row["normalized_path"]), str(row["file_name"])),
                         exclude_terms=exclude_terms,
-                    )
-                ]
-                if not search_folder:
-                    finalized_items = self._merge_obsidian_access_counts(
-                        file_items,
-                        obsidian_access_counts=obsidian_access_counts,
-                    )
-                    if params.sort_by == "click_count":
-                        finalized_items = self._sort_search_result_items(
-                            finalized_items,
-                            sort_by=params.sort_by,
-                            sort_order=params.sort_order,
+                    ):
+                        continue
+                    file_items.append(
+                        self._build_search_result_item(
+                            row=row,
+                            normalized_target_path=normalized_target_path,
+                            highlight_terms=highlight_terms,
+                            include_snippets=params.include_snippets,
                         )
+                    )
+                if not search_folder:
+                    finalized_items = file_items
+                    page_items = finalized_items[params.offset : params.offset + params.limit]
+                    has_more = params.offset + len(page_items) < len(finalized_items)
                     return SearchResponse(
                         total=len(finalized_items),
-                        items=finalized_items[params.offset : params.offset + params.limit],
+                        items=page_items,
+                        has_more=has_more,
+                        next_offset=params.offset + len(page_items) if has_more else None,
                     )
             else:
-                paged_query_values = [*all_query_values, params.limit, params.offset]
+                paged_query_values = [*all_query_values, params.limit + 1, params.offset]
                 rows = self.connection.execute(
                     f"""
                     {matched_files_cte},
@@ -518,6 +538,7 @@ class SearchService:
                             scoped_files.created_at,
                             scoped_files.mtime,
                             scoped_files.click_count,
+                            scoped_files.obsidian_click_count,
                             filtered.snippet,
                             filtered.segment_type,
                             filtered.body_content,
@@ -537,6 +558,7 @@ class SearchService:
                         paged_matches.created_at,
                         paged_matches.mtime,
                         paged_matches.click_count,
+                        paged_matches.obsidian_click_count,
                         paged_matches.snippet,
                         paged_matches.segment_type,
                         paged_matches.body_content,
@@ -549,14 +571,17 @@ class SearchService:
                 ).fetchall()
 
                 total = int(rows[0]["total"]) if rows else 0
+                page_rows = [row for row in rows if row["file_id"] is not None]
+                has_more = len(page_rows) > params.limit
+                visible_rows = page_rows[: params.limit]
                 items = [
                     self._build_search_result_item(
                         row=row,
                         normalized_target_path=normalized_target_path,
-                        highlight_terms=self._flatten_highlight_terms(expanded_include_terms),
+                        highlight_terms=highlight_terms,
+                        include_snippets=params.include_snippets,
                     )
-                    for row in rows
-                    if row["file_id"] is not None
+                    for row in visible_rows
                     and not self._should_exclude_search_result(
                         target_path=normalized_target_path,
                         candidate_path=str(row["normalized_path"]),
@@ -571,10 +596,9 @@ class SearchService:
                 ]
                 return SearchResponse(
                     total=total,
-                    items=self._merge_obsidian_access_counts(
-                        items,
-                        obsidian_access_counts=obsidian_access_counts,
-                    ),
+                    items=items,
+                    has_more=has_more,
+                    next_offset=params.offset + len(items) if has_more else None,
                 )
 
         if not search_folder:
@@ -591,14 +615,18 @@ class SearchService:
             sort_order=params.sort_order,
         )
         merged_items = self._sort_search_result_items(
-            self._merge_obsidian_access_counts(
-                [*file_items, *folder_items],
-                obsidian_access_counts=obsidian_access_counts,
-            ),
+            [*file_items, *folder_items],
             sort_by=params.sort_by,
             sort_order=params.sort_order,
         )
-        return SearchResponse(total=len(merged_items), items=merged_items[params.offset : params.offset + params.limit])
+        page_items = merged_items[params.offset : params.offset + params.limit]
+        has_more = params.offset + len(page_items) < len(merged_items)
+        return SearchResponse(
+            total=len(merged_items),
+            items=page_items,
+            has_more=has_more,
+            next_offset=params.offset + len(page_items) if has_more else None,
+        )
 
     def _search_with_regex(
         self,
@@ -608,7 +636,6 @@ class SearchService:
         excluded_keywords: list[str],
         app_settings,
         path_depth_limit: int | None,
-        obsidian_access_counts: dict[str, int],
     ) -> SearchResponse:
         """
         正規表現モードでは Python の re で本文とファイル名を評価する。
@@ -641,6 +668,7 @@ class SearchService:
                 scoped_files.created_at,
                 scoped_files.mtime,
                 scoped_files.click_count,
+                scoped_files.obsidian_click_count,
                 file_segments.content
             FROM scoped_files
             LEFT JOIN file_segments
@@ -689,14 +717,18 @@ class SearchService:
                         file_ext=str(row["file_ext"]),
                         created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
                         mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
-                        click_count=int(row["click_count"] or 0),
-                        snippet=self._build_regex_snippet(
-                            content=content,
-                            file_name=file_name,
-                            folder_path=folder_path,
-                            content_match=content_match,
-                            file_name_match=file_name_match,
-                            folder_path_match=None,
+                        click_count=int(row["click_count"] or 0) + int(row["obsidian_click_count"] or 0),
+                        snippet=(
+                            self._build_regex_snippet(
+                                content=content,
+                                file_name=file_name,
+                                folder_path=folder_path,
+                                content_match=content_match,
+                                file_name_match=file_name_match,
+                                folder_path_match=None,
+                            )
+                            if params.include_snippets
+                            else ""
                         ),
                     )
                 )
@@ -712,45 +744,88 @@ class SearchService:
                     created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
                     mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
                     click_count=0,
-                    snippet=self._build_regex_snippet(
-                        content=content,
-                        file_name=file_name,
-                        folder_path=folder_path,
-                        content_match=None,
-                        file_name_match=None,
-                        folder_path_match=folder_path_match,
+                    snippet=(
+                        self._build_regex_snippet(
+                            content=content,
+                            file_name=file_name,
+                            folder_path=folder_path,
+                            content_match=None,
+                            file_name_match=None,
+                            folder_path_match=folder_path_match,
+                        )
+                        if params.include_snippets
+                        else ""
                     ),
                 )
 
         all_items = self._sort_search_result_items(
-            self._merge_obsidian_access_counts(
-                [*file_items, *folder_items_by_path.values()],
-                obsidian_access_counts=obsidian_access_counts,
-            ),
+            [*file_items, *folder_items_by_path.values()],
             sort_by=params.sort_by,
             sort_order=params.sort_order,
         )
-        return SearchResponse(total=len(all_items), items=all_items[params.offset : params.offset + params.limit])
+        page_items = all_items[params.offset : params.offset + params.limit]
+        has_more = params.offset + len(page_items) < len(all_items)
+        return SearchResponse(
+            total=len(all_items),
+            items=page_items,
+            has_more=has_more,
+            next_offset=params.offset + len(page_items) if has_more else None,
+        )
 
-    def _load_obsidian_access_counts(self) -> dict[str, int]:
+    def _schedule_obsidian_access_sync(self) -> None:
         """
-        Obsidian sidebar-explorer のアクセス数を、Vault 内の絶対パスへ解決して返す。
+        Obsidian のアクセス数同期は検索完了後に非同期で行い、次回検索の順位へ反映する。
         """
-        data_path = OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH
+        global _OBSIDIAN_SYNC_RUNNING
+        with _OBSIDIAN_SYNC_LOCK:
+            if _OBSIDIAN_SYNC_RUNNING:
+                return
+            _OBSIDIAN_SYNC_RUNNING = True
+
+        def run_sync() -> None:
+            connection: Connection | None = None
+            try:
+                connection = get_connection()
+                SearchService(connection=connection)._sync_obsidian_access_counts()
+            finally:
+                if connection is not None:
+                    connection.close()
+                global _OBSIDIAN_SYNC_RUNNING
+                with _OBSIDIAN_SYNC_LOCK:
+                    _OBSIDIAN_SYNC_RUNNING = False
+
+        threading.Thread(target=run_sync, name="search-obsidian-sync", daemon=True).start()
+
+    def _sync_obsidian_access_counts(self) -> None:
+        """
+        sidebar-explorer の accessCounts を files.obsidian_click_count へ同期する。
+        """
+        configured_path = self.index_service.get_app_settings().obsidian_sidebar_explorer_data_path
+        data_path = Path(configured_path) if configured_path else DEFAULT_OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH
         if not data_path.exists():
-            return {}
+            return
 
         try:
             payload = json.loads(data_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return {}
+            return
 
         raw_access_counts = payload.get("accessCounts")
         if not isinstance(raw_access_counts, dict):
-            return {}
+            return
 
-        vault_root = data_path.parents[3]
-        resolved_counts: dict[str, int] = {}
+        vault_root = normalize_path_str(data_path.parents[3])
+        prefix_start, prefix_end = get_descendant_path_range(vault_root)
+        self.connection.execute(
+            """
+            UPDATE files
+            SET obsidian_click_count = 0
+            WHERE normalized_path >= ? AND normalized_path < ?
+            """,
+            (prefix_start, prefix_end),
+        )
+
+        updates: list[tuple[int, str]] = []
         for relative_path, raw_count in raw_access_counts.items():
             if not isinstance(relative_path, str):
                 continue
@@ -758,35 +833,15 @@ class SearchService:
                 access_count = int(raw_count)
             except (TypeError, ValueError):
                 continue
-            if access_count <= 0:
-                continue
-            normalized_full_path = normalize_path_str(vault_root / Path(relative_path))
-            resolved_counts[normalized_full_path] = access_count
-        return resolved_counts
+            normalized_full_path = normalize_path_str(Path(vault_root) / Path(relative_path))
+            updates.append((max(access_count, 0), normalized_full_path))
 
-    def _merge_obsidian_access_counts(
-        self,
-        items: list[SearchResultItem],
-        *,
-        obsidian_access_counts: dict[str, int],
-    ) -> list[SearchResultItem]:
-        """
-        Obsidian Vault 配下のファイル結果には、外部プラグインのアクセス数を合算する。
-        """
-        if not obsidian_access_counts:
-            return items
-
-        merged_items: list[SearchResultItem] = []
-        for item in items:
-            if item.result_kind != "file":
-                merged_items.append(item)
-                continue
-            extra_access_count = obsidian_access_counts.get(item.full_path, 0)
-            if extra_access_count <= 0:
-                merged_items.append(item)
-                continue
-            merged_items.append(item.model_copy(update={"click_count": item.click_count + extra_access_count}))
-        return merged_items
+        if updates:
+            self.connection.executemany(
+                "UPDATE files SET obsidian_click_count = ? WHERE normalized_path = ?",
+                updates,
+            )
+        self.connection.commit()
 
     def _resolve_snippet(
         self,
@@ -990,7 +1045,7 @@ class SearchService:
         """
         return (
             f"rtrim(substr({table_alias}.normalized_path, 1, "
-            f"length({table_alias}.normalized_path) - length({table_alias}.file_name)), '/'))"
+            f"length({table_alias}.normalized_path) - length({table_alias}.file_name)), '/')"
         )
 
     def _resolve_folder_path(self, normalized_path: str, file_name: str) -> str:
@@ -1049,6 +1104,12 @@ class SearchService:
         先頭が `-` の語は FTS5 MATCH では壊れやすいため、LIKE ベースの文字列検索へ切り替える。
         """
         return term.startswith("-")
+
+    def _should_use_filename_fts(self, term: str) -> bool:
+        """
+        trigram FTS は 3 文字以上の部分一致で有効に使い、短すぎる語だけ LIKE へフォールバックする。
+        """
+        return len(term) >= 3
 
     def _quote_fts_term(self, term: str) -> str:
         escaped_term = term.replace('"', '""')
@@ -1154,7 +1215,8 @@ class SearchService:
                     files.file_ext,
                     files.created_at,
                     files.mtime,
-                    files.click_count
+                    files.click_count,
+                    files.obsidian_click_count
                 FROM files
                 WHERE {where_clause}
             )
@@ -1193,7 +1255,7 @@ class SearchService:
         if sort_by == "created":
             return f"{table_alias}.created_at"
         if sort_by == "click_count":
-            return f"{table_alias}.click_count"
+            return f"({table_alias}.click_count + {table_alias}.obsidian_click_count)"
         return f"{table_alias}.mtime"
 
     def _build_search_result_item(
@@ -1202,6 +1264,7 @@ class SearchService:
         row,
         normalized_target_path: str,
         highlight_terms: list[str],
+        include_snippets: bool,
     ) -> SearchResultItem:
         """
         DB 行から UI 用の検索結果モデルを組み立てる。
@@ -1220,14 +1283,18 @@ class SearchService:
             file_ext=str(row["file_ext"]),
             created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
             mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
-            click_count=int(row["click_count"] or 0),
-            snippet=self._resolve_snippet(
-                snippet=row["snippet"],
-                file_name=display_name,
-                segment_type=str(row["segment_type"] or "filename"),
-                body_content=row["body_content"],
-                folder_path=folder_path,
-                highlight_terms=highlight_terms,
+            click_count=int(row["click_count"] or 0) + int(row["obsidian_click_count"] or 0),
+            snippet=(
+                self._resolve_snippet(
+                    snippet=row["snippet"],
+                    file_name=display_name,
+                    segment_type=str(row["segment_type"] or "filename"),
+                    body_content=row["body_content"],
+                    folder_path=folder_path,
+                    highlight_terms=highlight_terms,
+                )
+                if include_snippets
+                else ""
             ),
         )
 
@@ -1265,48 +1332,35 @@ class SearchService:
         sort_order: str,
     ) -> list[SearchResultItem]:
         """
-        フォルダ名検索は scoped_files の親フォルダ一覧を Python 側で一意化して結果化する。
+        フォルダ名検索は SQL 側で親フォルダを集約し、Python 側の全件一意化を避ける。
         """
+        lowered_terms = [term.lower() for term in include_terms if term]
+        lowered_exclude_terms = [term.lower() for term in exclude_terms if term]
+        folder_path_expression = self._build_folder_path_sql_expression("scoped_files")
+        filters: list[str] = []
+        values: list[object] = [*scoped_file_values]
+
+        for term in lowered_terms:
+            filters.append(f"lower({folder_path_expression}) LIKE ? ESCAPE '\\'")
+            values.append(f"%{self._escape_like_pattern(term)}%")
+        for term in lowered_exclude_terms:
+            filters.append(f"lower({folder_path_expression}) NOT LIKE ? ESCAPE '\\'")
+            values.append(f"%{self._escape_like_pattern(term)}%")
+
+        where_clause = " AND ".join(filters) if filters else "1 = 1"
         rows = self.connection.execute(
             f"""
             {scoped_files_cte_sql}
             SELECT
-                scoped_files.normalized_path,
-                scoped_files.file_name,
-                scoped_files.created_at,
-                scoped_files.mtime
+                {folder_path_expression} AS folder_path,
+                MAX(scoped_files.created_at) AS created_at,
+                MAX(scoped_files.mtime) AS mtime
             FROM scoped_files
+            WHERE {where_clause}
+            GROUP BY folder_path
             """,
-            tuple(scoped_file_values),
+            tuple(values),
         ).fetchall()
-
-        folder_map: dict[str, dict[str, float]] = {}
-        lowered_terms = [term.lower() for term in include_terms if term]
-        lowered_exclude_terms = [term.lower() for term in exclude_terms if term]
-        for row in rows:
-            file_path = str(row["normalized_path"])
-            file_name = str(row["file_name"])
-            folder_path = self._resolve_folder_path(file_path, file_name)
-            lowered_folder_path = folder_path.lower()
-            if lowered_terms and not all(term in lowered_folder_path for term in lowered_terms):
-                continue
-            if lowered_exclude_terms and any(term in lowered_folder_path for term in lowered_exclude_terms):
-                continue
-            if self._should_exclude_search_result(
-                target_path=normalized_target_path,
-                candidate_path=folder_path,
-                excluded_keywords=excluded_keywords,
-            ):
-                continue
-
-            existing = folder_map.get(folder_path)
-            created_at = float(row["created_at"])
-            mtime = float(row["mtime"])
-            if existing is None:
-                folder_map[folder_path] = {"created_at": created_at, "mtime": mtime}
-                continue
-            existing["created_at"] = max(existing["created_at"], created_at)
-            existing["mtime"] = max(existing["mtime"], mtime)
 
         items = [
             SearchResultItem(
@@ -1316,8 +1370,8 @@ class SearchService:
                 file_name=self._resolve_result_display_name("folder", folder_path, folder_path),
                 full_path=folder_path,
                 file_ext="",
-                created_at=datetime.fromtimestamp(meta["created_at"], tz=UTC),
-                mtime=datetime.fromtimestamp(meta["mtime"], tz=UTC),
+                created_at=datetime.fromtimestamp(created_at, tz=UTC),
+                mtime=datetime.fromtimestamp(mtime, tz=UTC),
                 click_count=0,
                 snippet=self._resolve_snippet(
                     snippet=None,
@@ -1327,7 +1381,15 @@ class SearchService:
                     highlight_terms=include_terms,
                 ),
             )
-            for index, (folder_path, meta) in enumerate(folder_map.items())
+            for index, row in enumerate(rows)
+            for folder_path in [str(row["folder_path"])]
+            if not self._should_exclude_search_result(
+                target_path=normalized_target_path,
+                candidate_path=folder_path,
+                excluded_keywords=excluded_keywords,
+            )
+            for created_at in [float(row["created_at"])]
+            for mtime in [float(row["mtime"])]
         ]
         return self._sort_search_result_items(items, sort_by=sort_by, sort_order=sort_order)
 

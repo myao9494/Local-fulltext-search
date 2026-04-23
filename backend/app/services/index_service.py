@@ -305,6 +305,7 @@ class IndexService:
             exclude_keywords=self._read_persisted_exclude_keywords(),
             hidden_indexed_targets=self._read_persisted_hidden_indexed_targets(),
             synonym_groups=self._read_persisted_synonym_groups(),
+            obsidian_sidebar_explorer_data_path=self._read_persisted_obsidian_sidebar_explorer_data_path(),
             index_selected_extensions=self._read_persisted_index_selected_extensions(
                 custom_content_extensions=custom_content_extensions,
                 custom_filename_extensions=custom_filename_extensions,
@@ -319,6 +320,7 @@ class IndexService:
         exclude_keywords: str | None = None,
         hidden_indexed_targets: str | None = None,
         synonym_groups: str | None = None,
+        obsidian_sidebar_explorer_data_path: str | None = None,
         index_selected_extensions: str | None = None,
         custom_content_extensions: str | None = None,
         custom_filename_extensions: str | None = None,
@@ -337,6 +339,11 @@ class IndexService:
         )
         normalized_synonym_groups = (
             self._normalize_synonym_groups(synonym_groups) if synonym_groups is not None else current.synonym_groups
+        )
+        normalized_obsidian_sidebar_explorer_data_path = (
+            self._normalize_obsidian_sidebar_explorer_data_path(obsidian_sidebar_explorer_data_path)
+            if obsidian_sidebar_explorer_data_path is not None
+            else current.obsidian_sidebar_explorer_data_path
         )
         normalized_custom_content_extensions = (
             self._normalize_extension_entries(custom_content_extensions)
@@ -364,6 +371,7 @@ class IndexService:
         self._write_persisted_exclude_keywords(normalized_exclude_keywords)
         self._write_persisted_hidden_indexed_targets(normalized_hidden_indexed_targets)
         self._write_persisted_synonym_groups(normalized_synonym_groups)
+        self._write_persisted_obsidian_sidebar_explorer_data_path(normalized_obsidian_sidebar_explorer_data_path)
         self._write_persisted_custom_content_extensions(normalized_custom_content_extensions)
         self._write_persisted_custom_filename_extensions(normalized_custom_filename_extensions)
         self._write_persisted_index_selected_extensions(normalized_index_selected_extensions)
@@ -371,6 +379,7 @@ class IndexService:
             exclude_keywords=normalized_exclude_keywords,
             hidden_indexed_targets=normalized_hidden_indexed_targets,
             synonym_groups=normalized_synonym_groups,
+            obsidian_sidebar_explorer_data_path=normalized_obsidian_sidebar_explorer_data_path,
             index_selected_extensions=normalized_index_selected_extensions,
             custom_content_extensions=normalized_custom_content_extensions,
             custom_filename_extensions=normalized_custom_filename_extensions,
@@ -412,6 +421,18 @@ class IndexService:
         self._write_persisted_synonym_groups("")
         return ""
 
+    def _read_persisted_obsidian_sidebar_explorer_data_path(self) -> str:
+        """
+        Obsidian sidebar-explorer の data.json パスを共有設定ファイルから読み込む。
+        """
+        ensure_data_dir()
+        path = settings.obsidian_sidebar_explorer_data_path_path
+        if path.exists():
+            return self._normalize_obsidian_sidebar_explorer_data_path(path.read_text(encoding="utf-8"))
+
+        self._write_persisted_obsidian_sidebar_explorer_data_path("")
+        return ""
+
     def _read_persisted_hidden_indexed_targets(self) -> str:
         """
         一覧から隠したい確認済みフォルダ用キーワードをテキストファイルから読み込む。
@@ -441,6 +462,15 @@ class IndexService:
         path = settings.synonym_groups_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self._normalize_synonym_groups(value), encoding="utf-8")
+
+    def _write_persisted_obsidian_sidebar_explorer_data_path(self, value: str) -> None:
+        """
+        Obsidian sidebar-explorer の data.json パスをプレーンテキストとして保存する。
+        """
+        ensure_data_dir()
+        path = settings.obsidian_sidebar_explorer_data_path_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._normalize_obsidian_sidebar_explorer_data_path(value), encoding="utf-8")
 
     def _read_persisted_custom_content_extensions(self) -> str:
         """
@@ -1432,6 +1462,9 @@ class IndexService:
 
     def _normalize_synonym_groups(self, value: str | None) -> str:
         return "\n".join(",".join(group) for group in self._parse_synonym_groups(value))
+
+    def _normalize_obsidian_sidebar_explorer_data_path(self, value: str | None) -> str:
+        return str(value or "").strip()
 
     def _normalize_selected_extensions(
         self,

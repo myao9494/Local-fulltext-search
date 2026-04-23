@@ -163,6 +163,28 @@ def test_no_refresh_path_skips_status_update_and_recount(tmp_path: Path) -> None
     assert second_status.total_files == 1
 
 
+def test_app_settings_persist_obsidian_sidebar_explorer_data_path(tmp_path: Path) -> None:
+    """
+    Obsidian sidebar-explorer の data.json パスはアプリ共有設定として保存・再読込できる。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+
+    saved = service.update_app_settings(
+        obsidian_sidebar_explorer_data_path="/Users/example/Vault/.obsidian/plugins/obsidian-sidebar-explorer/data.json"
+    )
+
+    assert (
+        saved.obsidian_sidebar_explorer_data_path
+        == "/Users/example/Vault/.obsidian/plugins/obsidian-sidebar-explorer/data.json"
+    )
+    reloaded = IndexService(connection=connection).get_app_settings()
+    assert (
+        reloaded.obsidian_sidebar_explorer_data_path
+        == "/Users/example/Vault/.obsidian/plugins/obsidian-sidebar-explorer/data.json"
+    )
+
+
 
 
 def test_deleted_files_are_removed_from_index(tmp_path: Path) -> None:

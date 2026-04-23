@@ -48,6 +48,7 @@ def update_app_settings(
         exclude_keywords=payload.exclude_keywords,
         hidden_indexed_targets=payload.hidden_indexed_targets,
         synonym_groups=payload.synonym_groups,
+        obsidian_sidebar_explorer_data_path=payload.obsidian_sidebar_explorer_data_path,
         index_selected_extensions=payload.index_selected_extensions,
         custom_content_extensions=payload.custom_content_extensions,
         custom_filename_extensions=payload.custom_filename_extensions,

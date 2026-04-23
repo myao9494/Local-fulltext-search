@@ -1332,3 +1332,15 @@ button.small-btn {
 .scheduler-status-card {
   gap: 8px;
 }
+
+.search-results-footer {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 20px 0 8px;
+}
+
+.search-results-trigger {
+  width: 100%;
+  height: 1px;
+}

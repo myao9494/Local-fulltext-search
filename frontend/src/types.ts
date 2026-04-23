@@ -14,6 +14,8 @@ export type SearchResult = {
 export type SearchResponse = {
   total: number;
   items: SearchResult[];
+  has_more: boolean;
+  next_offset: number | null;
   used_existing_index: boolean;
   background_refresh_scheduled: boolean;
 };
@@ -70,6 +72,7 @@ export type AppSettings = {
   exclude_keywords: string;
   hidden_indexed_targets: string;
   synonym_groups: string;
+  obsidian_sidebar_explorer_data_path: string;
   index_selected_extensions: string;
   custom_content_extensions: string;
   custom_filename_extensions: string;

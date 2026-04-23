@@ -28,6 +28,7 @@ SCHEMA_STATEMENTS: list[str] = [
         created_at REAL NOT NULL,
         mtime REAL NOT NULL,
         click_count INTEGER NOT NULL DEFAULT 0,
+        obsidian_click_count INTEGER NOT NULL DEFAULT 0,
         size INTEGER NOT NULL,
         indexed_at TEXT NOT NULL,
         last_error TEXT
@@ -46,6 +47,10 @@ SCHEMA_STATEMENTS: list[str] = [
     """
     CREATE VIRTUAL TABLE IF NOT EXISTS file_segments_fts
     USING fts5(content, segment_label, content='file_segments', content_rowid='id');
+    """,
+    """
+    CREATE VIRTUAL TABLE IF NOT EXISTS files_name_fts
+    USING fts5(file_name, tokenize='trigram', content='files', content_rowid='id');
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_file_segments_file_id_segment_type
@@ -151,6 +156,26 @@ SCHEMA_STATEMENTS: list[str] = [
         VALUES (new.id, new.content, new.segment_label);
     END;
     """,
+    """
+    CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN
+        INSERT INTO files_name_fts(rowid, file_name)
+        VALUES (new.id, new.file_name);
+    END;
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN
+        INSERT INTO files_name_fts(files_name_fts, rowid, file_name)
+        VALUES ('delete', old.id, old.file_name);
+    END;
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE OF file_name ON files BEGIN
+        INSERT INTO files_name_fts(files_name_fts, rowid, file_name)
+        VALUES ('delete', old.id, old.file_name);
+        INSERT INTO files_name_fts(rowid, file_name)
+        VALUES (new.id, new.file_name);
+    END;
+    """,
 ]
 
 
@@ -183,6 +208,9 @@ def _apply_non_destructive_migrations(connection: Connection) -> None:
     target_columns = _get_columns(connection, "targets")
     if "click_count" not in file_columns:
         connection.execute("ALTER TABLE files ADD COLUMN click_count INTEGER NOT NULL DEFAULT 0;")
+    if "obsidian_click_count" not in file_columns:
+        connection.execute("ALTER TABLE files ADD COLUMN obsidian_click_count INTEGER NOT NULL DEFAULT 0;")
+    _rebuild_files_name_fts(connection)
     if "indexed_file_count" not in target_columns:
         connection.execute("ALTER TABLE targets ADD COLUMN indexed_file_count INTEGER NOT NULL DEFAULT 0;")
     if "index_version" not in target_columns:
@@ -222,6 +250,7 @@ def _needs_schema_reset(connection: Connection) -> bool:
         "created_at",
         "mtime",
         "click_count",
+        "obsidian_click_count",
         "size",
         "indexed_at",
         "last_error",
@@ -257,7 +286,7 @@ def _needs_schema_reset(connection: Connection) -> bool:
     scheduler_paths_columns = _get_columns(connection, "scheduler_paths")
     scheduler_runtime_columns = _get_columns(connection, "scheduler_runtime")
     scheduler_logs_columns = _get_columns(connection, "scheduler_logs")
-    legacy_file_columns = expected_file_columns - {"click_count"}
+    legacy_file_columns = expected_file_columns - {"click_count", "obsidian_click_count"}
     return (
         target_columns != expected_target_columns
         or (file_columns != expected_file_columns and file_columns != legacy_file_columns)
@@ -276,6 +305,7 @@ def _drop_managed_schema_objects(connection: Connection) -> None:
     旧 app_settings テーブルが残っていても、設定保存先は現在テキストファイルなので削除してよい。
     """
     connection.execute("DROP TABLE IF EXISTS app_settings;")
+    connection.execute("DROP TABLE IF EXISTS files_name_fts;")
     connection.execute("DROP TABLE IF EXISTS file_segments_fts;")
     connection.execute("DROP TABLE IF EXISTS file_segments;")
     connection.execute("DROP TABLE IF EXISTS files;")
@@ -292,3 +322,10 @@ def _drop_managed_schema_objects(connection: Connection) -> None:
 def _get_columns(connection: Connection, table_name: str) -> set[str]:
     rows = connection.execute(f"PRAGMA table_info({table_name});").fetchall()
     return {str(row[1]) for row in rows}
+
+
+def _rebuild_files_name_fts(connection: Connection) -> None:
+    """
+    既存 files レコードを file_name FTS へ再投入し、移行直後から索引を使えるようにする。
+    """
+    connection.execute("INSERT INTO files_name_fts(files_name_fts) VALUES ('rebuild');")

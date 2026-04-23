@@ -10,7 +10,7 @@ import type {
 } from "../types";
 
 const API_BASE = (import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL ?? "";
-const SEARCH_PAGE_SIZE = 1000;
+const SEARCH_PAGE_SIZE = 50;
 
 type ApiErrorDetail = {
   msg?: string;
@@ -68,6 +68,7 @@ export async function updateAppSettings(payload: {
   exclude_keywords?: string;
   hidden_indexed_targets?: string;
   synonym_groups?: string;
+  obsidian_sidebar_explorer_data_path?: string;
   index_selected_extensions?: string;
   custom_content_extensions?: string;
   custom_filename_extensions?: string;
@@ -154,6 +155,37 @@ export async function pickFolder(): Promise<{ full_path: string }> {
   });
 }
 
+export async function fetchSearchPage(params: {
+  q: string;
+  full_path: string;
+  search_all_enabled?: boolean;
+  skip_refresh?: boolean;
+  index_depth: number;
+  refresh_window_minutes: number;
+  regex_enabled?: boolean;
+  search_target?: "all" | "body" | "filename" | "folder" | "filename_and_folder";
+  index_types?: string;
+  types?: string;
+  date_field?: "created" | "modified";
+  sort_by?: "created" | "modified" | "click_count";
+  sort_order?: "asc" | "desc";
+  created_from?: string;
+  created_to?: string;
+  limit?: number;
+  offset?: number;
+  include_snippets?: boolean;
+}): Promise<SearchResponse> {
+  return request<SearchResponse>("/api/search", {
+    method: "POST",
+    body: JSON.stringify({
+      ...params,
+      limit: params.limit ?? SEARCH_PAGE_SIZE,
+      offset: params.offset ?? 0,
+      include_snippets: params.include_snippets ?? true,
+    }),
+  });
+}
+
 export async function search(params: {
   q: string;
   full_path: string;
@@ -173,47 +205,9 @@ export async function search(params: {
 }, options?: {
   onProgress?: (response: SearchResponse) => void;
 }): Promise<SearchResponse> {
-  const items = [];
-  let total = 0;
-  let offset = 0;
-  let usedExistingIndex = false;
-  let backgroundRefreshScheduled = false;
-
-  while (true) {
-    const response = await request<SearchResponse>("/api/search", {
-      method: "POST",
-      body: JSON.stringify({
-        ...params,
-        limit: SEARCH_PAGE_SIZE,
-        offset,
-      }),
-    });
-
-    if (offset === 0) {
-      total = response.total;
-      usedExistingIndex = response.used_existing_index;
-      backgroundRefreshScheduled = response.background_refresh_scheduled;
-    }
-
-    items.push(...response.items);
-    options?.onProgress?.({
-      total,
-      items: [...items],
-      used_existing_index: usedExistingIndex,
-      background_refresh_scheduled: backgroundRefreshScheduled,
-    });
-
-    if (response.items.length === 0 || items.length >= response.total) {
-      return {
-        total,
-        items,
-        used_existing_index: usedExistingIndex,
-        background_refresh_scheduled: backgroundRefreshScheduled,
-      };
-    }
-
-    offset += response.items.length;
-  }
+  const response = await fetchSearchPage(params);
+  options?.onProgress?.(response);
+  return response;
 }
 
 export async function recordSearchClick(fileId: number): Promise<{ file_id: number; click_count: number }> {

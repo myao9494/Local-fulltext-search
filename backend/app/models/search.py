@@ -41,6 +41,8 @@ class SearchResultItem(BaseModel):
 class SearchResponse(BaseModel):
     total: int
     items: list[SearchResultItem]
+    has_more: bool = False
+    next_offset: int | None = None
     used_existing_index: bool = False
     background_refresh_scheduled: bool = False
 
@@ -64,6 +66,7 @@ class SearchQueryParams(BaseModel):
     created_to: date | None = None
     limit: int = Field(default=20, ge=1, le=1000)
     offset: int = Field(default=0, ge=0)
+    include_snippets: bool = True
 
     @field_validator("full_path")
     @classmethod

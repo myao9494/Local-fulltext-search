@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   cancelIndexing,
@@ -18,7 +18,7 @@ import {
   resetDatabase,
   recordSearchClick,
   openFileLocation,
-  search,
+  fetchSearchPage,
   setSearchTargetEnabled,
   startScheduler,
   updateAppSettings,
@@ -310,6 +310,8 @@ function App() {
   const [savedHiddenIndexedTargets, setSavedHiddenIndexedTargets] = useState("");
   const [savedSynonymGroups, setSavedSynonymGroups] = useState(DEFAULT_SYNONYM_GROUPS);
   const [synonymGroupsDraft, setSynonymGroupsDraft] = useState(DEFAULT_SYNONYM_GROUPS);
+  const [savedObsidianSidebarExplorerDataPath, setSavedObsidianSidebarExplorerDataPath] = useState("");
+  const [obsidianSidebarExplorerDataPathDraft, setObsidianSidebarExplorerDataPathDraft] = useState("");
   const [savedCustomContentExtensions, setSavedCustomContentExtensions] = useState<string[]>([]);
   const [customContentExtensions, setCustomContentExtensions] = useState<string[]>([]);
   const [savedCustomFilenameExtensions, setSavedCustomFilenameExtensions] = useState<string[]>([]);
@@ -339,6 +341,10 @@ function App() {
   const [schedulerPathDraft, setSchedulerPathDraft] = useState("");
   const [schedulerStartAt, setSchedulerStartAt] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [searchNextOffset, setSearchNextOffset] = useState<number | null>(null);
+  const [hasMoreResults, setHasMoreResults] = useState(false);
+  const [currentSearchParams, setCurrentSearchParams] = useState<SearchExecutionParams | null>(null);
   const [failedFiles, setFailedFiles] = useState<FailedFile[]>([]);
   const [indexedTargets, setIndexedTargets] = useState<IndexedTarget[]>([]);
   const [searchTargets, setSearchTargets] = useState<SearchTargetFolder[]>([]);
@@ -350,6 +356,7 @@ function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [noticeMessage, setNoticeMessage] = useState("");
   const [isSearching, setIsSearching] = useState(false);
+  const [isLoadingMoreResults, setIsLoadingMoreResults] = useState(false);
   const [pendingAutoRefresh, setPendingAutoRefresh] = useState<PendingAutoRefresh | null>(null);
   const [isResettingDatabase, setIsResettingDatabase] = useState(false);
   const [isCancellingIndex, setIsCancellingIndex] = useState(false);
@@ -362,6 +369,7 @@ function App() {
   const [openingIndexedTargetPath, setOpeningIndexedTargetPath] = useState<string | null>(null);
   const [isSavingExcludeKeywords, setIsSavingExcludeKeywords] = useState(false);
   const [isSavingSynonymGroups, setIsSavingSynonymGroups] = useState(false);
+  const [isSavingObsidianSidebarExplorerDataPath, setIsSavingObsidianSidebarExplorerDataPath] = useState(false);
   const [isSavingIndexExtensions, setIsSavingIndexExtensions] = useState(false);
   const [isStartingScheduler, setIsStartingScheduler] = useState(false);
   const [hasLoadedAppSettings, setHasLoadedAppSettings] = useState(false);
@@ -408,12 +416,16 @@ function App() {
   const hasUnsavedExcludeKeywords = normalizedExcludeKeywordsDraft !== savedExcludeKeywords;
   const normalizedSynonymGroupsDraft = normalizeSynonymGroups(synonymGroupsDraft);
   const hasUnsavedSynonymGroups = normalizedSynonymGroupsDraft !== savedSynonymGroups;
+  const normalizedObsidianSidebarExplorerDataPathDraft = obsidianSidebarExplorerDataPathDraft.trim();
+  const hasUnsavedObsidianSidebarExplorerDataPath =
+    normalizedObsidianSidebarExplorerDataPathDraft !== savedObsidianSidebarExplorerDataPath;
   const hasUnsavedIndexExtensions =
     selectedIndexExtensions.join(" ") !== savedIndexExtensions.join(" ") ||
     customContentExtensions.join(" ") !== savedCustomContentExtensions.join(" ") ||
     customFilenameExtensions.join(" ") !== savedCustomFilenameExtensions.join(" ");
   const sortedResults = sortSearchResults(results, { sortBy, sortOrder });
   const visibleResults = filterSearchResultsByExtensions(sortedResults, searchFilterText);
+  const loadMoreTriggerRef = useRef<HTMLDivElement | null>(null);
   const isSchedulerPage = pageView === "scheduler";
   const isSearchTargetsPage = pageView === "search-targets";
   const candidateSearchTargetPath = fullPath.trim();
@@ -482,6 +494,8 @@ function App() {
       setHideKeyword(normalizedHiddenIndexedTargets);
       setSavedSynonymGroups(normalizedSynonymGroups);
       setSynonymGroupsDraft(normalizedSynonymGroups);
+      setSavedObsidianSidebarExplorerDataPath(appSettings.obsidian_sidebar_explorer_data_path.trim());
+      setObsidianSidebarExplorerDataPathDraft(appSettings.obsidian_sidebar_explorer_data_path.trim());
       setSavedCustomContentExtensions(loadedCustomContentExtensions);
       setCustomContentExtensions(loadedCustomContentExtensions);
       setSavedCustomFilenameExtensions(loadedCustomFilenameExtensions);
@@ -656,6 +670,23 @@ function App() {
     void handleSearch();
   }, [launchParams]);
 
+  useEffect(() => {
+    if (!loadMoreTriggerRef.current || !currentSearchParams || !hasMoreResults) {
+      return;
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      const firstEntry = entries[0];
+      if (!firstEntry?.isIntersecting) {
+        return;
+      }
+      void loadMoreResults(currentSearchParams);
+    }, { rootMargin: "320px 0px" });
+
+    observer.observe(loadMoreTriggerRef.current);
+    return () => observer.disconnect();
+  }, [currentSearchParams, hasMoreResults, isLoadingMoreResults, isSearching, searchNextOffset]);
+
   function buildSearchKeyFromState(): string {
     return [
       query,
@@ -677,16 +708,22 @@ function App() {
   async function executeSearch(params: SearchExecutionParams, options?: { isAutoRefresh?: boolean }): Promise<void> {
     try {
       setIsSearching(true);
+      setIsLoadingMoreResults(false);
       setErrorMessage("");
       if (!options?.isAutoRefresh) {
         setNoticeMessage("");
       }
-      const response = await search(params, {
-        onProgress: (partialResponse) => {
-          setResults(partialResponse.items);
-        },
+      setCurrentSearchParams(params);
+      const response = await fetchSearchPage({
+        ...params,
+        limit: 50,
+        offset: 0,
+        include_snippets: true,
       });
       setResults(response.items);
+      setSearchTotal(response.total);
+      setHasMoreResults(response.has_more);
+      setSearchNextOffset(response.next_offset);
       const latestStatus = await refreshIndexStatus();
       if (isFailedFilesOpen) {
         const failedResponse = await fetchFailedFiles();
@@ -724,6 +761,30 @@ function App() {
     } finally {
       await refreshIndexStatus().catch(() => undefined);
       setIsSearching(false);
+    }
+  }
+
+  async function loadMoreResults(params: SearchExecutionParams): Promise<void> {
+    if (isSearching || isLoadingMoreResults || !hasMoreResults || searchNextOffset === null) {
+      return;
+    }
+
+    try {
+      setIsLoadingMoreResults(true);
+      const response = await fetchSearchPage({
+        ...params,
+        limit: 50,
+        offset: searchNextOffset,
+        include_snippets: true,
+      });
+      setResults((current) => [...current, ...response.items]);
+      setSearchTotal(response.total);
+      setHasMoreResults(response.has_more);
+      setSearchNextOffset(response.next_offset);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "検索結果の追加取得に失敗しました。");
+    } finally {
+      setIsLoadingMoreResults(false);
     }
   }
 
@@ -1065,6 +1126,27 @@ function App() {
       setErrorMessage(error instanceof Error ? error.message : "同義語リストの保存に失敗しました。");
     } finally {
       setIsSavingSynonymGroups(false);
+    }
+  }
+
+  /**
+   * Obsidian sidebar-explorer の data.json パスはバックエンド保存し、再読込後も同じ値を使う。
+   */
+  async function handleSaveObsidianSidebarExplorerDataPath(): Promise<void> {
+    const normalized = obsidianSidebarExplorerDataPathDraft.trim();
+    try {
+      setIsSavingObsidianSidebarExplorerDataPath(true);
+      const savedSettings = await updateAppSettings({ obsidian_sidebar_explorer_data_path: normalized });
+      const savedValue = savedSettings.obsidian_sidebar_explorer_data_path.trim();
+      setSavedObsidianSidebarExplorerDataPath(savedValue);
+      setObsidianSidebarExplorerDataPathDraft(savedValue);
+      setErrorMessage("");
+      setNoticeMessage("Obsidian sidebar-explorer の data.json パスを保存しました。次回検索後の同期から反映されます。");
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "Obsidian パスの保存に失敗しました。");
+    } finally {
+      setIsSavingObsidianSidebarExplorerDataPath(false);
     }
   }
 
@@ -1521,9 +1603,26 @@ function App() {
           <section>
             <div className="section-header">
               <h2>Search Results</h2>
-              <span>{searchFilterText.trim() ? `${visibleResults.length} / ${sortedResults.length}件` : `${visibleResults.length}件`}</span>
+              <span>
+                {searchFilterText.trim()
+                  ? `${visibleResults.length} / ${sortedResults.length}件表示`
+                  : `${visibleResults.length} / ${searchTotal}件`}
+              </span>
             </div>
             <ResultsList items={visibleResults} dateField={dateField} onResultOpen={handleResultOpen} onResultDelete={handleResultDelete} />
+            {hasMoreResults ? (
+              <div className="search-results-footer">
+                <div ref={loadMoreTriggerRef} className="search-results-trigger" />
+                <button
+                  type="button"
+                  className="menu-button"
+                  onClick={() => currentSearchParams ? void loadMoreResults(currentSearchParams) : undefined}
+                  disabled={isLoadingMoreResults}
+                >
+                  {isLoadingMoreResults ? "続きを読み込み中..." : "次の50件を表示"}
+                </button>
+              </div>
+            ) : null}
           </section>
         ) : pageView === "indexed-targets" || pageView === "search-targets" ? (
           <section className="indexed-targets-panel">
@@ -2110,6 +2209,34 @@ function App() {
               </div>
               <div className="form-help">
                 1行を1グループとして、カンマ区切りで入力します。通常検索で同じ意味の表記ゆれを同一キーワードとして扱います。
+              </div>
+
+              <label className="form-help" htmlFor="obsidian-sidebar-explorer-data-path">
+                Obsidian sidebar-explorer data.json パス
+              </label>
+              <textarea
+                id="obsidian-sidebar-explorer-data-path"
+                className="settings-textarea"
+                value={obsidianSidebarExplorerDataPathDraft}
+                onChange={(event) => setObsidianSidebarExplorerDataPathDraft(event.target.value)}
+                placeholder="/Users/name/Vault/.obsidian/plugins/obsidian-sidebar-explorer/data.json"
+                rows={3}
+              />
+              <div className="settings-action-row">
+                <button
+                  className="secondary-button settings-save-button"
+                  onClick={() => void handleSaveObsidianSidebarExplorerDataPath()}
+                  type="button"
+                  disabled={!hasUnsavedObsidianSidebarExplorerDataPath || isSavingObsidianSidebarExplorerDataPath}
+                >
+                  {isSavingObsidianSidebarExplorerDataPath ? "保存中..." : "保存"}
+                </button>
+                <div className={`settings-save-status ${hasUnsavedObsidianSidebarExplorerDataPath ? "dirty" : "saved"}`}>
+                  {hasUnsavedObsidianSidebarExplorerDataPath ? "未保存の変更があります" : "保存済み"}
+                </div>
+              </div>
+              <div className="form-help">
+                環境ごとに異なる Obsidian Vault の sidebar-explorer `data.json` を指定します。未設定なら既定パスを使います。
               </div>
 
               <div className="extension-panel">

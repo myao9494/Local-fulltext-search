@@ -377,9 +377,9 @@ def test_search_sorts_by_click_count_desc(tmp_path: Path) -> None:
     assert [item.click_count for item in result.items] == [8, 1]
 
 
-def test_search_adds_obsidian_sidebar_access_counts_to_click_count(tmp_path: Path, monkeypatch) -> None:
+def test_sync_obsidian_sidebar_access_counts_persists_to_database(tmp_path: Path, monkeypatch) -> None:
     """
-    Obsidian Vault 配下の結果は sidebar-explorer の accessCounts を加算して返す。
+    Obsidian Vault 配下の accessCounts は検索後同期で DB 列へ保存される。
     """
     connection = _create_connection(tmp_path)
     service = SearchService(connection=connection)
@@ -396,7 +396,7 @@ def test_search_adds_obsidian_sidebar_access_counts_to_click_count(tmp_path: Pat
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("app.services.search_service.OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH", stats_path)
+    service.index_service.update_app_settings(obsidian_sidebar_explorer_data_path=str(stats_path))
 
     _insert_indexed_markdown(
         connection=connection,
@@ -408,21 +408,18 @@ def test_search_adds_obsidian_sidebar_access_counts_to_click_count(tmp_path: Pat
         click_count=3,
     )
 
-    result = service.search(
-        SearchQueryParams(
-            q="alpha",
-            full_path="",
-            index_depth=5,
-        )
-    )
+    service._sync_obsidian_access_counts()
 
-    assert result.total == 1
-    assert result.items[0].click_count == 10
+    stored_count = connection.execute(
+        "SELECT obsidian_click_count FROM files WHERE normalized_path = ?",
+        (str(note_path),),
+    ).fetchone()[0]
+    assert stored_count == 7
 
 
 def test_search_sorts_by_combined_obsidian_access_count_desc(tmp_path: Path, monkeypatch) -> None:
     """
-    アクセス数順では DB の click_count と Obsidian accessCounts の合算値で並び替える。
+    アクセス数順では DB の click_count と同期済み Obsidian 値の合算で並び替える。
     """
     connection = _create_connection(tmp_path)
     service = SearchService(connection=connection)
@@ -446,7 +443,7 @@ def test_search_sorts_by_combined_obsidian_access_count_desc(tmp_path: Path, mon
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("app.services.search_service.OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH", stats_path)
+    service.index_service.update_app_settings(obsidian_sidebar_explorer_data_path=str(stats_path))
 
     _insert_indexed_markdown(
         connection=connection,
@@ -467,6 +464,8 @@ def test_search_sorts_by_combined_obsidian_access_count_desc(tmp_path: Path, mon
         click_count=8,
     )
 
+    service._sync_obsidian_access_counts()
+
     result = service.search(
         SearchQueryParams(
             q="alpha",
@@ -479,6 +478,115 @@ def test_search_sorts_by_combined_obsidian_access_count_desc(tmp_path: Path, mon
 
     assert [item.file_name for item in result.items] == ["low.md", "high.md"]
     assert [item.click_count for item in result.items] == [11, 9]
+
+
+def test_search_uses_persisted_obsidian_click_count_for_sorting(tmp_path: Path) -> None:
+    """
+    アクセス数順は DB 保存済みの Obsidian 加算値を使い、全件再計算なしで並び替える。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="low.md",
+        full_path=str(tmp_path / "low.md"),
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="alpha",
+        click_count=1,
+        obsidian_click_count=10,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="high.md",
+        full_path=str(tmp_path / "high.md"),
+        created_at=datetime(2026, 4, 9, tzinfo=UTC),
+        mtime=datetime(2026, 4, 9, tzinfo=UTC),
+        body="alpha",
+        click_count=8,
+        obsidian_click_count=1,
+    )
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            index_depth=5,
+            sort_by="click_count",
+            sort_order="desc",
+        )
+    )
+
+    assert [item.file_name for item in result.items] == ["low.md", "high.md"]
+    assert [item.click_count for item in result.items] == [11, 9]
+
+
+def test_search_omits_snippets_when_not_requested(tmp_path: Path) -> None:
+    """
+    後続ページではスニペット生成を省略し、結果本体だけを返せる。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="memo.md",
+        full_path=str(tmp_path / "memo.md"),
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="alpha beta gamma",
+        click_count=1,
+    )
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            index_depth=5,
+            include_snippets=False,
+        )
+    )
+
+    assert result.total == 1
+    assert result.items[0].snippet == ""
+
+
+def test_search_reports_has_more_and_next_offset(tmp_path: Path) -> None:
+    """
+    先頭ページでは総件数と次オフセットを返し、続きを段階取得できる。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    for index in range(3):
+        _insert_indexed_markdown(
+            connection=connection,
+            file_name=f"memo_{index}.md",
+            full_path=str(tmp_path / f"memo_{index}.md"),
+            created_at=datetime(2026, 4, 10 + index, tzinfo=UTC),
+            mtime=datetime(2026, 4, 10 + index, tzinfo=UTC),
+            body="alpha beta",
+            click_count=index,
+        )
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            index_depth=5,
+            limit=2,
+            offset=0,
+        )
+    )
+
+    assert result.total == 3
+    assert len(result.items) == 2
+    assert result.has_more is True
+    assert result.next_offset == 2
 
 
 def test_record_click_increments_click_count(tmp_path: Path) -> None:
@@ -1279,6 +1387,7 @@ def test_search_with_existing_stale_index_uses_current_results_and_schedules_bac
         exclude_keywords="",
         hidden_indexed_targets="",
         synonym_groups="",
+        obsidian_sidebar_explorer_data_path="",
         index_selected_extensions=".md",
         custom_content_extensions="",
         custom_filename_extensions="",
@@ -1328,6 +1437,7 @@ def test_search_under_registered_parent_does_not_create_child_search_target(tmp_
         exclude_keywords="",
         hidden_indexed_targets="",
         synonym_groups="",
+        obsidian_sidebar_explorer_data_path="",
         index_selected_extensions=".md",
         custom_content_extensions="",
         custom_filename_extensions="",
@@ -1373,6 +1483,7 @@ def test_search_with_unindexed_folder_keeps_synchronous_refresh(tmp_path: Path) 
         exclude_keywords="",
         hidden_indexed_targets="",
         synonym_groups="",
+        obsidian_sidebar_explorer_data_path="",
         index_selected_extensions=".md",
         custom_content_extensions="",
         custom_filename_extensions="",
@@ -1726,6 +1837,7 @@ def _insert_indexed_markdown(
     mtime: datetime,
     body: str,
     click_count: int,
+    obsidian_click_count: int = 0,
 ) -> int:
     """
     検索テスト用に、本文付き Markdown ファイルを直接投入する。
@@ -1735,8 +1847,8 @@ def _insert_indexed_markdown(
         """
         INSERT INTO files(
             full_path, normalized_path, file_name, file_ext,
-            created_at, mtime, size, indexed_at, last_error, click_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            created_at, mtime, size, indexed_at, last_error, click_count, obsidian_click_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
         """,
         (
             full_path,
@@ -1748,6 +1860,7 @@ def _insert_indexed_markdown(
             len(body.encode("utf-8")),
             indexed_at,
             click_count,
+            obsidian_click_count,
         ),
     )
     file_id = int(cursor.lastrowid)

@@ -23,6 +23,9 @@ class Settings(BaseModel):
         "SEARCH_APP_HIDDEN_INDEXED_TARGETS_NAME", "hidden_indexed_targets.txt"
     )
     synonym_groups_name: str = os.getenv("SEARCH_APP_SYNONYM_GROUPS_NAME", "synonym_groups.txt")
+    obsidian_sidebar_explorer_data_path_name: str = os.getenv(
+        "SEARCH_APP_OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH_NAME", "obsidian_sidebar_explorer_data_path.txt"
+    )
     search_target_folders_name: str = os.getenv("SEARCH_APP_SEARCH_TARGET_FOLDERS_NAME", "search_target_folders.txt")
     index_selected_extensions_name: str = os.getenv("SEARCH_APP_INDEX_SELECTED_EXTENSIONS_NAME", "index_selected_extensions.txt")
     custom_content_extensions_name: str = os.getenv("SEARCH_APP_CUSTOM_CONTENT_EXTENSIONS_NAME", "custom_content_extensions.txt")
@@ -50,6 +53,7 @@ class Settings(BaseModel):
         "exclude_keywords_name",
         "hidden_indexed_targets_name",
         "synonym_groups_name",
+        "obsidian_sidebar_explorer_data_path_name",
         "search_target_folders_name",
         "index_selected_extensions_name",
         "custom_content_extensions_name",
@@ -83,6 +87,10 @@ class Settings(BaseModel):
     @property
     def search_target_folders_path(self) -> Path:
         return (self.data_dir / self.search_target_folders_name).resolve()
+
+    @property
+    def obsidian_sidebar_explorer_data_path_path(self) -> Path:
+        return (self.data_dir / self.obsidian_sidebar_explorer_data_path_name).resolve()
 
     @property
     def index_selected_extensions_path(self) -> Path:
