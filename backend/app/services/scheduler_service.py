@@ -361,7 +361,6 @@ class SchedulerMonitor:
         while not self._stop_event.is_set():
             connection = get_connection()
             try:
-                initialize_schema(connection)
                 SchedulerService(connection=connection).try_start_due_schedule()
             finally:
                 connection.close()

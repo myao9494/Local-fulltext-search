@@ -58,6 +58,7 @@ class SearchService:
                 custom_filename_extensions=app_settings.custom_filename_extensions,
             )
 
+        start_time = time_module.perf_counter()
         response = self._execute_search(
             params=params,
             normalized_target_path=normalized_target_path,
@@ -65,6 +66,9 @@ class SearchService:
             app_settings=app_settings,
             path_depth_limit=params.index_depth,
         )
+        elapsed = time_module.perf_counter() - start_time
+        logger.info("Search total time: %.3fs (q=%s, search_all=%s)", elapsed, params.q, params.search_all_enabled)
+
         self._schedule_obsidian_access_sync()
         return response.model_copy(update=refresh_flags)
 
@@ -282,6 +286,8 @@ class SearchService:
         通常モードでは既存の FTS5 ベース全文検索を利用する。
         CTE を1回だけ評価し、COUNT と結果を同時に取得する。
         """
+        fts_start = time_module.perf_counter()
+
         scoped_files_cte_sql, scoped_file_values = self._build_scoped_files_cte(
             normalized_target_path=normalized_target_path,
             path_depth_limit=path_depth_limit,
@@ -292,6 +298,8 @@ class SearchService:
             custom_content_extensions=app_settings.custom_content_extensions,
             custom_filename_extensions=app_settings.custom_filename_extensions,
         )
+        cte_elapsed = time_module.perf_counter() - fts_start
+        logger.info("FTS: Scoped files CTE build time: %.3fs", cte_elapsed)
 
         normalized_query = params.q.strip()
         include_terms, exclude_terms = self._split_search_terms(normalized_query)
@@ -410,6 +418,9 @@ class SearchService:
                         )
                         query_values.append(f"%{escaped_term}%")
 
+        prep_elapsed = time_module.perf_counter() - fts_start - cte_elapsed
+        logger.info("FTS: Query preparation time: %.3fs", prep_elapsed)
+
         file_items: list[SearchResultItem] = []
         order_by_clause = self._build_order_by_clause(
             sort_by=params.sort_by,
@@ -457,13 +468,17 @@ class SearchService:
                 )
             """
             all_query_values = [*scoped_file_values, *query_values]
+            # フォルダ検索が有効、または除外条件がある場合は、全件を一旦取得して Python 側で処理する必要がある
             should_fetch_all_files = (
                 search_folder
                 or exclude_terms
                 or (not normalized_target_path and excluded_keywords)
             )
 
+            exec_start = time_module.perf_counter()
             if should_fetch_all_files:
+                # 全件取得モード
+                db_start = time_module.perf_counter()
                 cursor = self.connection.execute(
                     f"""
                     {matched_files_cte}
@@ -486,7 +501,10 @@ class SearchService:
                     """,
                     tuple(all_query_values),
                 )
-                file_items = []
+                db_elapsed = time_module.perf_counter() - db_start
+                logger.info("FTS: SQL cursor creation time (all file search): %.3fs", db_elapsed)
+
+                process_start = time_module.perf_counter()
                 for row in cursor:
                     if self._should_exclude_search_result(
                         target_path=normalized_target_path,
@@ -509,18 +527,27 @@ class SearchService:
                             include_snippets=params.include_snippets,
                         )
                     )
+                process_elapsed = time_module.perf_counter() - process_start
+                logger.info("FTS: Result fetch/filter/build time (all): %.3fs (matched=%d)", process_elapsed, len(file_items))
+
+                exec_elapsed = time_module.perf_counter() - exec_start
+                logger.info("FTS: Total execution and fetching time (all): %.3fs", exec_elapsed)
+
                 if not search_folder:
-                    finalized_items = file_items
-                    page_items = finalized_items[params.offset : params.offset + params.limit]
-                    has_more = params.offset + len(page_items) < len(finalized_items)
+                    # フォルダ検索不要なら、ここでページングして返す
+                    page_items = file_items[params.offset : params.offset + params.limit]
+                    has_more = params.offset + len(page_items) < len(file_items)
                     return SearchResponse(
-                        total=len(finalized_items),
+                        total=len(file_items),
                         items=page_items,
                         has_more=has_more,
                         next_offset=params.offset + len(page_items) if has_more else None,
                     )
             else:
+                # 高速ページングモード
                 paged_query_values = [*all_query_values, params.limit + 1, params.offset]
+
+                db_start = time_module.perf_counter()
                 rows = self.connection.execute(
                     f"""
                     {matched_files_cte},
@@ -569,7 +596,10 @@ class SearchService:
                     """,
                     tuple(paged_query_values),
                 ).fetchall()
+                db_elapsed = time_module.perf_counter() - db_start
+                logger.info("FTS: SQL execution time (count + paged file search): %.3fs", db_elapsed)
 
+                proc_start = time_module.perf_counter()
                 total = int(rows[0]["total"]) if rows else 0
                 page_rows = [row for row in rows if row["file_id"] is not None]
                 has_more = len(page_rows) > params.limit
@@ -582,18 +612,19 @@ class SearchService:
                         include_snippets=params.include_snippets,
                     )
                     for row in visible_rows
-                    and not self._should_exclude_search_result(
-                        target_path=normalized_target_path,
-                        candidate_path=str(row["normalized_path"]),
-                        excluded_keywords=excluded_keywords,
-                    )
-                    and not self._matches_excluded_search_terms(
-                        file_name=str(row["file_name"]),
-                        body_content=str(row["body_content"] or ""),
-                        folder_path=self._resolve_folder_path(str(row["normalized_path"]), str(row["file_name"])),
-                        exclude_terms=exclude_terms,
-                    )
                 ]
+                proc_elapsed = time_module.perf_counter() - proc_start
+                logger.info(
+                    "FTS: Result processing time: %.3fs (rows=%d, visible=%d, total=%d)",
+                    proc_elapsed,
+                    len(page_rows),
+                    len(visible_rows),
+                    total,
+                )
+
+                exec_elapsed = time_module.perf_counter() - exec_start
+                logger.info("FTS: Total execution and fetching time (paged): %.3fs", exec_elapsed)
+
                 return SearchResponse(
                     total=total,
                     items=items,
@@ -601,6 +632,7 @@ class SearchService:
                     next_offset=params.offset + len(items) if has_more else None,
                 )
 
+        # フォルダ検索の処理（search_folder が True の場合）
         if not search_folder:
             return SearchResponse(total=0, items=[])
 
@@ -641,6 +673,7 @@ class SearchService:
         正規表現モードでは Python の re で本文とファイル名を評価する。
         イテレータで逐次処理し、メモリ使用量を抑える。
         """
+        regex_start = time_module.perf_counter()
         scoped_files_cte_sql, values = self._build_scoped_files_cte(
             normalized_target_path=normalized_target_path,
             path_depth_limit=path_depth_limit,
@@ -651,6 +684,9 @@ class SearchService:
             custom_content_extensions=app_settings.custom_content_extensions,
             custom_filename_extensions=app_settings.custom_filename_extensions,
         )
+        cte_elapsed = time_module.perf_counter() - regex_start
+        logger.info("Regex: Scoped files CTE build time: %.3fs", cte_elapsed)
+
         normalized_query = params.q.strip()
         include_terms, exclude_terms = self._split_search_terms(normalized_query)
         pattern = self._compile_regex(" ".join(include_terms))
@@ -682,6 +718,11 @@ class SearchService:
             """,
             tuple(values),
         )
+
+        exec_elapsed = time_module.perf_counter() - regex_start - cte_elapsed
+        logger.info("Regex: DB execution time: %.3fs", exec_elapsed)
+
+        proc_start = time_module.perf_counter()
 
         file_items: list[SearchResultItem] = []
         folder_items_by_path: dict[str, SearchResultItem] = {}
@@ -765,6 +806,15 @@ class SearchService:
         )
         page_items = all_items[params.offset : params.offset + params.limit]
         has_more = params.offset + len(page_items) < len(all_items)
+
+        proc_elapsed = time_module.perf_counter() - proc_start
+        logger.info(
+            "Regex: Result processing and matching time: %.3fs (total=%d, visible=%d)",
+            proc_elapsed,
+            len(all_items),
+            len(page_items),
+        )
+
         return SearchResponse(
             total=len(all_items),
             items=page_items,
@@ -859,7 +909,7 @@ class SearchService:
                 updates,
             )
         self.connection.commit()
-        logger.info(f"Synced {len(updates)} Obsidian access counts from {vault_root}")
+        logger.info("Synced %d Obsidian access counts from %s", len(updates), vault_root)
 
     def _resolve_snippet(
         self,
@@ -1366,19 +1416,24 @@ class SearchService:
             values.append(f"%{self._escape_like_pattern(term)}%")
 
         where_clause = " AND ".join(filters) if filters else "1 = 1"
-        rows = self.connection.execute(
-            f"""
-            {scoped_files_cte_sql}
-            SELECT
-                {folder_path_expression} AS folder_path,
-                MAX(scoped_files.created_at) AS created_at,
-                MAX(scoped_files.mtime) AS mtime
-            FROM scoped_files
-            WHERE {where_clause}
-            GROUP BY folder_path
-            """,
-            tuple(values),
-        ).fetchall()
+        folder_sql_start = time_module.perf_counter()
+        try:
+            rows = self.connection.execute(
+                f"""
+                {scoped_files_cte_sql}
+                SELECT
+                    {folder_path_expression} AS folder_path,
+                    MAX(scoped_files.created_at) AS created_at,
+                    MAX(scoped_files.mtime) AS mtime
+                FROM scoped_files
+                WHERE {where_clause}
+                GROUP BY folder_path
+                """,
+                tuple(values),
+            ).fetchall()
+        finally:
+            folder_sql_elapsed = time_module.perf_counter() - folder_sql_start
+            logger.info("FTS: SQL execution time (folder search): %.3fs", folder_sql_elapsed)
 
         items = [
             SearchResultItem(
