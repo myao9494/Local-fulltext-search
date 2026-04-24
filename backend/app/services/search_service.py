@@ -1,6 +1,7 @@
 from datetime import UTC, date, datetime, time, timedelta
 from html import escape
 import json
+import logging
 from pathlib import Path
 import re
 from sqlite3 import Connection
@@ -16,15 +17,14 @@ from app.services.cjk_bigram import build_cjk_bigram_match_query
 from app.services.index_service import IndexService
 from app.services.path_service import get_descendant_path_prefix, get_descendant_path_range, normalize_path, normalize_path_str
 
-DEFAULT_OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH = Path(
-    "/Users/mine/000_work/obsidian-dagnetz/.obsidian/plugins/obsidian-sidebar-explorer/data.json"
-)
 _BACKGROUND_REFRESH_LOCK = threading.Lock()
 _BACKGROUND_REFRESH_KEYS: set[tuple[str, str, int, str]] = set()
 _BACKGROUND_REFRESH_LAST_SCHEDULED_AT: dict[tuple[str, str, int, str], float] = {}
 _OBSIDIAN_SYNC_LOCK = threading.Lock()
 _OBSIDIAN_SYNC_RUNNING = False
 BACKGROUND_REFRESH_RETRY_COOLDOWN_SECONDS = 30.0
+
+logger = logging.getLogger(__name__)
 
 
 class SearchService:
@@ -801,20 +801,37 @@ class SearchService:
         sidebar-explorer の accessCounts を files.obsidian_click_count へ同期する。
         """
         configured_path = self.index_service.get_app_settings().obsidian_sidebar_explorer_data_path
-        data_path = Path(configured_path) if configured_path else DEFAULT_OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH
+        if not configured_path:
+            return
+
+        data_path = Path(configured_path)
         if not data_path.exists():
+            # 指定されたパスが存在しない場合は何もしない
             return
 
         try:
             payload = json.loads(data_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
+            # 読み取り失敗時は静かに終了する
             return
 
         raw_access_counts = payload.get("accessCounts")
         if not isinstance(raw_access_counts, dict):
             return
 
-        vault_root = normalize_path_str(data_path.parents[3])
+        # .obsidian ディレクトリの親を Vault ルートとして特定する。
+        data_path_abs = data_path.resolve()
+        vault_root_path: Path | None = None
+        for parent in data_path_abs.parents:
+            if (parent / ".obsidian").is_dir():
+                vault_root_path = parent
+                break
+
+        if vault_root_path is None:
+            # Vaultルート（.obsidianの親）が特定できない場合は、不正な構造とみなして終了する
+            return
+
+        vault_root = normalize_path_str(vault_root_path)
         prefix_start, prefix_end = get_descendant_path_range(vault_root)
         self.connection.execute(
             """
@@ -842,6 +859,7 @@ class SearchService:
                 updates,
             )
         self.connection.commit()
+        logger.info(f"Synced {len(updates)} Obsidian access counts from {vault_root}")
 
     def _resolve_snippet(
         self,

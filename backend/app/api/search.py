@@ -34,7 +34,7 @@ def search(
     types: str | None = None,
     exclude_keywords: str | None = None,
     date_field: str = Query(default="created"),
-    sort_by: str = Query(default="modified"),
+    sort_by: str = Query(default="click_count"),
     sort_order: str = Query(default="desc"),
     created_from: date | None = None,
     created_to: date | None = None,

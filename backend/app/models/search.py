@@ -60,7 +60,7 @@ class SearchQueryParams(BaseModel):
     types: str | None = None
     exclude_keywords: str | None = None
     date_field: Literal["created", "modified"] = "created"
-    sort_by: Literal["created", "modified", "click_count"] = "modified"
+    sort_by: Literal["created", "modified", "click_count"] = "click_count"
     sort_order: Literal["asc", "desc"] = "desc"
     created_from: date | None = None
     created_to: date | None = None

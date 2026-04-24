@@ -329,7 +329,7 @@ function App() {
   });
   const [searchTarget, setSearchTarget] = useState<SearchTarget>("all");
   const [dateField, setDateField] = useState<"created" | "modified">("modified");
-  const [sortBy, setSortBy] = useState<"created" | "modified" | "click_count">("modified");
+  const [sortBy, setSortBy] = useState<"created" | "modified" | "click_count">("click_count");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
