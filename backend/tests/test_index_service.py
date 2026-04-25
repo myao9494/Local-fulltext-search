@@ -3,6 +3,7 @@
 バッチcommit・ディレクトリ走査・除外キーワード最適化の動作を検証する。
 """
 
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,6 +45,29 @@ def test_batch_commit_indexes_multiple_files_correctly(tmp_path: Path) -> None:
     # FTSにも全件登録されていること
     fts_row = connection.execute("SELECT COUNT(*) AS count FROM file_segments_fts").fetchone()
     assert fts_row["count"] == 120
+
+
+def test_indexing_emits_phase_timing_logs(tmp_path: Path, caplog) -> None:
+    """
+    インデックス作成時はボトルネック確認用に主要フェーズの処理時間をログへ出す。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "body.md").write_text("alpha body", encoding="utf-8")
+    (target / "image.png").write_bytes(b"image")
+
+    with caplog.at_level(logging.INFO, logger="app.services.index_service"):
+        service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("Index: existing metadata load time" in message for message in messages)
+    assert any("Index: scan/dispatch time" in message for message in messages)
+    assert any("Index: extraction wait time" in message for message in messages)
+    assert any("Index: DB write time" in message for message in messages)
+    assert any("Index: cleanup time" in message for message in messages)
+    assert any("Index: total time" in message for message in messages)
 
 
 def test_unchanged_files_are_skipped_on_reindex(tmp_path: Path) -> None:

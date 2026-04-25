@@ -12,8 +12,10 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
+import time as time_module
 from concurrent.futures import ALL_COMPLETED, FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -102,6 +104,20 @@ class IndexRunController:
 _CONTROLLERS_LOCK = threading.Lock()
 _CONTROLLERS: dict[int, IndexRunController] = {}
 CURRENT_TARGET_INDEX_VERSION = 1
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class IndexDrainStats:
+    """
+    抽出完了待ちの結果と、待機時間・DB反映時間をまとめて返す。
+    """
+
+    file_count: int
+    error_count: int
+    write_count: int
+    wait_seconds: float
+    db_write_seconds: float
 
 
 class IndexService:
@@ -878,6 +894,7 @@ class IndexService:
         指定ターゲット配下を高速に再走査する。
         走査は os.scandir、本文抽出はスレッド並列、DB 書き込みは直列でまとめる。
         """
+        total_start = time_module.perf_counter()
         folder_path = normalize_path(str(target["full_path"]))
         normalized_paths: set[str] = set()
         failed_paths: set[str] = set()
@@ -885,7 +902,14 @@ class IndexService:
         file_count = 0
         error_count = 0
         write_count = 0
+        skipped_count = 0
+        submitted_extract_count = 0
+        filename_only_count = 0
+        batch_commit_count = 0
+        extraction_wait_seconds = 0.0
+        db_write_seconds = 0.0
 
+        setup_start = time_module.perf_counter()
         keywords = self._parse_exclude_keywords(exclude_keywords)
         keyword_set, non_ascii_keywords, excluded_path_prefixes = self._compile_exclude_keywords(keywords)
         custom_content_extension_list = tuple(self._parse_extension_entries(custom_content_extensions))
@@ -895,7 +919,23 @@ class IndexService:
             extra_content_extensions=custom_content_extension_list,
             extra_filename_extensions=custom_filename_extension_list,
         )
+        setup_elapsed = time_module.perf_counter() - setup_start
+        logger.info(
+            "Index: setup time: %.3fs (target=%s, keywords=%d, extensions=%d)",
+            setup_elapsed,
+            folder_path.as_posix(),
+            len(keywords),
+            len(allowed_extensions),
+        )
+        existing_start = time_module.perf_counter()
         existing_files = self._load_existing_files(folder_path.as_posix())
+        existing_elapsed = time_module.perf_counter() - existing_start
+        logger.info(
+            "Index: existing metadata load time: %.3fs (target=%s, existing=%d)",
+            existing_elapsed,
+            folder_path.as_posix(),
+            len(existing_files),
+        )
         batch_size = 100
         max_workers = self._resolve_extract_worker_count()
         max_pending = max_workers * 4
@@ -903,6 +943,7 @@ class IndexService:
 
         executor = ThreadPoolExecutor(max_workers=max_workers)
         cancelled = False
+        scan_start = time_module.perf_counter()
         try:
             for path in self._walk_files(
                 folder_path,
@@ -921,6 +962,7 @@ class IndexService:
 
                 if self._can_skip_existing_file(existing, stat):
                     file_count += 1
+                    skipped_count += 1
                     continue
 
                 candidate = IndexedFileCandidate(
@@ -951,6 +993,7 @@ class IndexService:
                             extra_filename_extensions=custom_filename_extension_list,
                         )
                     ] = candidate
+                    submitted_extract_count += 1
                     if len(pending) >= max_pending:
                         result = self._drain_pending_futures(
                             pending,
@@ -958,15 +1001,23 @@ class IndexService:
                             controller=controller,
                             drain_all=False,
                         )
-                        file_count += result["file_count"]
-                        error_count += result["error_count"]
-                        write_count += result["write_count"]
+                        file_count += result.file_count
+                        error_count += result.error_count
+                        write_count += result.write_count
+                        extraction_wait_seconds += result.wait_seconds
+                        db_write_seconds += result.db_write_seconds
                 else:
+                    write_start = time_module.perf_counter()
                     self._upsert_file(candidate=candidate, content=None)
+                    db_write_seconds += time_module.perf_counter() - write_start
                     file_count += 1
                     write_count += 1
+                    filename_only_count += 1
                     if write_count % batch_size == 0:
+                        commit_start = time_module.perf_counter()
                         self.connection.commit()
+                        db_write_seconds += time_module.perf_counter() - commit_start
+                        batch_commit_count += 1
 
             result = self._drain_pending_futures(
                 pending,
@@ -974,20 +1025,78 @@ class IndexService:
                 controller=controller,
                 drain_all=True,
             )
-            file_count += result["file_count"]
-            error_count += result["error_count"]
-            write_count += result["write_count"]
+            file_count += result.file_count
+            error_count += result.error_count
+            write_count += result.write_count
+            extraction_wait_seconds += result.wait_seconds
+            db_write_seconds += result.db_write_seconds
+            scan_elapsed = time_module.perf_counter() - scan_start - extraction_wait_seconds - db_write_seconds
+            logger.info(
+                "Index: scan/dispatch time: %.3fs (target=%s, scanned=%d, skipped=%d, submitted=%d, filename_only=%d, workers=%d, max_pending=%d)",
+                max(scan_elapsed, 0.0),
+                folder_path.as_posix(),
+                len(normalized_paths),
+                skipped_count,
+                submitted_extract_count,
+                filename_only_count,
+                max_workers,
+                max_pending,
+            )
+            logger.info(
+                "Index: extraction wait time: %.3fs (target=%s, submitted=%d, errors=%d)",
+                extraction_wait_seconds,
+                folder_path.as_posix(),
+                submitted_extract_count,
+                error_count,
+            )
+            logger.info(
+                "Index: DB write time: %.3fs (target=%s, writes=%d, batch_commits=%d)",
+                db_write_seconds,
+                folder_path.as_posix(),
+                write_count,
+                batch_commit_count,
+            )
         except IndexingCancelledError:
             cancelled = True
+            commit_start = time_module.perf_counter()
             self.connection.commit()
+            db_write_seconds += time_module.perf_counter() - commit_start
             raise
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
 
         if not cancelled:
+            final_commit_start = time_module.perf_counter()
             self.connection.commit()
+            final_commit_elapsed = time_module.perf_counter() - final_commit_start
+            db_write_seconds += final_commit_elapsed
+            logger.info(
+                "Index: final commit time: %.3fs (target=%s, writes=%d)",
+                final_commit_elapsed,
+                folder_path.as_posix(),
+                write_count,
+            )
+            cleanup_start = time_module.perf_counter()
             self._remove_deleted_files(normalized_paths, root_path=folder_path.as_posix())
             self._clear_resolved_failed_files(root_path=folder_path.as_posix(), failed_paths=failed_paths)
+            cleanup_elapsed = time_module.perf_counter() - cleanup_start
+            total_elapsed = time_module.perf_counter() - total_start
+            logger.info(
+                "Index: cleanup time: %.3fs (target=%s, failed_remaining=%d, auto_excluded=%d)",
+                cleanup_elapsed,
+                folder_path.as_posix(),
+                len(failed_paths),
+                len(auto_excluded_paths),
+            )
+            logger.info(
+                "Index: total time: %.3fs (target=%s, files=%d, writes=%d, skipped=%d, errors=%d)",
+                total_elapsed,
+                folder_path.as_posix(),
+                file_count,
+                write_count,
+                skipped_count,
+                error_count,
+            )
         return {
             "file_count": file_count,
             "error_count": error_count,
@@ -1009,35 +1118,54 @@ class IndexService:
         controller: IndexRunController,
         *,
         drain_all: bool,
-    ) -> dict[str, int]:
+    ) -> IndexDrainStats:
         """
         完了した抽出タスクだけを取り出して DB へ反映する。
         """
         if not pending:
-            return {"file_count": 0, "error_count": 0, "write_count": 0}
+            return IndexDrainStats(
+                file_count=0,
+                error_count=0,
+                write_count=0,
+                wait_seconds=0.0,
+                db_write_seconds=0.0,
+            )
 
+        wait_start = time_module.perf_counter()
         done, _ = wait(
             pending.keys(),
             return_when=FIRST_COMPLETED if not drain_all else ALL_COMPLETED,
         )
+        wait_seconds = time_module.perf_counter() - wait_start
 
         file_count = 0
         error_count = 0
         write_count = 0
+        db_write_seconds = 0.0
         for future in done:
             self._raise_if_cancel_requested(controller)
             candidate = pending.pop(future)
             try:
                 content = future.result()
+                write_start = time_module.perf_counter()
                 self._upsert_file(candidate=candidate, content=content)
+                db_write_seconds += time_module.perf_counter() - write_start
                 file_count += 1
                 write_count += 1
             except Exception as error:
                 error_count += 1
                 failed_paths.add(candidate.normalized_path)
+                write_start = time_module.perf_counter()
                 self._record_file_error(candidate.path, error)
+                db_write_seconds += time_module.perf_counter() - write_start
 
-        return {"file_count": file_count, "error_count": error_count, "write_count": write_count}
+        return IndexDrainStats(
+            file_count=file_count,
+            error_count=error_count,
+            write_count=write_count,
+            wait_seconds=wait_seconds,
+            db_write_seconds=db_write_seconds,
+        )
 
     def _raise_if_cancel_requested(self, controller: IndexRunController) -> None:
         """
