@@ -367,6 +367,7 @@ function App() {
   const [isAddingLaunchPath, setIsAddingLaunchPath] = useState(false);
   const [searchTargetActionPath, setSearchTargetActionPath] = useState<string | null>(null);
   const [openingIndexedTargetPath, setOpeningIndexedTargetPath] = useState<string | null>(null);
+  const [isIgnoringResultPath, setIsIgnoringResultPath] = useState<string | null>(null);
   const [isSavingExcludeKeywords, setIsSavingExcludeKeywords] = useState(false);
   const [isSavingSynonymGroups, setIsSavingSynonymGroups] = useState(false);
   const [isSavingObsidianSidebarExplorerDataPath, setIsSavingObsidianSidebarExplorerDataPath] = useState(false);
@@ -991,6 +992,37 @@ function App() {
     }
   }
 
+  /**
+   * 検索結果のフルパスを除外キーワードへ追記し、以後の検索結果へ出さないようにする。
+   */
+  async function handleResultIgnore(_fileId: number, fullPath: string): Promise<void> {
+    const nextExcludeKeywords = normalizeExcludeKeywords([savedExcludeKeywords, fullPath].filter(Boolean).join("\n"));
+    if (nextExcludeKeywords === savedExcludeKeywords) {
+      setResults((current) => current.filter((item) => item.full_path !== fullPath));
+      setSearchTotal((current) => Math.max(0, current - 1));
+      setNoticeMessage("対象ファイルは既に無視リストへ追加済みです。");
+      setErrorMessage("");
+      return;
+    }
+
+    try {
+      setIsIgnoringResultPath(fullPath);
+      const savedSettings = await updateAppSettings({ exclude_keywords: nextExcludeKeywords });
+      const savedValue = normalizeExcludeKeywords(savedSettings.exclude_keywords);
+      setSavedExcludeKeywords(savedValue);
+      setExcludeKeywordsDraft(savedValue);
+      setResults((current) => current.filter((item) => item.full_path !== fullPath));
+      setSearchTotal((current) => Math.max(0, current - 1));
+      setErrorMessage("");
+      setNoticeMessage("無視リストへ追加しました。次回以降の検索結果から除外されます。");
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "無視リストへの追加に失敗しました。");
+    } finally {
+      setIsIgnoringResultPath((currentPath) => (currentPath === fullPath ? null : currentPath));
+    }
+  }
+
   function toggleIndexExtension(extension: string): void {
     setSelectedIndexExtensions((current) =>
       current.includes(extension) ? current.filter((item) => item !== extension) : [...current, extension],
@@ -1609,7 +1641,14 @@ function App() {
                   : `${visibleResults.length} / ${searchTotal}件`}
               </span>
             </div>
-            <ResultsList items={visibleResults} dateField={dateField} onResultOpen={handleResultOpen} onResultDelete={handleResultDelete} />
+            <ResultsList
+              items={visibleResults}
+              dateField={dateField}
+              onResultOpen={handleResultOpen}
+              onResultDelete={handleResultDelete}
+              onResultIgnore={handleResultIgnore}
+              ignoringResultPath={isIgnoringResultPath}
+            />
             {hasMoreResults ? (
               <div className="search-results-footer">
                 <div ref={loadMoreTriggerRef} className="search-results-trigger" />

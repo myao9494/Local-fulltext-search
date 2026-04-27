@@ -7,6 +7,8 @@ type ResultsListProps = {
   dateField: "created" | "modified";
   onResultOpen: (fileId: number) => void;
   onResultDelete: (fileId: number, fullPath: string) => void;
+  onResultIgnore: (fileId: number, fullPath: string) => void;
+  ignoringResultPath: string | null;
 };
 
 /**
@@ -65,6 +67,8 @@ type ResultCardProps = {
   onOpenLocation: (fileId: number, fullPath: string) => Promise<void>;
   onResultOpen: (fileId: number) => void;
   onResultDelete: (fileId: number, fullPath: string) => void;
+  onResultIgnore: (fileId: number, fullPath: string) => void;
+  ignoringResultPath: string | null;
 };
 
 /**
@@ -80,6 +84,8 @@ function ResultCard({
   onOpenLocation,
   onResultOpen,
   onResultDelete,
+  onResultIgnore,
+  ignoringResultPath,
 }: ResultCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [isSnippetExpandable, setIsSnippetExpandable] = useState(false);
@@ -151,6 +157,17 @@ function ResultCard({
           {item.result_kind === "file" ? (
             <button
               type="button"
+              className="result-ignore-button"
+              onClick={() => onResultIgnore(item.file_id, item.full_path)}
+              title="このファイルを無視リストへ追加"
+              disabled={ignoringResultPath === item.full_path}
+            >
+              {ignoringResultPath === item.full_path ? "無視中..." : "無視"}
+            </button>
+          ) : null}
+          {item.result_kind === "file" ? (
+            <button
+              type="button"
               className="result-delete-button"
               onClick={() => onResultDelete(item.file_id, item.full_path)}
               title="ファイルを完全に削除"
@@ -205,7 +222,7 @@ function ResultCard({
   );
 }
 
-export function ResultsList({ items, dateField, onResultOpen, onResultDelete }: ResultsListProps) {
+export function ResultsList({ items, dateField, onResultOpen, onResultDelete, onResultIgnore, ignoringResultPath }: ResultsListProps) {
   const [copiedFileId, setCopiedFileId] = useState<number | null>(null);
   const [openingLocationFileId, setOpeningLocationFileId] = useState<number | null>(null);
 
@@ -274,6 +291,8 @@ export function ResultsList({ items, dateField, onResultOpen, onResultDelete }: 
           onOpenLocation={handleOpenLocation}
           onResultOpen={onResultOpen}
           onResultDelete={onResultDelete}
+          onResultIgnore={onResultIgnore}
+          ignoringResultPath={ignoringResultPath}
         />
       ))}
     </div>
