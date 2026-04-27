@@ -64,3 +64,19 @@ test("フォルダ結果はフォルダ種別として表示を切り替える",
   assert.match(source, /種別: フォルダ/);
   assert.match(source, /if \(item\.result_kind === "file"\) \{/);
 });
+
+/**
+ * 検索結果スニペットは、初期状態では5行に制限し、必要な場合のみ展開できる。
+ */
+test("検索結果スニペットは5行クランプと展開トグルを持つ", () => {
+  const source = readFileSync(resultsListPath, "utf-8");
+  const styleSource = readFileSync(appStylesPath, "utf-8");
+
+  assert.match(source, /result-snippet-wrapper/);
+  assert.match(source, /result-snippet-clamped/);
+  assert.match(source, /result-snippet-toggle/);
+  assert.match(source, /もっと見る/);
+  assert.match(source, /折りたたむ/);
+  assert.match(source, /scrollHeight\s*>\s*snippetElement\.clientHeight/);
+  assert.match(styleSource, /-webkit-line-clamp:\s*5;/);
+});

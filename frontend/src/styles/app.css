@@ -451,6 +451,34 @@ h1, h2, h3 {
   white-space: normal;
 }
 
+.result-snippet-wrapper {
+  display: grid;
+  gap: 10px;
+}
+
+.result-snippet-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  overflow: hidden;
+}
+
+.result-snippet-toggle {
+  justify-self: start;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: rgba(59, 130, 246, 0.12);
+  color: #dbeafe;
+  cursor: pointer;
+}
+
+.result-snippet-toggle:hover {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(147, 197, 253, 0.4);
+  transform: translateY(-1px);
+}
+
 .result-snippet mark {
   background: rgba(250, 204, 21, 0.2);
   color: hsl(45, 100%, 65%);
