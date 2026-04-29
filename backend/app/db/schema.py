@@ -191,7 +191,7 @@ def initialize_schema(connection: Connection) -> None:
 def reset_schema(connection: Connection) -> None:
     """
     管理対象の全テーブルと FTS を削除し、空のスキーマを再作成する。
-    共有接続を維持したまま DB を初期化したいときに使う。
+    呼び出し元の接続を維持したまま DB を初期化したいときに使う。
     """
     _drop_managed_schema_objects(connection)
     for statement in SCHEMA_STATEMENTS:

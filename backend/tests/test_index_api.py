@@ -45,6 +45,7 @@ class StubIndexService:
         self.saved_exclude_keywords = ".git\nnode_modules"
         self.saved_hidden_indexed_targets = "obsidian\nAgent_Skills"
         self.saved_synonym_groups = "スマートフォン,スマホ,モバイル"
+        self.saved_obsidian_sidebar_explorer_data_path = ""
         self.saved_index_selected_extensions = ".md\n.json"
         self.saved_custom_content_extensions = ".py\n.dat"
         self.saved_custom_filename_extensions = ".CAE"
@@ -120,6 +121,7 @@ class StubIndexService:
                 exclude_keywords: str,
                 hidden_indexed_targets: str,
                 synonym_groups: str,
+                obsidian_sidebar_explorer_data_path: str,
                 index_selected_extensions: str,
                 custom_content_extensions: str,
                 custom_filename_extensions: str,
@@ -127,6 +129,7 @@ class StubIndexService:
                 self.exclude_keywords = exclude_keywords
                 self.hidden_indexed_targets = hidden_indexed_targets
                 self.synonym_groups = synonym_groups
+                self.obsidian_sidebar_explorer_data_path = obsidian_sidebar_explorer_data_path
                 self.index_selected_extensions = index_selected_extensions
                 self.custom_content_extensions = custom_content_extensions
                 self.custom_filename_extensions = custom_filename_extensions
@@ -136,6 +139,7 @@ class StubIndexService:
                     "exclude_keywords": self.exclude_keywords,
                     "hidden_indexed_targets": self.hidden_indexed_targets,
                     "synonym_groups": self.synonym_groups,
+                    "obsidian_sidebar_explorer_data_path": self.obsidian_sidebar_explorer_data_path,
                     "index_selected_extensions": self.index_selected_extensions,
                     "custom_content_extensions": self.custom_content_extensions,
                     "custom_filename_extensions": self.custom_filename_extensions,
@@ -145,6 +149,7 @@ class StubIndexService:
             self.saved_exclude_keywords,
             self.saved_hidden_indexed_targets,
             self.saved_synonym_groups,
+            self.saved_obsidian_sidebar_explorer_data_path,
             self.saved_index_selected_extensions,
             self.saved_custom_content_extensions,
             self.saved_custom_filename_extensions,
@@ -156,6 +161,7 @@ class StubIndexService:
         exclude_keywords: str | None = None,
         hidden_indexed_targets: str | None = None,
         synonym_groups: str | None = None,
+        obsidian_sidebar_explorer_data_path: str | None = None,
         index_selected_extensions: str | None = None,
         custom_content_extensions: str | None = None,
         custom_filename_extensions: str | None = None,
@@ -166,6 +172,8 @@ class StubIndexService:
             self.saved_hidden_indexed_targets = hidden_indexed_targets
         if synonym_groups is not None:
             self.saved_synonym_groups = synonym_groups
+        if obsidian_sidebar_explorer_data_path is not None:
+            self.saved_obsidian_sidebar_explorer_data_path = obsidian_sidebar_explorer_data_path
         if index_selected_extensions is not None:
             self.saved_index_selected_extensions = index_selected_extensions
         if custom_content_extensions is not None:

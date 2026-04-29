@@ -81,16 +81,18 @@ class IndexingCancelledError(Exception):
 
 class IndexRunController:
     """
-    共有DB接続ごとに、インデックス中止要求の状態を保持する。
+    DB接続ごとに、インデックス中止要求の状態を保持する。
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._cancel_requested = False
+        self._last_database_check_at = 0.0
 
     def reset(self) -> None:
         with self._lock:
             self._cancel_requested = False
+            self._last_database_check_at = 0.0
 
     def request_cancel(self) -> None:
         with self._lock:
@@ -100,10 +102,16 @@ class IndexRunController:
         with self._lock:
             return self._cancel_requested
 
+    def should_check_database_cancel(self, *, now: float, interval_seconds: float) -> bool:
+        with self._lock:
+            if now - self._last_database_check_at < interval_seconds:
+                return False
+            self._last_database_check_at = now
+            return True
 
-_CONTROLLERS_LOCK = threading.Lock()
-_CONTROLLERS: dict[int, IndexRunController] = {}
+
 CURRENT_TARGET_INDEX_VERSION = 1
+CANCEL_DATABASE_POLL_INTERVAL_SECONDS = 0.25
 logger = logging.getLogger(__name__)
 
 
@@ -123,6 +131,7 @@ class IndexDrainStats:
 class IndexService:
     def __init__(self, connection: Connection | None = None) -> None:
         self.connection = connection or get_connection()
+        self._run_controller = IndexRunController()
 
     def reset_database(self) -> None:
         """
@@ -1170,21 +1179,29 @@ class IndexService:
     def _raise_if_cancel_requested(self, controller: IndexRunController) -> None:
         """
         中止要求が来ていたら即座に処理を打ち切る。
+        別プロセス・別接続からの要求は、速度影響を避けるため短い間隔で DB を確認する。
         """
         if controller.is_cancel_requested():
             raise IndexingCancelledError("Indexing was cancelled.")
+        should_check_database = controller.should_check_database_cancel(
+            now=time_module.monotonic(),
+            interval_seconds=CANCEL_DATABASE_POLL_INTERVAL_SECONDS,
+        )
+        if should_check_database and self._is_cancel_requested_in_database():
+            raise IndexingCancelledError("Indexing was cancelled.")
+
+    def _is_cancel_requested_in_database(self) -> bool:
+        """
+        プロセスをまたいで共有される中止要求フラグを読み取る。
+        """
+        row = self.connection.execute("SELECT cancel_requested FROM index_runs WHERE id = 1").fetchone()
+        return bool(row["cancel_requested"]) if row else False
 
     def _get_run_controller(self) -> IndexRunController:
         """
-        共有DB接続単位で中止要求コントローラを再利用する。
+        このサービスインスタンス内で中止要求コントローラを再利用する。
         """
-        connection_key = id(self.connection)
-        with _CONTROLLERS_LOCK:
-            controller = _CONTROLLERS.get(connection_key)
-            if controller is None:
-                controller = IndexRunController()
-                _CONTROLLERS[connection_key] = controller
-            return controller
+        return self._run_controller
 
     def _load_existing_files(self, root_path: str) -> dict[str, dict[str, object]]:
         """

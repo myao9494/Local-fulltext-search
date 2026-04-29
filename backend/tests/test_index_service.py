@@ -13,7 +13,7 @@ from fastapi import HTTPException
 
 from app.config import settings
 from app.db.schema import initialize_schema
-from app.services.index_service import IndexService
+from app.services.index_service import IndexingCancelledError, IndexService
 
 
 def test_batch_commit_indexes_multiple_files_correctly(tmp_path: Path) -> None:
@@ -680,6 +680,25 @@ def test_cancel_indexing_marks_status_as_cancel_requested(tmp_path: Path) -> Non
     status = service.get_status()
     assert status.is_running is True
     assert status.cancel_requested is True
+
+
+def test_cancel_requested_from_another_connection_stops_indexing(tmp_path: Path) -> None:
+    """
+    別プロセス・別リクエスト相当の接続で立てたキャンセル要求もインデックス処理が検知する。
+    """
+    first_connection = _create_connection(tmp_path)
+    second_connection = _create_connection(tmp_path)
+    service = IndexService(connection=first_connection)
+    service._update_status(is_running=True, cancel_requested=False)
+    second_connection.execute("UPDATE index_runs SET cancel_requested = 1 WHERE id = 1")
+    second_connection.commit()
+
+    try:
+        service._raise_if_cancel_requested(service._get_run_controller())
+    except IndexingCancelledError:
+        pass
+    else:
+        raise AssertionError("IndexingCancelledError was not raised")
 
 
 def test_index_depth_limits_recursive_walk(tmp_path: Path) -> None:

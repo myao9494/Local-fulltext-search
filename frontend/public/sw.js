@@ -1,9 +1,14 @@
-const CACHE_NAME = "local-fulltext-search-v1";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/icon-192.svg", "/icon-512.svg"];
+const CACHE_NAME = "local-fulltext-search-v2";
+const APP_SHELL_CACHE = "local-fulltext-search-shell-v2";
+const APP_SHELL = ["/manifest.webmanifest", "/icon-192.svg", "/icon-512.svg"];
+
+function isHashedAsset(pathname) {
+  return /\/assets\/.+-[0-9A-Za-z]{6,}\.(js|css|mjs)$/.test(pathname);
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)),
+    caches.open(APP_SHELL_CACHE).then((cache) => cache.addAll(APP_SHELL)),
   );
   self.skipWaiting();
 });
@@ -13,7 +18,7 @@ self.addEventListener("activate", (event) => {
     caches.keys().then((keys) =>
       Promise.all(
         keys
-          .filter((key) => key !== CACHE_NAME)
+          .filter((key) => ![CACHE_NAME, APP_SHELL_CACHE].includes(key))
           .map((key) => caches.delete(key)),
       ),
     ),
@@ -31,11 +36,23 @@ self.addEventListener("fetch", (event) => {
 
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request).catch(async () => {
-        const cache = await caches.open(CACHE_NAME);
-        return cache.match("/") || Response.error();
-      }),
+      fetch(request)
+        .then(async (response) => {
+          if (response.ok) {
+            const cache = await caches.open(APP_SHELL_CACHE);
+            await cache.put("/", response.clone());
+          }
+          return response;
+        })
+        .catch(async () => {
+          const cache = await caches.open(APP_SHELL_CACHE);
+          return cache.match("/") || Response.error();
+        }),
     );
+    return;
+  }
+
+  if (!isHashedAsset(url.pathname)) {
     return;
   }
 

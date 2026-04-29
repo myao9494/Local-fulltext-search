@@ -160,6 +160,7 @@ def run_benchmark(database_path: Path, config: BenchmarkConfig) -> BenchmarkSumm
             exclude_keywords="",
             hidden_indexed_targets="",
             synonym_groups="",
+            obsidian_sidebar_explorer_data_path="",
             index_selected_extensions=".md",
             custom_content_extensions="",
             custom_filename_extensions="",

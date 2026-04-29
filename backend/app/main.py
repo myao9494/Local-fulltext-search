@@ -1,6 +1,6 @@
 """
 アプリケーションエントリポイント。
-起動時にDB接続を共有し、シャットダウン時にクローズする。
+起動時にDBスキーマを初期化し、リクエストごとに短命のDB接続を利用する。
 """
 
 from contextlib import asynccontextmanager
@@ -8,6 +8,7 @@ import logging
 from logging.handlers import QueueHandler, QueueListener
 from pathlib import Path
 from queue import SimpleQueue
+import re
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,28 +47,28 @@ def configure_logging() -> QueueListener:
 
 
 logger = logging.getLogger(__name__)
+HASHED_ASSET_PATTERN = re.compile(r".*-[0-9A-Za-z]{6,}\.(js|css|mjs)$")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """起動時にDB接続を共有し、シャットダウン時にクローズする。"""
+    """起動時にDBスキーマとスケジューラーモニターを準備する。"""
     log_listener = configure_logging()
-    connection = None
     scheduler_monitor = None
     try:
-        connection = get_connection()
-        initialize_schema(connection)
+        startup_connection = get_connection()
+        try:
+            initialize_schema(startup_connection)
+        finally:
+            startup_connection.close()
         scheduler_monitor = SchedulerMonitor()
         scheduler_monitor.start()
-        app.state.db_connection = connection
         app.state.scheduler_monitor = scheduler_monitor
         app.state.log_listener = log_listener
         yield
     finally:
         if scheduler_monitor is not None:
             scheduler_monitor.stop()
-        if connection is not None:
-            connection.close()
         log_listener.stop()
 
 
@@ -93,10 +94,20 @@ def create_app() -> FastAPI:
     frontend_dist = settings.frontend_dist_dir
     index_file = frontend_dist / "index.html"
 
+    def build_static_cache_headers(path: Path) -> dict[str, str]:
+        """配信ファイル種別ごとに適切なキャッシュヘッダーを返す。"""
+        if path.name in {"index.html", "sw.js", "manifest.webmanifest", "manifest.json"}:
+            return {"Cache-Control": "no-cache, no-store, must-revalidate"}
+
+        if HASHED_ASSET_PATTERN.fullmatch(path.name):
+            return {"Cache-Control": "public, max-age=31536000, immutable"}
+
+        return {"Cache-Control": "public, max-age=3600"}
+
     if frontend_dist.exists() and index_file.exists():
         @app.get("/", include_in_schema=False)
         async def serve_frontend_root() -> FileResponse:
-            return FileResponse(index_file)
+            return FileResponse(index_file, headers=build_static_cache_headers(index_file))
 
         @app.get("/{full_path:path}", include_in_schema=False)
         async def serve_frontend(full_path: str) -> FileResponse:
@@ -110,9 +121,9 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404, detail="Not found") from error
 
             if requested_path.is_file():
-                return FileResponse(requested_path)
+                return FileResponse(requested_path, headers=build_static_cache_headers(requested_path))
 
-            return FileResponse(index_file)
+            return FileResponse(index_file, headers=build_static_cache_headers(index_file))
 
     return app
 
