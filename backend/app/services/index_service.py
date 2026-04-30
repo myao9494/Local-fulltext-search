@@ -694,6 +694,22 @@ class IndexService:
             covering_path=covering_path,
         )
 
+    def list_registered_search_target_paths(self, *, enabled_only: bool) -> list[str]:
+        """
+        検索対象フォルダとして登録済みのパス一覧を返す。
+        有効対象が 0 件のときは、無効化済みフォルダもフォールバック候補として使う。
+        """
+        where_clause = "WHERE is_search_target_enabled = 1" if enabled_only else ""
+        rows = self.connection.execute(
+            f"""
+            SELECT full_path
+            FROM targets
+            {where_clause}
+            ORDER BY full_path
+            """
+        ).fetchall()
+        return [normalize_path(str(row["full_path"])).as_posix() for row in rows]
+
     def set_search_target_enabled(self, *, folder_path: str, is_enabled: bool) -> SearchTargetListResponse:
         """
         検索対象フォルダの有効/無効を切り替える。未登録パスは新規追加してから更新する。

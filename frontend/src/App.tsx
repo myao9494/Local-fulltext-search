@@ -799,10 +799,6 @@ function App() {
       setErrorMessage("検索語を入力してください。");
       return;
     }
-    if (!isSearchAllEnabled && !resolvedSearchPath) {
-      setErrorMessage("検索対象フォルダのフルパスを入力してください。");
-      return;
-    }
     if (!indexDepth.trim()) {
       setErrorMessage("階層数を入力してください。");
       return;

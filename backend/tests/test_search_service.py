@@ -190,6 +190,7 @@ def test_search_supports_escaped_minus_prefixed_literal_terms(tmp_path: Path) ->
         SearchQueryParams(
             q=r"\-101",
             full_path="",
+            search_all_enabled=True,
             index_depth=5,
             refresh_window_minutes=60,
         )
@@ -327,6 +328,7 @@ def test_search_sorts_by_created_at_desc(tmp_path: Path) -> None:
         SearchQueryParams(
             q="alpha",
             full_path="",
+            search_all_enabled=True,
             index_depth=5,
             sort_by="created",
             sort_order="desc",
@@ -367,6 +369,7 @@ def test_search_sorts_by_click_count_desc(tmp_path: Path) -> None:
         SearchQueryParams(
             q="alpha",
             full_path="",
+            search_all_enabled=True,
             index_depth=5,
             sort_by="click_count",
             sort_order="desc",
@@ -470,6 +473,7 @@ def test_search_sorts_by_combined_obsidian_access_count_desc(tmp_path: Path, mon
         SearchQueryParams(
             q="alpha",
             full_path="",
+            search_all_enabled=True,
             index_depth=5,
             sort_by="click_count",
             sort_order="desc",
@@ -513,6 +517,7 @@ def test_search_uses_persisted_obsidian_click_count_for_sorting(tmp_path: Path) 
         SearchQueryParams(
             q="alpha",
             full_path="",
+            search_all_enabled=True,
             index_depth=5,
             sort_by="click_count",
             sort_order="desc",
@@ -545,6 +550,7 @@ def test_search_omits_snippets_when_not_requested(tmp_path: Path) -> None:
         SearchQueryParams(
             q="alpha",
             full_path="",
+            search_all_enabled=True,
             index_depth=5,
             include_snippets=False,
         )
@@ -577,6 +583,7 @@ def test_search_reports_has_more_and_next_offset(tmp_path: Path) -> None:
         SearchQueryParams(
             q="alpha",
             full_path="",
+            search_all_enabled=True,
             index_depth=5,
             limit=2,
             offset=0,
@@ -767,6 +774,7 @@ def test_build_scoped_files_cte_keeps_target_filters_outside_each_term(tmp_path:
 
     cte_sql, values = service._build_scoped_files_cte(
         normalized_target_path="/docs/projects",
+        search_all_enabled=False,
         path_depth_limit=3,
         types=".md .json",
         date_field="modified",
@@ -1008,6 +1016,7 @@ def test_search_filters_results_by_created_date_range(tmp_path: Path) -> None:
         SearchQueryParams(
             q="alpha",
             full_path="",
+            search_all_enabled=True,
             index_depth=5,
             refresh_window_minutes=60,
             created_from=date(2026, 4, 12),
@@ -1075,6 +1084,7 @@ def test_search_filters_results_by_modified_date_range(tmp_path: Path) -> None:
         SearchQueryParams(
             q="alpha",
             full_path="",
+            search_all_enabled=True,
             index_depth=5,
             refresh_window_minutes=60,
             date_field="modified",
@@ -1319,6 +1329,7 @@ def test_search_without_full_path_matches_across_entire_database(tmp_path: Path)
         SearchQueryParams(
             q="alpha",
             full_path="",
+            search_all_enabled=True,
             index_depth=5,
             refresh_window_minutes=60,
         )
@@ -1372,6 +1383,224 @@ def test_search_existing_index_uses_existing_db_without_reindex_and_without_dept
     assert result.used_existing_index is False
     assert result.background_refresh_scheduled is False
     assert ensure_calls == []
+
+
+def test_search_without_full_path_limits_scope_to_enabled_search_targets(tmp_path: Path) -> None:
+    """
+    検索フォルダ未指定時は、全 DB ではなく有効な検索対象フォルダ配下だけを検索する。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+
+    connection.execute(
+        """
+        INSERT INTO targets(
+            full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
+            is_search_target_enabled, indexed_file_count, index_version, created_at, updated_at
+        ) VALUES (?, NULL, '', 5, '.md', 1, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        ("/workspace/target-a",),
+    )
+    connection.execute(
+        """
+        INSERT INTO targets(
+            full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
+            is_search_target_enabled, indexed_file_count, index_version, created_at, updated_at
+        ) VALUES (?, NULL, '', 5, '.md', 0, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        ("/workspace/target-b",),
+    )
+    connection.commit()
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="inside-enabled.md",
+        full_path="/workspace/target-a/inside-enabled.md",
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="alpha enabled",
+        click_count=0,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="inside-disabled.md",
+        full_path="/workspace/target-b/inside-disabled.md",
+        created_at=datetime(2026, 4, 11, tzinfo=UTC),
+        mtime=datetime(2026, 4, 11, tzinfo=UTC),
+        body="alpha disabled",
+        click_count=0,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="outside.md",
+        full_path="/workspace/outside/outside.md",
+        created_at=datetime(2026, 4, 12, tzinfo=UTC),
+        mtime=datetime(2026, 4, 12, tzinfo=UTC),
+        body="alpha outside",
+        click_count=0,
+    )
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            search_all_enabled=False,
+            index_depth=5,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["inside-enabled.md"]
+    assert all(item.target_path == "" for item in result.items)
+
+
+def test_search_without_full_path_reindexes_enabled_search_targets(tmp_path: Path) -> None:
+    """
+    フォルダ未指定かつ全 DB 検索 OFF のときは、有効な検索対象フォルダを再インデックスしてから検索する。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "before.md").write_text("alpha before", encoding="utf-8")
+
+    service.index_service.ensure_fresh_target(
+        full_path=str(target),
+        refresh_window_minutes=60,
+    )
+    service.index_service.set_search_target_enabled(folder_path=str(target), is_enabled=True)
+
+    (target / "after.md").write_text("alpha after", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            search_all_enabled=False,
+            index_depth=5,
+            refresh_window_minutes=0,
+        )
+    )
+
+    assert result.total == 2
+    assert sorted(item.file_name for item in result.items) == ["after.md", "before.md"]
+
+
+def test_search_without_full_path_reindexes_registered_targets_when_all_targets_are_off(tmp_path: Path) -> None:
+    """
+    フォルダ未指定かつ全検索対象が OFF のときは、登録済み検索対象を再インデックスしてから検索する。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    target_a = tmp_path / "target-a"
+    target_b = tmp_path / "target-b"
+    target_a.mkdir()
+    target_b.mkdir()
+    (target_a / "alpha-a.md").write_text("alpha in target a", encoding="utf-8")
+    (target_b / "alpha-b.md").write_text("alpha in target b", encoding="utf-8")
+
+    connection.execute(
+        """
+        INSERT INTO targets(
+            full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
+            is_search_target_enabled, indexed_file_count, index_version, created_at, updated_at
+        ) VALUES (?, NULL, '', 3, '.md', 0, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        (target_a.as_posix(),),
+    )
+    connection.execute(
+        """
+        INSERT INTO targets(
+            full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
+            is_search_target_enabled, indexed_file_count, index_version, created_at, updated_at
+        ) VALUES (?, NULL, '', 2, '.md', 0, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        (target_b.as_posix(),),
+    )
+    connection.commit()
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            search_all_enabled=False,
+            index_depth=5,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 2
+    assert sorted(item.file_name for item in result.items) == ["alpha-a.md", "alpha-b.md"]
+
+
+def test_search_without_full_path_uses_registered_targets_as_scope_when_all_targets_are_off(tmp_path: Path) -> None:
+    """
+    フォルダ未指定かつ有効対象 0 件のときは、登録済み検索対象フォルダ配下だけを検索対象にする。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+
+    connection.execute(
+        """
+        INSERT INTO targets(
+            full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
+            is_search_target_enabled, indexed_file_count, index_version, created_at, updated_at
+        ) VALUES (?, NULL, '', 5, '.md', 0, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        ("/workspace/target-a",),
+    )
+    connection.execute(
+        """
+        INSERT INTO targets(
+            full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
+            is_search_target_enabled, indexed_file_count, index_version, created_at, updated_at
+        ) VALUES (?, NULL, '', 5, '.md', 0, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        ("/workspace/target-b",),
+    )
+    connection.commit()
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="inside-target-a.md",
+        full_path="/workspace/target-a/inside-target-a.md",
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="alpha a",
+        click_count=0,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="inside-target-b.md",
+        full_path="/workspace/target-b/inside-target-b.md",
+        created_at=datetime(2026, 4, 11, tzinfo=UTC),
+        mtime=datetime(2026, 4, 11, tzinfo=UTC),
+        body="alpha b",
+        click_count=0,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="outside.md",
+        full_path="/workspace/outside/outside.md",
+        created_at=datetime(2026, 4, 12, tzinfo=UTC),
+        mtime=datetime(2026, 4, 12, tzinfo=UTC),
+        body="alpha outside",
+        click_count=0,
+    )
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            search_all_enabled=False,
+            index_depth=5,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 2
+    assert sorted(item.file_name for item in result.items) == ["inside-target-a.md", "inside-target-b.md"]
 
 
 def test_search_with_existing_stale_index_uses_current_results_and_schedules_background_refresh(tmp_path: Path) -> None:
@@ -1687,6 +1916,7 @@ def test_search_without_full_path_applies_exclude_keywords_to_entire_database(tm
         SearchQueryParams(
             q="alpha",
             full_path="",
+            search_all_enabled=True,
             index_depth=5,
             refresh_window_minutes=60,
             exclude_keywords="archive",
@@ -1754,6 +1984,7 @@ def test_search_without_full_path_excludes_relative_nested_directory_path(tmp_pa
         SearchQueryParams(
             q="agent",
             full_path="",
+            search_all_enabled=True,
             index_depth=5,
             refresh_window_minutes=60,
             exclude_keywords="Agent_Skills/.roo",
@@ -1805,6 +2036,7 @@ def test_search_without_full_path_excludes_dot_prefixed_directory_keyword(tmp_pa
         SearchQueryParams(
             q="alpha",
             full_path="",
+            search_all_enabled=True,
             index_depth=5,
             refresh_window_minutes=60,
             exclude_keywords=".gemini",

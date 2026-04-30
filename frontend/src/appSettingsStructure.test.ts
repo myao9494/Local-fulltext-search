@@ -143,15 +143,15 @@ test("設定メニューから既定の検索フォルダ入力を廃止する",
 });
 
 /**
- * 検索欄のパスが空なら、検索時にエラーを表示して入力を促す。
+ * 検索欄のパスが空でも、検索対象フォルダ全体を検索できる。
  */
-test("検索時は入力パスが空ならフォルダ入力エラーを表示する", () => {
+test("検索時は入力パスが空でもフォルダ入力エラーにしない", () => {
   const source = readFileSync(appPath, "utf-8");
   const clientSource = readFileSync(clientPath, "utf-8");
 
   assert.match(source, /const normalizedInputPath = fullPath\.trim\(\);/);
   assert.match(source, /const resolvedSearchPath = normalizedInputPath;/);
-  assert.match(source, /if \(!isSearchAllEnabled && !resolvedSearchPath\) \{/);
+  assert.doesNotMatch(source, /検索対象フォルダのフルパスを入力してください。/);
   assert.match(source, /full_path: resolvedSearchPath,/);
   assert.match(source, /search_all_enabled: isSearchAllEnabled,/);
   assert.match(source, /const response = await fetchSearchPage\(\{/);

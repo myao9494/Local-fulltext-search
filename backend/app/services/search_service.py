@@ -47,6 +47,15 @@ class SearchService:
         )
         excluded_keywords = self.index_service._parse_exclude_keywords(effective_exclude_keywords)
         refresh_flags = {"used_existing_index": False, "background_refresh_scheduled": False}
+        if not normalized_target_path and not params.search_all_enabled:
+            self._refresh_search_targets_for_search_without_path(
+                refresh_window_minutes=params.refresh_window_minutes,
+                effective_exclude_keywords=effective_exclude_keywords,
+                index_depth=params.index_depth,
+                index_types=params.index_types,
+                custom_content_extensions=app_settings.custom_content_extensions,
+                custom_filename_extensions=app_settings.custom_filename_extensions,
+            )
         if normalized_target_path and not params.search_all_enabled and not params.skip_refresh:
             refresh_flags = self._refresh_target_for_search(
                 normalized_target_path=normalized_target_path,
@@ -71,6 +80,68 @@ class SearchService:
 
         self._schedule_obsidian_access_sync()
         return response.model_copy(update=refresh_flags)
+
+    def _refresh_search_targets_for_search_without_path(
+        self,
+        *,
+        refresh_window_minutes: int,
+        effective_exclude_keywords: str,
+        index_depth: int,
+        index_types: str | None,
+        custom_content_extensions: str,
+        custom_filename_extensions: str,
+    ) -> None:
+        """
+        フォルダ未指定かつ全 DB 検索 OFF のときは、検索対象フォルダを順次再インデックスする。
+        有効対象があればそれを優先し、0 件なら登録済みフォルダ全体へフォールバックする。
+        """
+        target_paths = self.index_service.list_registered_search_target_paths(enabled_only=True)
+        if not target_paths:
+            target_paths = self.index_service.list_registered_search_target_paths(enabled_only=False)
+        if not target_paths:
+            return
+
+        normalized_extensions = self.index_service._normalize_selected_extensions(
+            index_types,
+            custom_content_extensions=custom_content_extensions,
+            custom_filename_extensions=custom_filename_extensions,
+        )
+        for target_path in target_paths:
+            try:
+                target = self.index_service._ensure_target(
+                    full_path=target_path,
+                    exclude_keywords=effective_exclude_keywords,
+                    index_depth=index_depth,
+                    selected_extensions=normalized_extensions,
+                )
+            except HTTPException as error:
+                if error.status_code == status.HTTP_400_BAD_REQUEST:
+                    continue
+                raise
+            effective_keywords = self.index_service._merge_exclude_keyword_strings(
+                effective_exclude_keywords,
+                str(target.get("exclude_keywords") or ""),
+            )
+            if not self.index_service._needs_refresh(
+                target,
+                refresh_window_minutes,
+                effective_keywords,
+                index_depth,
+                normalized_extensions,
+            ):
+                continue
+            try:
+                self.index_service.ensure_fresh_target(
+                    full_path=target_path,
+                    refresh_window_minutes=refresh_window_minutes,
+                    exclude_keywords=effective_keywords,
+                    index_depth=index_depth,
+                    types=index_types,
+                )
+            except HTTPException as error:
+                if error.status_code == status.HTTP_400_BAD_REQUEST:
+                    continue
+                raise
 
     def _refresh_target_for_search(
         self,
@@ -290,6 +361,7 @@ class SearchService:
 
         scoped_files_cte_sql, scoped_file_values = self._build_scoped_files_cte(
             normalized_target_path=normalized_target_path,
+            search_all_enabled=params.search_all_enabled,
             path_depth_limit=path_depth_limit,
             types=params.types,
             date_field=params.date_field,
@@ -676,6 +748,7 @@ class SearchService:
         regex_start = time_module.perf_counter()
         scoped_files_cte_sql, values = self._build_scoped_files_cte(
             normalized_target_path=normalized_target_path,
+            search_all_enabled=params.search_all_enabled,
             path_depth_limit=path_depth_limit,
             types=params.types,
             date_field=params.date_field,
@@ -1193,6 +1266,7 @@ class SearchService:
         self,
         *,
         normalized_target_path: str,
+        search_all_enabled: bool,
         path_depth_limit: int | None,
         types: str | None,
         date_field: str = "created",
@@ -1221,6 +1295,20 @@ class SearchService:
                 )
                 filters.append(f"{depth_expression} <= ?")
                 values.extend([descendant_prefix, descendant_prefix, path_depth_limit])
+        elif not search_all_enabled:
+            enabled_target_paths = self.index_service.list_registered_search_target_paths(enabled_only=True)
+            target_paths = enabled_target_paths
+            if not target_paths:
+                target_paths = self.index_service.list_registered_search_target_paths(enabled_only=False)
+            if not target_paths:
+                return "0 = 1", values
+
+            target_filters: list[str] = []
+            for target_path in target_paths:
+                prefix_start, prefix_end = get_descendant_path_range(target_path)
+                target_filters.append("(files.normalized_path >= ? AND files.normalized_path < ?)")
+                values.extend([prefix_start, prefix_end])
+            filters.append(f"({' OR '.join(target_filters)})")
 
         if types:
             extensions = sorted(
@@ -1252,6 +1340,7 @@ class SearchService:
         self,
         *,
         normalized_target_path: str,
+        search_all_enabled: bool,
         path_depth_limit: int | None,
         types: str | None,
         date_field: str = "created",
@@ -1265,6 +1354,7 @@ class SearchService:
         """
         where_clause, values = self._build_common_filters(
             normalized_target_path=normalized_target_path,
+            search_all_enabled=search_all_enabled,
             path_depth_limit=path_depth_limit,
             types=types,
             date_field=date_field,
