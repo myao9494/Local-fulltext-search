@@ -53,11 +53,15 @@ PDF / Office / Outlook の本文抽出は比較的重いため、テキスト抽
 
 `executemany` による 1行ずつの DELETE を、`IN` 句による500件ごとのバッチ DELETE に変更。  
 `file_segments` を先に明示的に DELETE してから `files` を削除し、FTS5 トリガーを確実に発火させる。
+再インデックス時の削除判定は、現在の検索対象パス、`index_depth`、拡張子フィルタ、除外条件で走査した範囲だけに限定する。  
+過去に深い階層、別拡張子、除外中のフォルダまで作成したインデックスは、浅い階層・一部拡張子・子パスで検索や再インデックスをしても対象外として保持する。
+親フォルダが検索対象に登録済みで子パスを検索した場合も、削除クリーンアップは子パス配下だけに閉じる。
 
 ### failed_file クリアの一括化
 
 ファイルごとの `DELETE FROM failed_files WHERE normalized_path = ?` を廃止。  
-インデックス完了後に `_clear_resolved_failed_files()` で一括クリーンアップする。
+インデックス完了後に `_clear_resolved_failed_files()` で一括クリーンアップする。  
+こちらも現在の検索対象パス、`index_depth`、拡張子フィルタ、除外条件内だけを掃除し、今回走査していない深い階層や別拡張子、除外中パスの失敗履歴は残す。
 
 ## SQLite PRAGMA 設定
 

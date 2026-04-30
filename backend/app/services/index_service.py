@@ -157,6 +157,8 @@ class IndexService:
         normalized_full_path = self._normalize_target_path_or_raise(full_path)
         self._assert_indexing_allowed_for_search_target(normalized_full_path)
         effective_full_path = self._resolve_enabled_target_covering_path(normalized_full_path) or normalized_full_path
+        is_partial_target_refresh = normalized_full_path != effective_full_path
+        scan_depth = index_depth + self._relative_directory_depth(effective_full_path, normalized_full_path)
         app_settings = self.get_app_settings()
         normalized_keywords = self._normalize_exclude_keywords(exclude_keywords)
         normalized_extensions = self._normalize_selected_extensions(
@@ -198,20 +200,23 @@ class IndexService:
                     target,
                     effective_keywords,
                     controller=controller,
-                    index_depth=index_depth,
+                    index_depth=scan_depth,
+                    cleanup_root_path=normalized_full_path,
+                    cleanup_index_depth=index_depth,
                     selected_extensions=normalized_extensions,
                     custom_content_extensions=app_settings.custom_content_extensions,
                     custom_filename_extensions=app_settings.custom_filename_extensions,
                 )
                 total_files = stats["file_count"]
                 error_count = stats["error_count"]
-                self._mark_target_indexed(
-                    int(target["id"]),
-                    exclude_keywords=str(stats["exclude_keywords"]),
-                    index_depth=index_depth,
-                    selected_extensions=normalized_extensions,
-                    indexed_file_count=total_files,
-                )
+                if not is_partial_target_refresh:
+                    self._mark_target_indexed(
+                        int(target["id"]),
+                        exclude_keywords=str(stats["exclude_keywords"]),
+                        index_depth=index_depth,
+                        selected_extensions=normalized_extensions,
+                        indexed_file_count=total_files,
+                    )
         except IndexingCancelledError as error:
             self._update_status(
                 is_running=False,
@@ -253,6 +258,18 @@ class IndexService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Folder path must be an absolute path or Windows UNC path.",
             ) from error
+
+    def _relative_directory_depth(self, root_path: str, descendant_path: str) -> int:
+        """
+        ルートから子孫フォルダまでの相対ディレクトリ階層数を返す。
+        """
+        if root_path == descendant_path:
+            return 0
+        root_prefix = "/" if root_path == "/" else f"{root_path}/"
+        if not descendant_path.startswith(root_prefix):
+            return 0
+        relative_path = descendant_path[len(root_prefix):]
+        return len([part for part in relative_path.split("/") if part])
 
     def _resolve_enabled_target_covering_path(self, normalized_path: str) -> str | None:
         """
@@ -911,6 +928,8 @@ class IndexService:
         controller: IndexRunController,
         *,
         index_depth: int,
+        cleanup_root_path: str,
+        cleanup_index_depth: int,
         selected_extensions: str,
         custom_content_extensions: str,
         custom_filename_extensions: str,
@@ -1102,8 +1121,24 @@ class IndexService:
                 write_count,
             )
             cleanup_start = time_module.perf_counter()
-            self._remove_deleted_files(normalized_paths, root_path=folder_path.as_posix())
-            self._clear_resolved_failed_files(root_path=folder_path.as_posix(), failed_paths=failed_paths)
+            self._remove_deleted_files(
+                normalized_paths,
+                root_path=cleanup_root_path,
+                index_depth=cleanup_index_depth,
+                allowed_extensions=allowed_extensions,
+                keyword_set=keyword_set,
+                non_ascii_keywords=non_ascii_keywords,
+                excluded_path_prefixes=(*excluded_path_prefixes, *tuple(sorted(auto_excluded_paths))),
+            )
+            self._clear_resolved_failed_files(
+                root_path=cleanup_root_path,
+                failed_paths=failed_paths,
+                index_depth=cleanup_index_depth,
+                allowed_extensions=allowed_extensions,
+                keyword_set=keyword_set,
+                non_ascii_keywords=non_ascii_keywords,
+                excluded_path_prefixes=(*excluded_path_prefixes, *tuple(sorted(auto_excluded_paths))),
+            )
             cleanup_elapsed = time_module.perf_counter() - cleanup_start
             total_elapsed = time_module.perf_counter() - total_start
             logger.info(
@@ -1412,17 +1447,111 @@ class IndexService:
             ),
         )
 
-    def _remove_deleted_files(self, normalized_paths: set[str], *, root_path: str) -> None:
+    def _is_path_within_index_depth(self, normalized_path: str, *, root_path: str, index_depth: int | None) -> bool:
         """
-        DB 上に存在するが今回の走査範囲に含まれなくなったレコードをバッチ削除する。
+        指定パスが今回の index_depth で走査責任を持つ階層内か判定する。
+        """
+        if index_depth is None:
+            return True
+        if index_depth < 0:
+            return False
+
+        if root_path == "/":
+            relative_path = normalized_path.lstrip("/")
+        elif normalized_path == root_path:
+            relative_path = ""
+        elif normalized_path.startswith(f"{root_path}/"):
+            relative_path = normalized_path[len(root_path) + 1:]
+        else:
+            return False
+
+        if not relative_path:
+            return True
+        relative_parts = [part for part in relative_path.split("/") if part]
+        file_depth = max(len(relative_parts) - 1, 0)
+        return file_depth <= index_depth
+
+    def _is_path_within_extension_scope(
+        self,
+        normalized_path: str,
+        *,
+        file_ext: str | None = None,
+        allowed_extensions: frozenset[str] | None,
+    ) -> bool:
+        """
+        指定パスが今回の拡張子フィルタで走査責任を持つ対象か判定する。
+        """
+        if allowed_extensions is None:
+            return True
+        normalized_file_ext = str(file_ext or "").lower()
+        if normalized_file_ext in allowed_extensions:
+            return True
+        lower_path = normalized_path.lower()
+        return any(lower_path.endswith(extension) for extension in sorted(allowed_extensions, key=len, reverse=True))
+
+    def _is_path_excluded_from_current_scope(
+        self,
+        normalized_path: str,
+        *,
+        keyword_set: frozenset[str] | None,
+        non_ascii_keywords: list[str] | None,
+        excluded_path_prefixes: tuple[str, ...] | None,
+    ) -> bool:
+        """
+        今回の除外条件で走査しなかったパスか判定する。
+        """
+        if excluded_path_prefixes and self._is_excluded_path_prefix(normalized_path, excluded_path_prefixes):
+            return True
+        if not keyword_set and not non_ascii_keywords:
+            return False
+
+        path_parts = [part for part in normalized_path.replace("\\", "/").split("/") if part]
+        return any(
+            self._is_excluded_name(part, keyword_set or frozenset(), non_ascii_keywords or [])
+            for part in path_parts
+        )
+
+    def _remove_deleted_files(
+        self,
+        normalized_paths: set[str],
+        *,
+        root_path: str,
+        index_depth: int | None = None,
+        allowed_extensions: frozenset[str] | None = None,
+        keyword_set: frozenset[str] | None = None,
+        non_ascii_keywords: list[str] | None = None,
+        excluded_path_prefixes: tuple[str, ...] | None = None,
+    ) -> None:
+        """
+        DB 上に存在するが今回の走査責任範囲に含まれなくなったレコードをバッチ削除する。
         file_segments を先に明示的に DELETE して FTS5 トリガーを発火させてから files を削除する。
         """
         prefix_start, prefix_end = get_descendant_path_range(root_path)
         rows = self.connection.execute(
-            "SELECT id, normalized_path FROM files WHERE normalized_path >= ? AND normalized_path < ?",
+            "SELECT id, normalized_path, file_ext FROM files WHERE normalized_path >= ? AND normalized_path < ?",
             (prefix_start, prefix_end),
         ).fetchall()
-        deleted_ids = [int(row["id"]) for row in rows if row["normalized_path"] not in normalized_paths]
+        deleted_ids = [
+            int(row["id"])
+            for row in rows
+            if str(row["normalized_path"]) not in normalized_paths
+            and self._is_path_within_index_depth(
+                str(row["normalized_path"]),
+                root_path=root_path,
+                index_depth=index_depth,
+            )
+            and self._is_path_within_extension_scope(
+                str(row["normalized_path"]),
+                file_ext=str(row["file_ext"] or ""),
+                allowed_extensions=allowed_extensions,
+            )
+            and not self._is_path_excluded_from_current_scope(
+                str(row["normalized_path"]),
+                keyword_set=keyword_set,
+                non_ascii_keywords=non_ascii_keywords,
+                excluded_path_prefixes=excluded_path_prefixes,
+            )
+        ]
         if not deleted_ids:
             return
 
@@ -1518,9 +1647,19 @@ class IndexService:
         """
         return left == right or left.startswith(f"{right}/") or right.startswith(f"{left}/")
 
-    def _clear_resolved_failed_files(self, *, root_path: str, failed_paths: set[str]) -> None:
+    def _clear_resolved_failed_files(
+        self,
+        *,
+        root_path: str,
+        failed_paths: set[str],
+        index_depth: int | None = None,
+        allowed_extensions: frozenset[str] | None = None,
+        keyword_set: frozenset[str] | None = None,
+        non_ascii_keywords: list[str] | None = None,
+        excluded_path_prefixes: tuple[str, ...] | None = None,
+    ) -> None:
         """
-        今回失敗していない過去ログを対象ルート配下から掃除する。
+        今回失敗していない過去ログを対象ルート配下の走査責任範囲から掃除する。
         成功済み・削除済みファイルが一覧に残り続けないようにする。
         """
         prefix_start, prefix_end = get_descendant_path_range(root_path)
@@ -1532,7 +1671,26 @@ class IndexService:
             """,
             (prefix_start, prefix_end),
         ).fetchall()
-        stale_paths = [str(row["normalized_path"]) for row in rows if str(row["normalized_path"]) not in failed_paths]
+        stale_paths = [
+            str(row["normalized_path"])
+            for row in rows
+            if str(row["normalized_path"]) not in failed_paths
+            and self._is_path_within_index_depth(
+                str(row["normalized_path"]),
+                root_path=root_path,
+                index_depth=index_depth,
+            )
+            and self._is_path_within_extension_scope(
+                str(row["normalized_path"]),
+                allowed_extensions=allowed_extensions,
+            )
+            and not self._is_path_excluded_from_current_scope(
+                str(row["normalized_path"]),
+                keyword_set=keyword_set,
+                non_ascii_keywords=non_ascii_keywords,
+                excluded_path_prefixes=excluded_path_prefixes,
+            )
+        ]
         if not stale_paths:
             return
         chunk_size = 500

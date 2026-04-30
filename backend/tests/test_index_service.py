@@ -726,6 +726,120 @@ def test_index_depth_limits_recursive_walk(tmp_path: Path) -> None:
     assert [row["file_name"] for row in indexed_files] == ["child.md", "root.md"]
 
 
+def test_shallow_reindex_preserves_deeper_existing_index(tmp_path: Path) -> None:
+    """
+    浅い階層で再インデックスしても、今回の走査対象外にある深い階層の既存インデックスは削除しない。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    level1 = target / "level1"
+    level2 = level1 / "level2"
+    level2.mkdir(parents=True)
+    root_file = target / "root.md"
+    shallow_file = level1 / "child.md"
+    deep_file = level2 / "grandchild.md"
+    root_file.write_text("root level", encoding="utf-8")
+    shallow_file.write_text("child level", encoding="utf-8")
+    deep_file.write_text("grandchild level", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, index_depth=5)
+    assert connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"] == 3
+
+    root_file.unlink()
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, index_depth=1)
+
+    indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
+    assert [row["file_name"] for row in indexed_files] == ["child.md", "grandchild.md"]
+
+
+def test_extension_limited_reindex_preserves_other_extension_indexes(tmp_path: Path) -> None:
+    """
+    拡張子を絞って再インデックスしても、今回の対象外拡張子の既存インデックスは削除しない。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    markdown_file = target / "note.md"
+    text_file = target / "memo.txt"
+    markdown_file.write_text("markdown memo", encoding="utf-8")
+    text_file.write_text("text memo", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, index_depth=1)
+    assert connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"] == 2
+
+    markdown_file.unlink()
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, index_depth=1, types=".md")
+
+    indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
+    assert [row["file_name"] for row in indexed_files] == ["memo.txt"]
+
+
+def test_exclude_keyword_reindex_preserves_excluded_existing_indexes(tmp_path: Path) -> None:
+    """
+    除外キーワードで今回走査しない場所の既存インデックスは削除しない。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    target = tmp_path / "docs"
+    archive = target / "archive"
+    archive.mkdir(parents=True)
+    active_file = target / "active.md"
+    archive_file = archive / "old.md"
+    active_file.write_text("active memo", encoding="utf-8")
+    archive_file.write_text("old memo", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, index_depth=2)
+    assert connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"] == 2
+
+    active_file.unlink()
+    service.ensure_fresh_target(
+        full_path=str(target),
+        refresh_window_minutes=0,
+        exclude_keywords="archive",
+        index_depth=2,
+    )
+
+    indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
+    assert [row["file_name"] for row in indexed_files] == ["old.md"]
+
+
+def test_child_search_target_reindex_preserves_parent_scope_existing_indexes(tmp_path: Path) -> None:
+    """
+    検索対象の子パスから再インデックスしても、親対象内で今回条件外の既存インデックスは削除しない。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    parent = tmp_path / "workspace"
+    child = parent / "team"
+    deep = child / "deep"
+    sibling = parent / "sibling" / "deep"
+    deep.mkdir(parents=True)
+    sibling.mkdir(parents=True)
+    root_file = parent / "root.md"
+    child_file = child / "memo.md"
+    deep_file = deep / "deep.md"
+    sibling_file = sibling / "sibling.md"
+    root_file.write_text("root", encoding="utf-8")
+    child_file.write_text("child", encoding="utf-8")
+    deep_file.write_text("deep", encoding="utf-8")
+    sibling_file.write_text("sibling", encoding="utf-8")
+
+    service.ensure_fresh_target(full_path=str(parent), refresh_window_minutes=0, index_depth=5)
+    assert connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"] == 4
+
+    root_file.unlink()
+    service.ensure_fresh_target(full_path=str(child), refresh_window_minutes=0, index_depth=1)
+
+    indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
+    assert [row["file_name"] for row in indexed_files] == ["deep.md", "memo.md", "root.md", "sibling.md"]
+
+    target_row = connection.execute("SELECT index_depth, indexed_file_count FROM targets").fetchone()
+    assert target_row["index_depth"] == 5
+    assert target_row["indexed_file_count"] == 4
+
+
 def test_index_rejects_relative_full_path(tmp_path: Path) -> None:
     """
     インデックス対象 full_path は相対パスを受け付けず 400 系エラーにする。
