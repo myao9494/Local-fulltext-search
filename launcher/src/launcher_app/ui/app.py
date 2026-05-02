@@ -8,12 +8,13 @@ import logging
 import threading
 import time
 from typing import Any
+import webbrowser
 
 from launcher_app.api.client import LauncherApiClient, LauncherApiError
 from launcher_app.config import LauncherConfig
 from launcher_app.models import SearchResultItem
-from launcher_app.services.file_actions import FileActionError, open_path, reveal_path
 from launcher_app.services.hotkeys import GlobalHotkeyController, hotkey_spec_for_platform
+from launcher_app.ui.urls import folder_path_for_item, primary_web_url_for_item
 from launcher_app.utils import strip_html
 
 logger = logging.getLogger(__name__)
@@ -194,10 +195,11 @@ class LauncherApp:
         except Exception as error:
             if sequence != self.search_sequence:
                 return
+            message = str(error)
 
             async def _apply_error() -> None:
                 self.results = []
-                self.status.value = f"検索に失敗しました: {error}"
+                self.status.value = f"検索に失敗しました: {message}"
                 self._render_results()
 
             self.page.run_task(_apply_error)
@@ -298,7 +300,7 @@ class LauncherApp:
 
     def _open_selected(self) -> None:
         """
-        選択中の結果を OS 標準アプリで開き、アクセス数を記録する。
+        選択中の結果を Web アプリ互換 URL で開き、アクセス数を記録する。
         """
         if not self.results:
             return
@@ -309,11 +311,11 @@ class LauncherApp:
         指定結果を開いた後、ランチャーを自動で隠す。
         """
         try:
-            open_path(item.full_path)
+            webbrowser.open(primary_web_url_for_item(item, self.config.web_base_url))
             if item.result_kind == "file":
                 self.client.record_click(item.file_id)
             self._hide_window()
-        except (FileActionError, LauncherApiError) as error:
+        except (OSError, LauncherApiError) as error:
             self.status.value = f"ファイルを開けませんでした: {error}"
         self.page.update()
 
@@ -324,10 +326,11 @@ class LauncherApp:
         if not self.results:
             return
         item = self.results[self.selected_index]
+        target_path = item.full_path if item.result_kind == "folder" else folder_path_for_item(item)
         try:
-            reveal_path(item.full_path)
+            self.client.open_location(target_path)
             self._hide_window()
-        except FileActionError as error:
+        except LauncherApiError as error:
             self.status.value = f"保存場所を開けませんでした: {error}"
         self.page.update()
 

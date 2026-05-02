@@ -4,11 +4,9 @@ macOS Spaces 上でも現在のデスクトップへ表示できる Cocoa ネイ
 
 from __future__ import annotations
 
-import os
 import platform
 import threading
 from typing import Any
-from urllib.parse import quote
 import webbrowser
 
 import AppKit
@@ -19,6 +17,12 @@ from launcher_app.api.client import LauncherApiClient
 from launcher_app.config import LauncherConfig
 from launcher_app.models import SearchResultItem
 from launcher_app.services.hotkeys import hotkey_spec_for_platform
+from launcher_app.ui.urls import (
+    folder_path_for_item,
+    folder_web_url_for_item,
+    full_path_web_url,
+    primary_web_url_for_item,
+)
 from launcher_app.utils import strip_html
 
 
@@ -248,6 +252,13 @@ class LauncherDelegate(AppKit.NSObject):
         """
         self.panel.orderOut_(None)
 
+    def windowDidResignKey_(self, notification: Any) -> None:
+        """
+        フォーカス喪失時にパネルを自動で隠す。
+        """
+        if self.panel is not None and self.panel.isVisible():
+            self.hide_panel()
+
     @objc.python_method
     def _build_panel(self) -> None:
         """
@@ -264,6 +275,7 @@ class LauncherDelegate(AppKit.NSObject):
             False,
         )
         self.panel.setLevel_(AppKit.NSFloatingWindowLevel)
+        self.panel.setDelegate_(self)
         self.panel.setOpaque_(False)
         self.panel.setBackgroundColor_(AppKit.NSColor.clearColor())
         self.panel.setHidesOnDeactivate_(False)
@@ -524,43 +536,3 @@ def run_native_mac_app(config: LauncherConfig | None = None) -> None:
     app.setDelegate_(delegate)
     delegate.show_panel()
     AppHelper.runEventLoop()
-
-
-def folder_path_for_item(item: SearchResultItem) -> str:
-    """
-    Web アプリの getFolderPath と同じ用途で、ファイルの親フォルダを返す。
-    """
-    if item.result_kind == "folder":
-        return item.full_path
-    folder_path = os.path.dirname(item.full_path)
-    return folder_path or item.full_path
-
-
-def full_path_web_url(path: str, base_url: str = "http://localhost:8001") -> str:
-    """
-    Web アプリの fullPathUrl と同じ URL を生成する。
-    """
-    return f"{base_url}/api/fullpath?path={quote(path, safe='')}"
-
-
-def folder_web_url(path: str, base_url: str = "http://localhost:8001") -> str:
-    """
-    Web アプリの folderUrl と同じ URL を生成する。
-    """
-    return f"{base_url}/?path={quote(path, safe='')}"
-
-
-def primary_web_url_for_item(item: SearchResultItem, base_url: str = "http://localhost:8001") -> str:
-    """
-    Web アプリの primaryUrl と同じ URL を生成する。
-    """
-    if item.result_kind == "folder":
-        return folder_web_url(item.full_path, base_url)
-    return full_path_web_url(item.full_path, base_url)
-
-
-def folder_web_url_for_item(item: SearchResultItem, base_url: str = "http://localhost:8001") -> str:
-    """
-    Web アプリのフォルダリンクと同じ URL を生成する。
-    """
-    return folder_web_url(folder_path_for_item(item), base_url)
