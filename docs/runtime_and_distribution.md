@@ -18,6 +18,7 @@
 
 この運用で必要なのは基本的に Python のみです。  
 Node.js / npm は、フロントエンドを再ビルドするときだけ必要です。
+デスクトップランチャーも同時に使う場合は、Python 環境へ `launcher/requirements.txt` も入れます。
 
 ## 起動方法ごとの違い
 
@@ -38,6 +39,7 @@ Node.js / npm は、フロントエンドを再ビルドするときだけ必要
 
 - `backend/.venv` がなければ作成する
 - Python 依存をインストールする
+- ランチャー自動起動に必要な Python 依存も `backend/.venv` にインストールする
 - `frontend/node_modules` がなければ `npm install` する
 - `frontend/dist/` を再ビルドする
 - バックエンドを `0.0.0.0:8079` で起動する
@@ -53,12 +55,14 @@ Node.js / npm は、フロントエンドを再ビルドするときだけ必要
 
 - Python
 - `frontend/dist/` がリポジトリに含まれていること
+- デスクトップランチャーを使う場合は `launcher/requirements.txt` の依存も入っていること
 
 動作:
 
 - `frontend/dist/` が存在すれば FastAPI からそのまま配信する
 - 既定では `127.0.0.1:8079` で起動する
 - 必要なら `SEARCH_APP_HOST` と `SEARCH_APP_PORT` で上書きできる
+- `backend/run.py` は既定で `SEARCH_APP_LAUNCHER_AUTOSTART=1` を設定し、ランチャーを子プロセスとして起動する
 
 ## 配布先での手順
 
@@ -68,6 +72,7 @@ Node.js / npm は、フロントエンドを再ビルドするときだけ必要
 cd backend
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install -r ..\launcher\requirements.txt
 ```
 
 ### 毎回の起動
@@ -121,10 +126,14 @@ $env:SEARCH_APP_PORT="8079"
 
 - `search.db`
 - `exclude_keywords.txt`
+- `hidden_indexed_targets.txt`
 - `synonym_groups.txt`
+- `obsidian_sidebar_explorer_data_path.txt`
+- `search_target_folders.txt`
 - `index_selected_extensions.txt`
 - `custom_content_extensions.txt`
 - `custom_filename_extensions.txt`
+- `launcher.log` は `backend/` 直下に保存する
 
 保存先ディレクトリは `SEARCH_APP_DATA_DIR` で、各ファイル名は `SEARCH_APP_*_NAME` 系の環境変数で上書きできる。
 

@@ -26,7 +26,7 @@
 - **GUIフレームワーク**: macOS では PyObjC / Cocoa `NSPanel`。その他 OS では Flet 版をフォールバックとして利用する。
 - **バックエンド連携**: 既存の FastAPI サーバーに HTTP で接続。ランチャーの初期実装では `/api/search`, `/api/search/click`, `/api/files/open-location` を利用する。
 - **グローバルキー監視**: macOS では Cocoa `NSEvent` の modifier flags 監視で `Option + Command` を検出する。その他 OS では `pynput` を利用する。
-- **常駐形態**: システムトレイ（タスクトレイ）にアイコンとして常駐し、バックエンドサーバーと共に起動。
+- **常駐形態**: バックエンドサーバー配下の子プロセスとして起動し、Web フロントの「ランチャー」ページから状態確認・起動・停止・再起動・ログ確認を行う。システムトレイ常駐は未実装。
 
 ## 5. フォルダ構成
 既存のWebアプリ（React）と分離するため、独立したディレクトリで管理します。
@@ -75,6 +75,15 @@ launcher/
 cd launcher
 python -m pip install -r requirements.txt
 PYTHONPATH=src python -m launcher_app.main
+```
+
+`backend/run.py` から自動起動する場合は、ランチャー依存関係をバックエンド実行に使う Python 環境にも入れておく。
+
+```bash
+cd backend
+python -m pip install -r requirements.txt
+python -m pip install -r ../launcher/requirements.txt
+python run.py
 ```
 
 環境変数:

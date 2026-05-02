@@ -155,7 +155,7 @@ cd /path/to/Local-fulltext-search
 - 起動前に `8079` を使用中なら停止してから起動
 
 この方法は開発用です。  
-`start_dev.sh` は `npm install` / `npm run build` を使うため、Node.js / npm が必要です。
+`start_dev.sh` は `npm install` / `npm run build` を使うため、Node.js / npm が必要です。ランチャー自動起動に必要な Python 依存も `backend/.venv` にインストールします。
 
 必要なら環境変数で上書きできます。
 
@@ -176,6 +176,7 @@ BACKEND_HOST=0.0.0.0 BACKEND_PORT=8079 ./start_dev.sh
 - Python 3 が入っていること
 - `pip install -r backend/requirements.txt` が 1 回実行できること
 - `frontend/dist/` が clone / pull した内容に含まれていること
+- デスクトップランチャーも使う場合は、同じ Python 環境に `launcher/requirements.txt` もインストールすること
 
 配布先で不要なもの:
 
@@ -190,6 +191,7 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -r ../launcher/requirements.txt
 python run.py
 ```
 
@@ -200,6 +202,7 @@ cd backend
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+pip install -r ..\launcher\requirements.txt
 python run.py
 ```
 
@@ -207,6 +210,7 @@ python run.py
 
 - API: `http://127.0.0.1:8079`
 - Health check: `http://127.0.0.1:8079/api/health`
+- デスクトップランチャー: `SEARCH_APP_LAUNCHER_AUTOSTART=1` が既定で、起動時に子プロセスとして開始する
 
 バインドアドレスを変更する場合:
 
@@ -232,6 +236,7 @@ python run.py
 cd backend
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install -r ..\launcher\requirements.txt
 ```
 
 起動コマンド:
@@ -350,7 +355,7 @@ DB について:
 - バックエンド起動時に `data` ディレクトリが自動作成される
 - スキーマはアプリ起動時に自動作成される
 - 既定の DB パスは、起動ディレクトリに依存せず常に `backend/data/search.db`
-- 同じ `backend/data/` 配下に `exclude_keywords.txt`, `synonym_groups.txt`, `index_selected_extensions.txt`, `custom_content_extensions.txt`, `custom_filename_extensions.txt` も保存される
+- 同じ `backend/data/` 配下に `exclude_keywords.txt`, `hidden_indexed_targets.txt`, `synonym_groups.txt`, `obsidian_sidebar_explorer_data_path.txt`, `search_target_folders.txt`, `index_selected_extensions.txt`, `custom_content_extensions.txt`, `custom_filename_extensions.txt` も保存される
 - 保存先を変えたい場合は `SEARCH_APP_DATA_DIR` と `SEARCH_APP_DB_NAME` で上書きできる
 
 例:
@@ -503,7 +508,7 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 例:
 
 ```text
-http://127.0.0.1:8079/?q=見積&full_path=%2FUsers%2Fmine%2FDocuments&index_depth=2
+http://127.0.0.1:8079/?q=見積&full_path=%2FUsers%2Fname%2FDocuments&index_depth=2
 ```
 
 Windows で UNC パスを渡す場合も、URL に入れるときは必ず URL エンコードしてください。

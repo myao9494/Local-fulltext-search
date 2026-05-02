@@ -37,6 +37,10 @@ ensure_backend_env() {
   if ! "${BACKEND_DIR}/.venv/bin/python" -c "import fastapi, uvicorn, pydantic" >/dev/null 2>&1; then
     "${BACKEND_DIR}/.venv/bin/pip" install -r "${BACKEND_DIR}/requirements.txt"
   fi
+
+  if ! "${BACKEND_DIR}/.venv/bin/python" -c "import flet, pynput" >/dev/null 2>&1; then
+    "${BACKEND_DIR}/.venv/bin/pip" install -r "${ROOT_DIR}/launcher/requirements.txt"
+  fi
 }
 
 ensure_frontend_env() {
