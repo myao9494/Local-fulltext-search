@@ -28,6 +28,10 @@ PANEL_HEIGHT = 520
 WEB_OPEN_BASE_URL = "http://localhost:8001"
 _delegate_ref: Any | None = None
 
+class FlippedView(AppKit.NSView):
+    def isFlipped(self) -> bool:
+        return True
+
 
 class LauncherPanel(AppKit.NSPanel):
     """
@@ -100,6 +104,90 @@ class LauncherDelegate(AppKit.NSObject):
         self.search_timer = threading.Timer(0.18, lambda: self._search(query, sequence))
         self.search_timer.daemon = True
         self.search_timer.start()
+
+    def control_textView_doCommandBySelector_(self, control: Any, textView: Any, commandSelector: Any) -> bool:
+        """
+        NSSearchField のテキスト入力中の上下キーとEnterキーを捕捉する。
+        """
+        selector = str(commandSelector)
+        if selector == "moveUp:":
+            self._move_selection(-1)
+            return True
+        elif selector == "moveDown:":
+            self._move_selection(1)
+            return True
+        elif selector == "insertNewline:":
+            self._open_selected()
+            return True
+        return False
+
+    @objc.python_method
+    def _move_selection(self, delta: int) -> None:
+        """
+        検索結果の選択位置を上下に移動し、必要に応じてスクロールする。
+        """
+        if not self.results:
+            return
+            
+        scroll_view = self.results_stack.enclosingScrollView()
+        saved_y = scroll_view.documentVisibleRect().origin.y if scroll_view else 0
+
+        self.selected_index = (self.selected_index + delta) % len(self.results)
+        self._render_results()
+        
+        if scroll_view:
+            clip_view = scroll_view.contentView()
+            clip_view.setBoundsOrigin_(AppKit.NSMakePoint(0, saved_y))
+            
+        self._scroll_to_selected()
+
+    @objc.python_method
+    def _open_selected(self) -> None:
+        """
+        現在選択中のアイテムを開く。
+        """
+        if not self.results:
+            return
+        item = self.results[self.selected_index]
+        self._open_item(item)
+
+    @objc.python_method
+    def _scroll_to_selected(self) -> None:
+        if not self.results:
+            return
+        card_height = 64
+        spacing = 8
+        y = self.selected_index * (card_height + spacing)
+        
+        scroll_view = self.results_stack.enclosingScrollView()
+        if not scroll_view:
+            return
+            
+        visible_rect = scroll_view.documentVisibleRect()
+        current_top = visible_rect.origin.y
+        current_bottom = current_top + visible_rect.size.height
+        
+        top_edge = y
+        bottom_edge = y + card_height
+        
+        new_y = current_top
+        
+        if top_edge < current_top:
+            # 上にはみ出た場合: 対象の上端に合わせる
+            new_y = top_edge - spacing
+        elif bottom_edge > current_bottom:
+            # 下にはみ出た場合: 次のカードが少し見えるように余分にスクロールする
+            new_y = bottom_edge - visible_rect.size.height + spacing + (card_height * 0.6)
+            
+        new_y = max(0, new_y)
+        
+        # documentViewの最大スクロール位置を超えないようにする
+        max_y = max(0, self.results_stack.frame().size.height - visible_rect.size.height)
+        new_y = min(new_y, max_y)
+        
+        clip_view = scroll_view.contentView()
+        clip_view.setBoundsOrigin_(AppKit.NSMakePoint(0, new_y))
+        scroll_view.reflectScrolledClipView_(clip_view)
 
     def toggle_panel(self) -> None:
         """
@@ -191,10 +279,10 @@ class LauncherDelegate(AppKit.NSObject):
         content.layer().setBorderWidth_(1.0)
         self.panel.setContentView_(content)
 
-        self.search_field = AppKit.NSSearchField.alloc().initWithFrame_(AppKit.NSMakeRect(34, PANEL_HEIGHT - 86, PANEL_WIDTH - 68, 48))
+        self.search_field = AppKit.NSSearchField.alloc().initWithFrame_(AppKit.NSMakeRect(34, PANEL_HEIGHT - 80, PANEL_WIDTH - 68, 36))
         self.search_field.setDelegate_(self)
         self.search_field.setPlaceholderString_("検索語を入力")
-        self.search_field.setFont_(AppKit.NSFont.systemFontOfSize_weight_(28, AppKit.NSFontWeightRegular))
+        self.search_field.setFont_(AppKit.NSFont.systemFontOfSize_weight_(20, AppKit.NSFontWeightRegular))
         self.search_field.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.9, 0.94, 1.0, 1.0))
         self.search_field.setDrawsBackground_(False)
         content.addSubview_(self.search_field)
@@ -203,10 +291,7 @@ class LauncherDelegate(AppKit.NSObject):
         scroll.setDrawsBackground_(False)
         scroll.setBorderType_(AppKit.NSNoBorder)
         scroll.setHasVerticalScroller_(True)
-        self.results_stack = AppKit.NSStackView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 66, PANEL_HEIGHT - 158))
-        self.results_stack.setOrientation_(AppKit.NSUserInterfaceLayoutOrientationVertical)
-        self.results_stack.setSpacing_(8)
-        self.results_stack.setAlignment_(AppKit.NSLayoutAttributeLeading)
+        self.results_stack = FlippedView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 66, PANEL_HEIGHT - 158))
         scroll.setDocumentView_(self.results_stack)
         content.addSubview_(scroll)
 
@@ -272,46 +357,79 @@ class LauncherDelegate(AppKit.NSObject):
         """
         現在の検索結果をクリック可能なカードとして描画する。
         """
-        for view in list(self.results_stack.arrangedSubviews()):
-            self.results_stack.removeArrangedSubview_(view)
+        for view in list(self.results_stack.subviews()):
             view.removeFromSuperview()
         self.result_lookup = {item.file_id: item for item in self.results}
+        
+        card_height = 64
+        spacing = 8
+        total_height = len(self.results) * (card_height + spacing)
+        new_height = max(PANEL_HEIGHT - 158, total_height)
+        self.results_stack.setFrameSize_(AppKit.NSMakeSize(PANEL_WIDTH - 66, new_height))
+
         for index, item in enumerate(self.results):
-            self.results_stack.addArrangedSubview_(self._make_result_card(item, index == self.selected_index))
+            card = self._make_result_card(item, index == self.selected_index)
+            card.setFrameOrigin_(AppKit.NSMakePoint(4, index * (card_height + spacing)))
+            self.results_stack.addSubview_(card)
 
     @objc.python_method
     def _make_result_card(self, item: SearchResultItem, selected: bool) -> AppKit.NSView:
         """
         検索結果 1 件を Web アプリの結果カードに近い操作群として描画する。
         """
-        card = AppKit.NSView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 74, 116))
+        card = FlippedView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 74, 64))
         card.setWantsLayer_(True)
-        color = (0.10, 0.32, 0.86, 0.98) if selected else (0.07, 0.11, 0.18, 0.98)
+        color = (0.11, 0.31, 0.85, 0.98) if selected else (0.07, 0.09, 0.15, 0.98)
         card.layer().setBackgroundColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*color).CGColor())
-        card.layer().setCornerRadius_(12)
+        card.layer().setCornerRadius_(8)
+        border_color = (0.38, 0.65, 0.98, 0.9) if selected else (0.12, 0.16, 0.22, 0.9)
+        card.layer().setBorderColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*border_color).CGColor())
+        card.layer().setBorderWidth_(1.0)
 
-        title = f"{item.file_name}\n{item.full_path}\n{_strip_html(item.snippet)[:112]}"
-        button = AppKit.NSButton.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 74, 96))
-        button.setTitle_(title)
-        button.setBezelStyle_(AppKit.NSBezelStyleRegularSquare)
-        button.setBordered_(False)
-        button.setAlignment_(AppKit.NSTextAlignmentLeft)
-        button.setFont_(AppKit.NSFont.systemFontOfSize_weight_(14, AppKit.NSFontWeightSemibold))
-        button.setContentTintColor_(AppKit.NSColor.whiteColor())
-        button.setTarget_(self)
-        button.setAction_("openResult:")
-        button.setTag_(int(item.file_id))
-        card.addSubview_(button)
+        # クリック全体を覆う透明ボタンを背面に配置
+        invisible_button = AppKit.NSButton.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 74, 64))
+        invisible_button.setTitle_("")
+        invisible_button.setTransparent_(True)
+        invisible_button.setTarget_(self)
+        invisible_button.setAction_("openResult:")
+        invisible_button.setTag_(int(item.file_id))
+        card.addSubview_(invisible_button)
+
+        title_label = AppKit.NSTextField.labelWithString_(item.file_name)
+        title_label.setFrame_(AppKit.NSMakeRect(16, 6, PANEL_WIDTH - 300, 20))
+        title_label.setTextColor_(AppKit.NSColor.whiteColor())
+        title_label.setFont_(AppKit.NSFont.boldSystemFontOfSize_(14))
+        title_label.setLineBreakMode_(AppKit.NSLineBreakByTruncatingTail)
+        card.addSubview_(title_label)
+
+        path_label = AppKit.NSTextField.labelWithString_(item.full_path)
+        path_label.setFrame_(AppKit.NSMakeRect(16, 26, PANEL_WIDTH - 300, 14))
+        path_label.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.58, 0.64, 0.73, 1.0) if not selected else AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.7, 0.8, 1.0, 1.0))
+        path_label.setFont_(AppKit.NSFont.systemFontOfSize_(10))
+        path_label.setLineBreakMode_(AppKit.NSLineBreakByTruncatingMiddle)
+        card.addSubview_(path_label)
+
+        snippet = _strip_html(item.snippet)[:120].replace("\n", " ")
+        snippet_label = AppKit.NSTextField.labelWithString_(snippet)
+        snippet_label.setFrame_(AppKit.NSMakeRect(16, 42, PANEL_WIDTH - 300, 16))
+        snippet_label.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.8, 0.83, 0.88, 1.0))
+        snippet_label.setFont_(AppKit.NSFont.systemFontOfSize_(11))
+        snippet_label.setLineBreakMode_(AppKit.NSLineBreakByTruncatingTail)
+        snippet_label.setMaximumNumberOfLines_(1)
+        card.addSubview_(snippet_label)
 
         finder_button = AppKit.NSButton.buttonWithTitle_target_action_("Finderで開く", self, "revealResult:")
-        finder_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 218, 8, 100, 26))
+        finder_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 240, 20, 76, 24))
         finder_button.setTag_(int(item.file_id))
+        finder_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
         card.addSubview_(finder_button)
 
         folder_button = AppKit.NSButton.buttonWithTitle_target_action_("フォルダを開く", self, "openFolderResult:")
-        folder_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 112, 8, 104, 26))
+        folder_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 156, 20, 82, 24))
         folder_button.setTag_(int(item.file_id))
+        folder_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
         card.addSubview_(folder_button)
+        
         return card
 
     def openResult_(self, sender: Any) -> None:
@@ -322,6 +440,10 @@ class LauncherDelegate(AppKit.NSObject):
         item = self.result_lookup.get(file_id)
         if item is None:
             return
+        self._open_item(item)
+
+    @objc.python_method
+    def _open_item(self, item: SearchResultItem) -> None:
         try:
             webbrowser.open(primary_web_url_for_item(item))
             if item.result_kind == "file":
