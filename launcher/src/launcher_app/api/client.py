@@ -97,14 +97,9 @@ class LauncherApiClient:
 
     def _open(self, request: Request) -> Any:
         """
-        標準 urlopen には timeout キーワードで渡し、テスト用スタブは従来の位置引数も許容する。
+        urlopen に timeout を渡してリクエストを実行する。
         """
-        try:
-            return self._urlopen(request, timeout=self.timeout)
-        except TypeError as error:
-            if "unexpected keyword argument" not in str(error):
-                raise
-            return self._urlopen(request, self.timeout)
+        return self._urlopen(request, timeout=self.timeout)
 
 
 def _parse_search_item(raw_item: object) -> SearchResultItem:

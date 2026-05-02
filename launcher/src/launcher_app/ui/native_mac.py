@@ -4,10 +4,8 @@ macOS Spaces 上でも現在のデスクトップへ表示できる Cocoa ネイ
 
 from __future__ import annotations
 
-import html
 import os
 import platform
-import re
 import threading
 from typing import Any
 from urllib.parse import quote
@@ -21,11 +19,11 @@ from launcher_app.api.client import LauncherApiClient
 from launcher_app.config import LauncherConfig
 from launcher_app.models import SearchResultItem
 from launcher_app.services.hotkeys import hotkey_spec_for_platform
+from launcher_app.utils import strip_html
 
 
 PANEL_WIDTH = 780
 PANEL_HEIGHT = 520
-WEB_OPEN_BASE_URL = "http://localhost:8001"
 _delegate_ref: Any | None = None
 
 class FlippedView(AppKit.NSView):
@@ -62,6 +60,7 @@ class LauncherDelegate(AppKit.NSObject):
             return self
         self.client = client
         self.config = config
+        self.web_base_url = config.web_base_url
         self.results: list[SearchResultItem] = []
         self.selected_index = 0
         self.search_sequence = 0
@@ -72,7 +71,6 @@ class LauncherDelegate(AppKit.NSObject):
         self.search_field = None
         self.status_label = None
         self.results_stack = None
-        self.result_lookup: dict[int, SearchResultItem] = {}
         return self
 
     def applicationDidFinishLaunching_(self, notification: Any) -> None:
@@ -132,8 +130,9 @@ class LauncherDelegate(AppKit.NSObject):
         scroll_view = self.results_stack.enclosingScrollView()
         saved_y = scroll_view.documentVisibleRect().origin.y if scroll_view else 0
 
+        old_index = self.selected_index
         self.selected_index = (self.selected_index + delta) % len(self.results)
-        self._render_results()
+        self._update_card_selection(old_index, self.selected_index)
         
         if scroll_view:
             clip_view = scroll_view.contentView()
@@ -202,7 +201,10 @@ class LauncherDelegate(AppKit.NSObject):
     def _start_hotkey_monitor(self) -> None:
         """
         Cocoa の modifier flags 監視で Option + Command を検出する。
+        既に登録済みの場合は二重登録しない。
         """
+        if self.hotkey_monitors:
+            return
         mask = AppKit.NSEventMaskFlagsChanged
 
         def handler(event: Any) -> Any:
@@ -359,7 +361,6 @@ class LauncherDelegate(AppKit.NSObject):
         """
         for view in list(self.results_stack.subviews()):
             view.removeFromSuperview()
-        self.result_lookup = {item.file_id: item for item in self.results}
         
         card_height = 64
         spacing = 8
@@ -368,14 +369,42 @@ class LauncherDelegate(AppKit.NSObject):
         self.results_stack.setFrameSize_(AppKit.NSMakeSize(PANEL_WIDTH - 66, new_height))
 
         for index, item in enumerate(self.results):
-            card = self._make_result_card(item, index == self.selected_index)
+            card = self._make_result_card(item, index, index == self.selected_index)
             card.setFrameOrigin_(AppKit.NSMakePoint(4, index * (card_height + spacing)))
             self.results_stack.addSubview_(card)
 
     @objc.python_method
-    def _make_result_card(self, item: SearchResultItem, selected: bool) -> AppKit.NSView:
+    def _update_card_selection(self, old_index: int, new_index: int) -> None:
+        """
+        選択変更時にカード全体を再構築せず、背景色とボーダー色のみを更新する。
+        """
+        subviews = self.results_stack.subviews()
+        count = len(subviews)
+        if old_index < count:
+            self._apply_card_style(subviews[old_index], selected=False)
+        if new_index < count:
+            self._apply_card_style(subviews[new_index], selected=True)
+
+    @objc.python_method
+    def _apply_card_style(self, card: AppKit.NSView, *, selected: bool) -> None:
+        """
+        カードの背景色・ボーダー色・パスラベル色を選択状態に応じて更新する。
+        """
+        bg = (0.11, 0.31, 0.85, 0.98) if selected else (0.07, 0.09, 0.15, 0.98)
+        border = (0.38, 0.65, 0.98, 0.9) if selected else (0.12, 0.16, 0.22, 0.9)
+        card.layer().setBackgroundColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*bg).CGColor())
+        card.layer().setBorderColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*border).CGColor())
+        # パスラベルは3番目のサブビュー (0: button, 1: title, 2: path)
+        subviews = card.subviews()
+        if len(subviews) > 2:
+            path_color = (0.7, 0.8, 1.0, 1.0) if selected else (0.58, 0.64, 0.73, 1.0)
+            subviews[2].setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*path_color))
+
+    @objc.python_method
+    def _make_result_card(self, item: SearchResultItem, index: int, selected: bool) -> AppKit.NSView:
         """
         検索結果 1 件を Web アプリの結果カードに近い操作群として描画する。
+        ボタンの tag にはリスト内インデックスを使い、file_id 衝突を回避する。
         """
         card = FlippedView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 74, 64))
         card.setWantsLayer_(True)
@@ -392,7 +421,7 @@ class LauncherDelegate(AppKit.NSObject):
         invisible_button.setTransparent_(True)
         invisible_button.setTarget_(self)
         invisible_button.setAction_("openResult:")
-        invisible_button.setTag_(int(item.file_id))
+        invisible_button.setTag_(index)
         card.addSubview_(invisible_button)
 
         title_label = AppKit.NSTextField.labelWithString_(item.file_name)
@@ -409,7 +438,7 @@ class LauncherDelegate(AppKit.NSObject):
         path_label.setLineBreakMode_(AppKit.NSLineBreakByTruncatingMiddle)
         card.addSubview_(path_label)
 
-        snippet = _strip_html(item.snippet)[:120].replace("\n", " ")
+        snippet = strip_html(item.snippet)[:120].replace("\n", " ")
         snippet_label = AppKit.NSTextField.labelWithString_(snippet)
         snippet_label.setFrame_(AppKit.NSMakeRect(16, 42, PANEL_WIDTH - 300, 16))
         snippet_label.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.8, 0.83, 0.88, 1.0))
@@ -420,13 +449,13 @@ class LauncherDelegate(AppKit.NSObject):
 
         finder_button = AppKit.NSButton.buttonWithTitle_target_action_("Finderで開く", self, "revealResult:")
         finder_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 240, 20, 76, 24))
-        finder_button.setTag_(int(item.file_id))
+        finder_button.setTag_(index)
         finder_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
         card.addSubview_(finder_button)
 
         folder_button = AppKit.NSButton.buttonWithTitle_target_action_("フォルダを開く", self, "openFolderResult:")
         folder_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 156, 20, 82, 24))
-        folder_button.setTag_(int(item.file_id))
+        folder_button.setTag_(index)
         folder_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
         card.addSubview_(folder_button)
         
@@ -436,16 +465,15 @@ class LauncherDelegate(AppKit.NSObject):
         """
         Web アプリのタイトルリンクと同じ URL を既定ブラウザで開く。
         """
-        file_id = int(sender.tag())
-        item = self.result_lookup.get(file_id)
-        if item is None:
+        index = int(sender.tag())
+        if index < 0 or index >= len(self.results):
             return
-        self._open_item(item)
+        self._open_item(self.results[index])
 
     @objc.python_method
     def _open_item(self, item: SearchResultItem) -> None:
         try:
-            webbrowser.open(primary_web_url_for_item(item))
+            webbrowser.open(primary_web_url_for_item(item, self.web_base_url))
             if item.result_kind == "file":
                 self.client.record_click(item.file_id)
             self.hide_panel()
@@ -456,9 +484,10 @@ class LauncherDelegate(AppKit.NSObject):
         """
         Web アプリの Finder で開くボタンと同じ backend API を呼ぶ。
         """
-        item = self.result_lookup.get(int(sender.tag()))
-        if item is None:
+        index = int(sender.tag())
+        if index < 0 or index >= len(self.results):
             return
+        item = self.results[index]
         target_path = item.full_path if item.result_kind == "folder" else folder_path_for_item(item)
         try:
             self.client.open_location(target_path)
@@ -469,10 +498,11 @@ class LauncherDelegate(AppKit.NSObject):
         """
         Web アプリのフォルダリンクと同じ URL を既定ブラウザで開く。
         """
-        item = self.result_lookup.get(int(sender.tag()))
-        if item is None:
+        index = int(sender.tag())
+        if index < 0 or index >= len(self.results):
             return
-        webbrowser.open(folder_web_url_for_item(item))
+        item = self.results[index]
+        webbrowser.open(folder_web_url_for_item(item, self.web_base_url))
 
 
 def run_native_mac_app(config: LauncherConfig | None = None) -> None:
@@ -496,13 +526,6 @@ def run_native_mac_app(config: LauncherConfig | None = None) -> None:
     AppHelper.runEventLoop()
 
 
-def _strip_html(value: str) -> str:
-    """
-    API スニペットの HTML タグを Cocoa の通常テキストへ変換する。
-    """
-    return html.unescape(re.sub(r"<[^>]+>", "", value)).strip()
-
-
 def folder_path_for_item(item: SearchResultItem) -> str:
     """
     Web アプリの getFolderPath と同じ用途で、ファイルの親フォルダを返す。
@@ -513,31 +536,31 @@ def folder_path_for_item(item: SearchResultItem) -> str:
     return folder_path or item.full_path
 
 
-def full_path_web_url(path: str) -> str:
+def full_path_web_url(path: str, base_url: str = "http://localhost:8001") -> str:
     """
     Web アプリの fullPathUrl と同じ URL を生成する。
     """
-    return f"{WEB_OPEN_BASE_URL}/api/fullpath?path={quote(path, safe='')}"
+    return f"{base_url}/api/fullpath?path={quote(path, safe='')}"
 
 
-def folder_web_url(path: str) -> str:
+def folder_web_url(path: str, base_url: str = "http://localhost:8001") -> str:
     """
     Web アプリの folderUrl と同じ URL を生成する。
     """
-    return f"{WEB_OPEN_BASE_URL}/?path={quote(path, safe='')}"
+    return f"{base_url}/?path={quote(path, safe='')}"
 
 
-def primary_web_url_for_item(item: SearchResultItem) -> str:
+def primary_web_url_for_item(item: SearchResultItem, base_url: str = "http://localhost:8001") -> str:
     """
     Web アプリの primaryUrl と同じ URL を生成する。
     """
     if item.result_kind == "folder":
-        return folder_web_url(item.full_path)
-    return full_path_web_url(item.full_path)
+        return folder_web_url(item.full_path, base_url)
+    return full_path_web_url(item.full_path, base_url)
 
 
-def folder_web_url_for_item(item: SearchResultItem) -> str:
+def folder_web_url_for_item(item: SearchResultItem, base_url: str = "http://localhost:8001") -> str:
     """
     Web アプリのフォルダリンクと同じ URL を生成する。
     """
-    return folder_web_url(folder_path_for_item(item))
+    return folder_web_url(folder_path_for_item(item), base_url)

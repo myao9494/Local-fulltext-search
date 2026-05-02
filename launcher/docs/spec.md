@@ -53,9 +53,24 @@ launcher/
 - ファイル結果を開いた場合は Web アプリと同じく `/api/search/click` でアクセス数を更新する。
 - `Finderで開く` は Web アプリと同じく `/api/files/open-location` を呼ぶ。
 - macOS では `NSWindowCollectionBehaviorCanJoinAllSpaces` により、アクティブな仮想デスクトップ上へ表示する。
-- macOS ではグローバルホットキーを有効にするため、起動元のターミナル/アプリに「システム設定 > プライバシーとセキュリティ > アクセシビリティ」の許可が必要。
 
-## 7. 起動方法
+## 7. OS 別パーミッション・注意事項
+
+### macOS
+- **アクセシビリティ許可**: グローバルホットキーを有効にするため、起動元のターミナル/アプリに「システム設定 > プライバシーとセキュリティ > アクセシビリティ」の許可が必要。
+- **管理者権限**: 不要。
+
+### Windows
+- **管理者権限**: 不要。pynput は Win32 のユーザーレベルフック (`SetWindowsHookEx`) を使用するため、通常のユーザー権限で動作する。
+- **UAC 昇格ウィンドウ**: 管理者として実行中のアプリ（タスクマネージャー等）が前面にあるとき、pynput はそのウィンドウのキー入力を捕捉できない。これは Windows のセキュリティ仕様であり回避不可。
+- **ウイルス対策ソフト**: pynput はキーボード入力を監視するため、一部のウイルス対策ソフトがキーロガーと誤検知する場合がある。必要に応じてランチャーの実行ファイルを除外設定に追加する。
+- **ファイアウォール**: バックエンドが localhost 以外のマシンにある場合は、受信規則の追加が必要。
+
+### Linux
+- **pynput 依存**: X11 環境では `xdotool` や `Xlib` が必要な場合がある。Wayland 環境では pynput のグローバルキー監視が動作しない場合がある。
+- **管理者権限**: 不要。ただし `/dev/input` へのアクセスにユーザーグループ (`input`) への追加が必要な場合がある。
+
+## 8. 起動方法
 ```bash
 cd launcher
 python -m pip install -r requirements.txt
@@ -64,6 +79,7 @@ PYTHONPATH=src python -m launcher_app.main
 
 環境変数:
 - `LAUNCHER_API_BASE_URL`: 接続先 API。既定値は `http://127.0.0.1:8079`。
+- `LAUNCHER_WEB_BASE_URL`: Web フロント URL。既定値は `http://localhost:8001`。
 - `LAUNCHER_SEARCH_LIMIT`: ランチャーに表示する検索結果数。既定値は `8`。
 - `LAUNCHER_REQUEST_TIMEOUT`: API タイムアウト秒数。既定値は `5.0`。
 - `SEARCH_APP_LAUNCHER_AUTOSTART`: バックエンド起動時にランチャーも起動するか。`backend/run.py` と `start_dev.sh` では既定で `1`。
@@ -73,9 +89,8 @@ PYTHONPATH=src python -m launcher_app.main
 - ファイル: `http://localhost:8001/api/fullpath?path=<encoded full_path>`
 - フォルダ: `http://localhost:8001/?path=<encoded folder_path>`
 
-## 8. 今後の課題（プロトタイプ後に検討）
+## 9. 今後の課題（プロトタイプ後に検討）
 - ネオン調のグロー効果などの装飾。
 - 検索履歴の保持。
 - コマンド実行機能。
 - システムトレイ常駐とバックエンド同時起動。
-- マウスカーソルのあるディスプレイ中央への表示。

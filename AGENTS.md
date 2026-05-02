@@ -58,10 +58,11 @@
 - API リクエストごとに SQLite 接続を開閉し、スレッド間で同一接続を共有しない。
 - インデックス中止要求は DB の `index_runs.cancel_requested` にも保存し、別プロセスのスケジューラー実行から検知できるようにする。
 
-## デスクトップランチャー (Flet)
+## デスクトップランチャー (Flet / PyObjC)
 - **フォルダ**: `launcher/` にソースコードとドキュメントを分離して管理。
-- **UI**: Flet を使用したクロスプラットフォーム (Win/Mac) 対応。
+- **UI**: macOS では PyObjC / Cocoa `NSPanel`。その他 OS では Flet をフォールバック使用。
 - **ホットキー**: `Option + Command` (Mac) / `Alt + Win` (Win) によるグローバル表示切り替え。
+- **設定**: `LAUNCHER_API_BASE_URL`（API接続先）、`LAUNCHER_WEB_BASE_URL`（Webフロント URL）、`LAUNCHER_SEARCH_LIMIT`、`LAUNCHER_REQUEST_TIMEOUT` を環境変数で設定可能。
 - **挙動**: 
   - マウスカーソルのあるディスプレイに表示。
   - フォーカス喪失時（blur）に自動非表示。

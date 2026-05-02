@@ -12,7 +12,7 @@
 ## 2. システム連携図
 
 ```mermaid
-graph LN
+graph LR
     subgraph "OS (Windows/Mac)"
         HK[Global Hotkey: Opt+Cmd]
         Mouse[Mouse Cursor Position]

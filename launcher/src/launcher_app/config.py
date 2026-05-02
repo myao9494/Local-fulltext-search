@@ -13,6 +13,7 @@ class LauncherConfig:
     """
 
     api_base_url: str = "http://127.0.0.1:8079"
+    web_base_url: str = "http://localhost:8001"
     search_limit: int = 8
     request_timeout: float = 5.0
 
@@ -23,6 +24,7 @@ class LauncherConfig:
         """
         return cls(
             api_base_url=os.environ.get("LAUNCHER_API_BASE_URL", cls.api_base_url),
+            web_base_url=os.environ.get("LAUNCHER_WEB_BASE_URL", cls.web_base_url),
             search_limit=_read_int("LAUNCHER_SEARCH_LIMIT", cls.search_limit),
             request_timeout=_read_float("LAUNCHER_REQUEST_TIMEOUT", cls.request_timeout),
         )

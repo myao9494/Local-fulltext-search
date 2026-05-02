@@ -4,10 +4,9 @@ Spotlight 風の Flet ランチャー UI を構築する。
 
 from __future__ import annotations
 
-import html
 import logging
-import re
 import threading
+import time
 from typing import Any
 
 from launcher_app.api.client import LauncherApiClient, LauncherApiError
@@ -15,6 +14,7 @@ from launcher_app.config import LauncherConfig
 from launcher_app.models import SearchResultItem
 from launcher_app.services.file_actions import FileActionError, open_path, reveal_path
 from launcher_app.services.hotkeys import GlobalHotkeyController, hotkey_spec_for_platform
+from launcher_app.utils import strip_html
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ class LauncherApp:
         self.hotkeys: GlobalHotkeyController | None = None
         self.is_hidden = False
         self.search_sequence = 0
+        self._show_time: float = 0.0
 
     def build(self) -> None:
         """
@@ -108,17 +109,24 @@ class LauncherApp:
     def toggle_window(self) -> None:
         """
         ホットキーから呼ばれ、ウィンドウの表示状態を切り替える。
+        pynput のリスナースレッドから呼ばれるため、page.run_task で
+        メインスレッドへディスパッチする。
         """
-        if self.is_hidden or bool(getattr(self.page.window, "minimized", False)):
-            self._show_window()
-        else:
-            self._hide_window()
+
+        async def _toggle() -> None:
+            if self.is_hidden or bool(getattr(self.page.window, "minimized", False)):
+                self._show_window()
+            else:
+                self._hide_window()
+
+        self.page.run_task(_toggle)
 
     def _show_window(self) -> None:
         """
         セッションを閉じずに、最小化していたランチャーを前面へ戻す。
         """
         self.is_hidden = False
+        self._show_time = time.monotonic()
         self.page.window.minimized = False
         self.page.window.opacity = 1
         self._run_window_task(self.page.window.center)
@@ -179,23 +187,35 @@ class LauncherApp:
 
     def _search(self, query: str, sequence: int) -> None:
         """
-        バックグラウンドで検索し、完了後に結果リストを更新する。
+        バックグラウンドで API 検索を実行し、UI 更新はメインスレッドへ戻す。
         """
         try:
             response = self.client.search(query, limit=self.config.search_limit)
         except Exception as error:
             if sequence != self.search_sequence:
                 return
-            self.results = []
-            self.status.value = f"検索に失敗しました: {error}"
+
+            async def _apply_error() -> None:
+                self.results = []
+                self.status.value = f"検索に失敗しました: {error}"
+                self._render_results()
+
+            self.page.run_task(_apply_error)
         else:
             if sequence != self.search_sequence:
                 return
-            self.results = response.items
-            self.selected_index = 0
-            suffix = " さらに結果があります" if response.has_more else ""
-            self.status.value = f"{response.total} 件{suffix}"
-        self._render_results()
+            items = response.items
+            total = response.total
+            has_more = response.has_more
+
+            async def _apply_results() -> None:
+                self.results = items
+                self.selected_index = 0
+                suffix = " さらに結果があります" if has_more else ""
+                self.status.value = f"{total} 件{suffix}"
+                self._render_results()
+
+            self.page.run_task(_apply_results)
 
     def _render_results(self) -> None:
         """
@@ -212,7 +232,7 @@ class LauncherApp:
         検索結果 1 件を選択可能なタイルとして描画する。
         """
         ft = self.ft
-        snippet = _strip_html(item.snippet)
+        snippet = strip_html(item.snippet)
         return ft.Container(
             on_click=lambda event, result=item: self._select_and_open(result),
             padding=ft.padding.symmetric(horizontal=14, vertical=10),
@@ -223,7 +243,7 @@ class LauncherApp:
             content=ft.Row(
                 spacing=12,
                 controls=[
-                    ft.Icon(_icon_for_item(item), color="#bfdbfe" if selected else "#94a3b8", size=22),
+                    ft.Icon(self._icon_for_item(item), color="#bfdbfe" if selected else "#94a3b8", size=22),
                     ft.Column(
                         expand=True,
                         spacing=3,
@@ -255,11 +275,16 @@ class LauncherApp:
             else:
                 self._open_selected()
 
+    _BLUR_GUARD_SECONDS = 0.3
+
     def _on_window_event(self, event: Any) -> None:
         """
         フォーカス喪失時に自動でランチャーを隠す。
+        表示直後の blur はウィンドウマネージャー起因のため無視する。
         """
         if getattr(event, "data", "") == "blur":
+            if time.monotonic() - self._show_time < self._BLUR_GUARD_SECONDS:
+                return
             self._hide_window()
 
     def _move_selection(self, delta: int) -> None:
@@ -307,22 +332,17 @@ class LauncherApp:
         self.page.update()
 
 
-def _strip_html(value: str) -> str:
-    """
-    API スニペットの mark 等を外し、Flet の通常テキストへ変換する。
-    """
-    return html.unescape(re.sub(r"<[^>]+>", "", value)).strip()
 
+    @staticmethod
+    def _icon_for_item(item: SearchResultItem) -> Any:
+        """
+        結果種別に合う Flet アイコンを返す。
+        """
+        import flet as ft
 
-def _icon_for_item(item: SearchResultItem) -> Any:
-    """
-    結果種別に合う Flet アイコンを返す。
-    """
-    import flet as ft
-
-    if item.result_kind == "folder":
-        return ft.Icons.FOLDER_ROUNDED
-    return ft.Icons.DESCRIPTION_ROUNDED
+        if item.result_kind == "folder":
+            return ft.Icons.FOLDER_ROUNDED
+        return ft.Icons.DESCRIPTION_ROUNDED
 
 
 def _log_task_error(future: Any) -> None:
