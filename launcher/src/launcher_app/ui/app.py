@@ -4,7 +4,10 @@ Spotlight 風の Flet ランチャー UI を構築する。
 
 from __future__ import annotations
 
+import inspect
 import logging
+import platform
+import subprocess
 import threading
 import time
 from typing import Any
@@ -14,10 +17,15 @@ from launcher_app.api.client import LauncherApiClient, LauncherApiError
 from launcher_app.config import LauncherConfig
 from launcher_app.models import SearchResultItem
 from launcher_app.services.hotkeys import GlobalHotkeyController, hotkey_spec_for_platform
-from launcher_app.ui.urls import folder_path_for_item, primary_web_url_for_item
+from launcher_app.ui.urls import folder_path_for_item, folder_web_url_for_item, primary_web_url_for_item
 from launcher_app.utils import strip_html
 
 logger = logging.getLogger(__name__)
+WINDOW_WIDTH = 820
+WINDOW_HEIGHT = 560
+RESULTS_HEIGHT = 390
+RESULT_TILE_SCROLL_STEP = 82
+VISIBLE_RESULT_COUNT = 4
 
 
 def run_app(config: LauncherConfig | None = None) -> None:
@@ -59,7 +67,7 @@ class LauncherApp:
 
         self.ft = ft
         self.page.title = "Local Fulltext Search Launcher"
-        self.page.bgcolor = ft.Colors.TRANSPARENT
+        self.page.bgcolor = "#0f172a"
         self.page.padding = 0
         self._configure_window()
         self.query = ft.TextField(
@@ -73,31 +81,60 @@ class LauncherApp:
             on_submit=lambda event: self._open_selected(),
         )
         self.status = ft.Text("", color="#94a3b8", size=12)
-        self.results_column = ft.Column(spacing=6)
+        self.results_list = ft.ListView(spacing=8, height=RESULTS_HEIGHT, padding=ft.padding.only(right=4), auto_scroll=False)
+        self.results_column = self.results_list
+        self.clear_button = ft.IconButton(
+            icon=ft.Icons.CLOSE_ROUNDED,
+            icon_color="#94a3b8",
+            tooltip="検索をクリア",
+            width=40,
+            height=40,
+            on_click=lambda event: self._clear_search(),
+        )
+        self.gui_button = ft.TextButton(
+            "Web GUI",
+            icon=ft.Icons.OPEN_IN_BROWSER_ROUNDED,
+            style=ft.ButtonStyle(color="#93c5fd", padding=ft.padding.symmetric(horizontal=10, vertical=6)),
+            on_click=lambda event: self._open_gui_url(),
+        )
         self.root = ft.Container(
-            width=760,
+            width=WINDOW_WIDTH,
+            height=WINDOW_HEIGHT,
             padding=ft.padding.symmetric(horizontal=22, vertical=18),
-            border_radius=24,
+            border_radius=18,
             bgcolor="#0f172a",
             border=ft.border.all(1, "#1d4ed8"),
             shadow=ft.BoxShadow(blur_radius=34, color="#000000", offset=ft.Offset(0, 18)),
             content=ft.Column(
-                spacing=14,
+                spacing=12,
                 controls=[
+                    ft.WindowDragArea(
+                        content=ft.Container(
+                            height=18,
+                            alignment=ft.Alignment(0, 0),
+                            content=ft.Container(width=86, height=4, border_radius=2, bgcolor="#334155"),
+                        )
+                    ),
                     ft.Row(
                         spacing=12,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
                             ft.Icon(ft.Icons.SEARCH_ROUNDED, color="#60a5fa", size=30),
                             ft.Container(expand=True, content=self.query),
+                            self.clear_button,
+                            self.gui_button,
                         ],
                     ),
-                    self.results_column,
+                    ft.Container(
+                        height=RESULTS_HEIGHT,
+                        clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                        content=self.results_list,
+                    ),
                     self.status,
                 ],
             ),
         )
-        self.page.add(ft.Container(alignment=ft.Alignment(0, -1), padding=ft.padding.only(top=120), content=self.root))
+        self.page.add(self.root)
         self.page.on_keyboard_event = self._on_keyboard
         self.page.on_window_event = self._on_window_event
         self.hotkeys = GlobalHotkeyController(self.toggle_window)
@@ -148,10 +185,11 @@ class LauncherApp:
         Spotlight 風のフレームレス常時手前ウィンドウに設定する。
         """
         window = self.page.window
-        window.width = 820
-        window.height = 520
+        window.width = WINDOW_WIDTH
+        window.height = WINDOW_HEIGHT
         window.frameless = True
-        window.transparent = True
+        window.transparent = False
+        window.bgcolor = "#0f172a"
         window.always_on_top = True
         window.resizable = False
         window.skip_task_bar = True
@@ -163,7 +201,9 @@ class LauncherApp:
         """
         if callable(task):
             future = self.page.run_task(task)
-            future.add_done_callback(_log_task_error)
+            add_done_callback = getattr(future, "add_done_callback", None)
+            if callable(add_done_callback):
+                add_done_callback(_log_task_error)
 
     def _on_query_change(self, event: Any) -> None:
         """
@@ -185,6 +225,21 @@ class LauncherApp:
         self.search_timer = threading.Timer(0.18, lambda: self._search(query, sequence))
         self.search_timer.daemon = True
         self.search_timer.start()
+
+    def _clear_search(self) -> None:
+        """
+        検索語・結果・選択状態を初期化して入力欄へフォーカスを戻す。
+        """
+        if self.search_timer is not None:
+            self.search_timer.cancel()
+            self.search_timer = None
+        self.search_sequence += 1
+        self.query.value = ""
+        self.results = []
+        self.selected_index = 0
+        self.status.value = ""
+        self._render_results()
+        self._run_window_task(self.query.focus)
 
     def _search(self, query: str, sequence: int) -> None:
         """
@@ -225,39 +280,66 @@ class LauncherApp:
         """
         controls = []
         for index, item in enumerate(self.results):
-            controls.append(self._result_tile(item, selected=index == self.selected_index))
+            controls.append(self._result_tile(item, index=index, selected=index == self.selected_index))
         self.results_column.controls = controls
         self.page.update()
 
-    def _result_tile(self, item: SearchResultItem, *, selected: bool) -> Any:
+    def _result_tile(self, item: SearchResultItem, *, index: int, selected: bool) -> Any:
         """
         検索結果 1 件を選択可能なタイルとして描画する。
         """
         ft = self.ft
         snippet = strip_html(item.snippet)
+        reveal_label = "Explorerで開く" if self._platform_name() == "Windows" else "Finderで開く"
         return ft.Container(
+            key=f"result-{index}",
             on_click=lambda event, result=item: self._select_and_open(result),
-            padding=ft.padding.symmetric(horizontal=14, vertical=10),
-            border_radius=12,
+            padding=ft.padding.symmetric(horizontal=14, vertical=9),
+            border_radius=8,
             bgcolor="#1d4ed8" if selected else "#111827",
             border=ft.border.all(1, "#60a5fa" if selected else "#1f2937"),
             animate=ft.Animation(120, ft.AnimationCurve.EASE_OUT),
             content=ft.Row(
                 spacing=12,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 controls=[
                     ft.Icon(self._icon_for_item(item), color="#bfdbfe" if selected else "#94a3b8", size=22),
                     ft.Column(
                         expand=True,
-                        spacing=3,
+                        spacing=2,
                         controls=[
                             ft.Text(item.file_name, color="#f8fafc", size=15, weight=ft.FontWeight.W_600, max_lines=1),
                             ft.Text(item.full_path, color="#93c5fd" if selected else "#94a3b8", size=11, max_lines=1),
-                            ft.Text(snippet, color="#cbd5e1", size=12, max_lines=2),
+                            ft.Text(snippet, color="#cbd5e1", size=12, max_lines=1),
                         ],
                     ),
-                    ft.Text(str(item.click_count), color="#93c5fd", size=12),
+                    ft.Row(
+                        spacing=6,
+                        controls=[
+                            self._small_action_button("フルパス", ft.Icons.CONTENT_COPY_ROUNDED, lambda event, result=item: self._copy_path(result)),
+                            self._small_action_button(reveal_label, ft.Icons.FOLDER_OPEN_ROUNDED, lambda event, result=item: self._reveal_item(result)),
+                            self._small_action_button("フォルダを開く", ft.Icons.OPEN_IN_NEW_ROUNDED, lambda event, result=item: self._open_folder_url(result)),
+                        ],
+                    ),
                 ],
             ),
+        )
+
+    def _small_action_button(self, label: str, icon: Any, handler: Any) -> Any:
+        """
+        検索結果カード内の小さな操作ボタンを作る。
+        """
+        ft = self.ft
+        return ft.TextButton(
+            label,
+            icon=icon,
+            style=ft.ButtonStyle(
+                color="#dbeafe",
+                bgcolor="#1e293b",
+                padding=ft.padding.symmetric(horizontal=8, vertical=5),
+                shape=ft.RoundedRectangleBorder(radius=6),
+            ),
+            on_click=handler,
         )
 
     def _on_keyboard(self, event: Any) -> None:
@@ -297,6 +379,20 @@ class LauncherApp:
             return
         self.selected_index = (self.selected_index + delta) % len(self.results)
         self._render_results()
+        self._scroll_to_selected(delta)
+
+    def _scroll_to_selected(self, delta: int = 0) -> None:
+        """
+        キーボード選択中のカードがリスト表示範囲に入るようスクロールする。
+        """
+        scroll_to = getattr(self.results_column, "scroll_to", None)
+        if callable(scroll_to):
+            if delta > 0:
+                anchor_index = max(self.selected_index - VISIBLE_RESULT_COUNT + 1, 0)
+            else:
+                anchor_index = self.selected_index
+            scroll_to(offset=max(anchor_index * RESULT_TILE_SCROLL_STEP, 0), duration=120)
+            self.page.update()
 
     def _open_selected(self) -> None:
         """
@@ -326,6 +422,12 @@ class LauncherApp:
         if not self.results:
             return
         item = self.results[self.selected_index]
+        self._reveal_item(item)
+
+    def _reveal_item(self, item: SearchResultItem) -> None:
+        """
+        指定結果の保存場所を Explorer / Finder で開く。
+        """
         target_path = item.full_path if item.result_kind == "folder" else folder_path_for_item(item)
         try:
             self.client.open_location(target_path)
@@ -333,6 +435,63 @@ class LauncherApp:
         except LauncherApiError as error:
             self.status.value = f"保存場所を開けませんでした: {error}"
         self.page.update()
+
+    def _copy_path(self, item: SearchResultItem) -> None:
+        """
+        フルパスをクリップボードへコピーする。
+        """
+        self._copy_text_to_clipboard(item.full_path)
+        self.status.value = "クリップボードにコピーしました"
+        self.page.update()
+
+    def _copy_text_to_clipboard(self, text: str) -> None:
+        """
+        Flet の非同期 clipboard API と Windows の OS クリップボードへ文字列をコピーする。
+        """
+        set_clipboard = getattr(self.page, "set_clipboard", None)
+        if callable(set_clipboard):
+            set_clipboard(text)
+        else:
+            clipboard = getattr(self.page, "clipboard", None)
+            clipboard_set = getattr(clipboard, "set", None)
+            if callable(clipboard_set):
+                result = clipboard_set(text)
+                if inspect.isawaitable(result):
+                    async def _await_clipboard_set() -> None:
+                        await result
+
+                    self.page.run_task(_await_clipboard_set)
+
+        if platform.system() == "Windows":
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command", "$input | Set-Clipboard"],
+                input=text,
+                text=True,
+                check=False,
+                capture_output=True,
+            )
+
+    def _open_folder_url(self, item: SearchResultItem) -> None:
+        """
+        Web アプリのフォルダリンクを既定ブラウザで開く。
+        """
+        webbrowser.open(folder_web_url_for_item(item, self.config.web_base_url))
+
+    def _open_gui_url(self) -> None:
+        """
+        Web GUI を既定ブラウザで開く。
+        """
+        webbrowser.open("http://127.0.0.1:8079/")
+        self._hide_window()
+
+    @staticmethod
+    def _platform_name() -> str:
+        """
+        OS 名を返す。テスト時に差し替えやすいよう分離する。
+        """
+        import platform
+
+        return platform.system()
 
 
 

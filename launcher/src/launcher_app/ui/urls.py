@@ -18,21 +18,21 @@ def folder_path_for_item(item: SearchResultItem) -> str:
     return folder_path or item.full_path
 
 
-def full_path_web_url(path: str, base_url: str = "http://localhost:8001") -> str:
+def full_path_web_url(path: str, base_url: str = "http://127.0.0.1:8079") -> str:
     """
     Web アプリの fullPathUrl と同じ URL を生成する。
     """
     return f"{base_url}/api/fullpath?path={quote(path, safe='')}"
 
 
-def folder_web_url(path: str, base_url: str = "http://localhost:8001") -> str:
+def folder_web_url(path: str, base_url: str = "http://127.0.0.1:8079") -> str:
     """
     Web アプリの folderUrl と同じ URL を生成する。
     """
     return f"{base_url}/?path={quote(path, safe='')}"
 
 
-def primary_web_url_for_item(item: SearchResultItem, base_url: str = "http://localhost:8001") -> str:
+def primary_web_url_for_item(item: SearchResultItem, base_url: str = "http://127.0.0.1:8079") -> str:
     """
     Web アプリの primaryUrl と同じ URL を生成する。
     """
@@ -41,7 +41,7 @@ def primary_web_url_for_item(item: SearchResultItem, base_url: str = "http://loc
     return full_path_web_url(item.full_path, base_url)
 
 
-def folder_web_url_for_item(item: SearchResultItem, base_url: str = "http://localhost:8001") -> str:
+def folder_web_url_for_item(item: SearchResultItem, base_url: str = "http://127.0.0.1:8079") -> str:
     """
     Web アプリのフォルダリンクと同じ URL を生成する。
     """

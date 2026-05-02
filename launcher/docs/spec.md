@@ -4,13 +4,13 @@
 本アプリケーションは、ローカル全文検索システムのバックエンドを利用し、デスクトップ上でいつでも呼び出し可能な高速検索インターフェース（ランチャー）を提供します。MacのSpotlightやRaycastのような操作感を目指します。
 
 ## 2. コア機能
-- **グローバルホットキー**: `Option + Command` (Mac) または `Alt + Win` (Windows) で即座に表示/非表示を切り替え。
+- **グローバルホットキー**: `Option + Command` (Mac) または `Ctrl + Alt` (Windows) で即座に表示/非表示を切り替え。
 - **SpotlightスタイルUI**: 画面中央にフローティング表示される、枠のないスタイリッシュな検索バー。
 - **リアルタイム検索**: 入力と同時にバックエンドへ問い合わせを行い、結果を動的に表示。
 - **アクション**:
-    - 検索結果タイトル相当のクリック: Web アプリと同じ `http://localhost:8001/api/fullpath?path=...` または `http://localhost:8001/?path=...` を開く。
+    - 検索結果タイトル相当のクリック: Web アプリと同じ `http://127.0.0.1:8079/api/fullpath?path=...` または `http://127.0.0.1:8079/?path=...` を開く。
     - `Finderで開く`: Web アプリと同じ `/api/files/open-location` を使い、ファイルの場合は親フォルダ、フォルダの場合はそのフォルダを開く。
-    - `フォルダを開く`: Web アプリと同じ `http://localhost:8001/?path=...` を開く。
+    - `フォルダを開く`: Web アプリと同じ `http://127.0.0.1:8079/?path=...` を開く。
 - **オートハイド**:
     - 実行完了（ファイル起動）時に自動的に非表示。
     - ウィンドウ外をクリック（フォーカス喪失）した際に自動的に非表示。
@@ -50,7 +50,7 @@ launcher/
 - `backend/run.py` または `start_dev.sh` でバックエンドを起動すると、`SEARCH_APP_LAUNCHER_AUTOSTART=1` によりランチャーも子プロセスとして自動起動する。
 - Web フロントの「ランチャー」ページから、起動・停止・再起動・状態確認・ログ確認を行える。
 - 検索は全DB対象 (`search_all_enabled=true`) かつ既存インデックス優先 (`skip_refresh=true`) で実行する。
-- 検索結果タイトル相当のクリックは Web アプリと同じ URL (`http://localhost:8001/api/fullpath?path=...` / `http://localhost:8001/?path=...`) を既定ブラウザで開く。
+- 検索結果タイトル相当のクリックは Web アプリと同じ URL (`http://127.0.0.1:8079/api/fullpath?path=...` / `http://127.0.0.1:8079/?path=...`) を既定ブラウザで開く。
 - ファイル結果を開いた場合は Web アプリと同じく `/api/search/click` でアクセス数を更新する。
 - `Finderで開く` は Web アプリと同じく `/api/files/open-location` を呼ぶ。
 - macOS では `NSWindowCollectionBehaviorCanJoinAllSpaces` により、アクティブな仮想デスクトップ上へ表示する。
@@ -79,26 +79,25 @@ python -m pip install -r requirements.txt
 PYTHONPATH=src python -m launcher_app.main
 ```
 
-`backend/run.py` から自動起動する場合は、ランチャー依存関係をバックエンド実行に使う Python 環境にも入れておく。
+`backend/run.py` から自動起動する場合は、ランチャー依存関係も含む `backend/requirements.txt` をバックエンド実行に使う Python 環境へ入れておく。
 
 ```bash
 cd backend
 python -m pip install -r requirements.txt
-python -m pip install -r ../launcher/requirements.txt
 python run.py
 ```
 
 環境変数:
 - `LAUNCHER_API_BASE_URL`: 接続先 API。既定値は `http://127.0.0.1:8079`。
-- `LAUNCHER_WEB_BASE_URL`: Web フロント URL。既定値は `http://localhost:8001`。
+- `LAUNCHER_WEB_BASE_URL`: Web フロント URL。既定値は `http://127.0.0.1:8079`。
 - `LAUNCHER_SEARCH_LIMIT`: ランチャーに表示する検索結果数。既定値は `8`。
 - `LAUNCHER_REQUEST_TIMEOUT`: API タイムアウト秒数。既定値は `5.0`。
 - `SEARCH_APP_LAUNCHER_AUTOSTART`: バックエンド起動時にランチャーも起動するか。`backend/run.py` と `start_dev.sh` では既定で `1`。
 - `SEARCH_APP_LAUNCHER_LOG_NAME`: ランチャーログファイル名。既定値は `launcher.log`。
 
 関連する Web オープン先:
-- ファイル: `http://localhost:8001/api/fullpath?path=<encoded full_path>`
-- フォルダ: `http://localhost:8001/?path=<encoded folder_path>`
+- ファイル: `http://127.0.0.1:8079/api/fullpath?path=<encoded full_path>`
+- フォルダ: `http://127.0.0.1:8079/?path=<encoded folder_path>`
 
 ## 9. 今後の課題（プロトタイプ後に検討）
 - ネオン調のグロー効果などの装飾。

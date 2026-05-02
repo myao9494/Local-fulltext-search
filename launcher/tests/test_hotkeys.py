@@ -15,10 +15,10 @@ def test_hotkey_spec_for_macos() -> None:
 
 def test_hotkey_spec_for_windows() -> None:
     """
-    Windows では Alt + Win を表示名として返す。
+    Windows では Ctrl + Alt を表示名として返す。
     """
-    assert hotkey_spec_for_platform("Windows") == "Alt + Win"
-    assert modifier_names_for_platform("Windows") == frozenset({"cmd", "alt"})
+    assert hotkey_spec_for_platform("Windows") == "Ctrl + Alt"
+    assert modifier_names_for_platform("Windows") == frozenset({"ctrl", "alt"})
 
 
 def test_modifier_chord_activates_once_until_release() -> None:

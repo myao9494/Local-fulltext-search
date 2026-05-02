@@ -6,3 +6,6 @@ python-docx==1.2.0
 openpyxl==3.1.5
 python-pptx==1.0.2
 extract-msg==0.55.0
+flet>=0.28.0,<1.0
+pynput>=1.7.7,<2.0
+pyobjc-framework-Cocoa>=11.0,<12.0; platform_system == "Darwin"

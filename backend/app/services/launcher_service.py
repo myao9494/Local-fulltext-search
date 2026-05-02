@@ -46,6 +46,7 @@ class LauncherManager:
         existing_pythonpath = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = f"{self.launcher_src}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else str(self.launcher_src)
         env.setdefault("LAUNCHER_API_BASE_URL", f"http://127.0.0.1:{settings.bind_port}")
+        env.setdefault("LAUNCHER_WEB_BASE_URL", f"http://127.0.0.1:{settings.bind_port}")
         command = [self.python_executable, "-m", "launcher_app.main"]
         log_file = self.log_path.open("a", encoding="utf-8")
         log_file.write(f"\n--- launcher start {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")

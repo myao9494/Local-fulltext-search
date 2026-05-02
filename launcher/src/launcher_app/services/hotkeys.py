@@ -13,7 +13,7 @@ def hotkey_spec_for_platform(system_name: str | None = None) -> str:
     """
     name = system_name or platform.system()
     if name == "Windows":
-        return "Alt + Win"
+        return "Ctrl + Alt"
     return "Option + Command"
 
 
@@ -21,12 +21,11 @@ def modifier_names_for_platform(system_name: str | None = None) -> frozenset[str
     """
     ランチャー表示トグルに使う修飾キー名を OS ごとに返す。
 
-    NOTE: 現状 Mac/Win とも pynput の正規化名 {"cmd", "alt"} で統一。
-    将来 Windows で Win キーを別名にする場合はここを分離する。
+    Windows は業務端末で Win キーを OS ショートカットに奪われやすいため Ctrl + Alt にする。
     """
     name = system_name or platform.system()
     if name == "Windows":
-        return frozenset({"alt", "cmd"})
+        return frozenset({"ctrl", "alt"})
     return frozenset({"cmd", "alt"})
 
 

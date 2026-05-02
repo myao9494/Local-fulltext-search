@@ -61,7 +61,7 @@
 ## デスクトップランチャー (Flet / PyObjC)
 - **フォルダ**: `launcher/` にソースコードとドキュメントを分離して管理。
 - **UI**: macOS では PyObjC / Cocoa `NSPanel`。その他 OS では Flet をフォールバック使用。
-- **ホットキー**: `Option + Command` (Mac) / `Alt + Win` (Win) によるグローバル表示切り替え。
+- **ホットキー**: `Option + Command` (Mac) / `Ctrl + Alt` (Win) によるグローバル表示切り替え。
 - **設定**: `LAUNCHER_API_BASE_URL`（API接続先）、`LAUNCHER_WEB_BASE_URL`（Webフロント URL）、`LAUNCHER_SEARCH_LIMIT`、`LAUNCHER_REQUEST_TIMEOUT` を環境変数で設定可能。
 - **挙動**: 
   - マウスカーソルのあるディスプレイに表示。

@@ -62,7 +62,7 @@ macOS では Flet の最小化・復帰が Spaces と相性が悪いため、PyO
 - アクセス数更新: `POST /api/search/click`
 - 保存場所表示: `POST /api/files/open-location`
 - ランチャー管理: `GET /api/launcher/status`, `POST /api/launcher/start`, `POST /api/launcher/stop`, `POST /api/launcher/restart`
-- 検索結果を開く: Web アプリと同じ `http://localhost:8001/api/fullpath?path=...` または `http://localhost:8001/?path=...` を既定ブラウザで開く。
+- 検索結果を開く: Web アプリと同じ `http://127.0.0.1:8079/api/fullpath?path=...` または `http://127.0.0.1:8079/?path=...` を既定ブラウザで開く。
 
 ランチャーは高速応答を優先するため、検索時に `search_all_enabled=true` と `skip_refresh=true` を指定し、既存インデックスだけを軽く読む挙動を基本にします。将来的にパフォーマンスやオフライン起動が必要な場合は、同一プロセス内でのDB直接参照を検討します。
 

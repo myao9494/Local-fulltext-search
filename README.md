@@ -176,22 +176,20 @@ BACKEND_HOST=0.0.0.0 BACKEND_PORT=8079 ./start_dev.sh
 - Python 3 が入っていること
 - `pip install -r backend/requirements.txt` が 1 回実行できること
 - `frontend/dist/` が clone / pull した内容に含まれていること
-- デスクトップランチャーも使う場合は、同じ Python 環境に `launcher/requirements.txt` もインストールすること
+- デスクトップランチャー依存も `backend/requirements.txt` に含まれていること
 
 配布先で不要なもの:
 
 - Node.js
 - npm
 - フロントエンドの再ビルド
+- 仮想環境
 
 ### 1. バックエンド
 
 ```bash
 cd backend
-python -m venv .venv
-source .venv/bin/activate
 pip install -r requirements.txt
-pip install -r ../launcher/requirements.txt
 python run.py
 ```
 
@@ -199,12 +197,11 @@ Windows の場合:
 
 ```powershell
 cd backend
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-pip install -r ..\launcher\requirements.txt
+python -m pip install -r requirements.txt
 python run.py
 ```
+
+Windows でパスや起動ディレクトリの差異を避けたい場合は、リポジトリ直下の `start_windows.bat` をダブルクリックします。既定ポート `8079` が使用中なら、その待ち受けプロセスを停止してから `backend/run.py` を起動します。
 
 `python run.py` の既定値:
 
@@ -234,9 +231,7 @@ python run.py
 
 ```powershell
 cd backend
-python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe -m pip install -r ..\launcher\requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 起動コマンド:
@@ -245,7 +240,7 @@ python -m venv .venv
 cd backend
 $env:SEARCH_APP_HOST="127.0.0.1"
 $env:SEARCH_APP_PORT="8079"
-.venv\Scripts\python.exe run.py
+python run.py
 ```
 
 別PCから同一ネットワーク経由で開きたい場合:
