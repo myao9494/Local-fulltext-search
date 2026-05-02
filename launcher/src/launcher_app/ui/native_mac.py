@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import platform
 import threading
+import time
 from typing import Any
 import webbrowser
 
@@ -75,6 +76,7 @@ class LauncherDelegate(AppKit.NSObject):
         self.search_field = None
         self.status_label = None
         self.results_stack = None
+        self.last_results_time = 0.0
         return self
 
     def applicationDidFinishLaunching_(self, notification: Any) -> None:
@@ -97,9 +99,14 @@ class LauncherDelegate(AppKit.NSObject):
         query = str(self.search_field.stringValue()).strip()
         self.search_sequence += 1
         sequence = self.search_sequence
+        
+        # 検索入力中・通信中はEnterキーを無効化する
+        self.last_results_time = float('inf')
+        
         if not query:
             self.results = []
             self.status_label.setStringValue_(f"Hotkey: {hotkey_spec_for_platform()}")
+            self.last_results_time = time.time()
             self._render_results()
             return
         self.status_label.setStringValue_("検索中...")
@@ -152,6 +159,8 @@ class LauncherDelegate(AppKit.NSObject):
         """
         現在選択中のアイテムを開く。
         """
+        if time.time() - getattr(self, "last_results_time", 0.0) < 0.5:
+            return
         if not self.results:
             return
         item = self.results[self.selected_index]
@@ -361,6 +370,7 @@ class LauncherDelegate(AppKit.NSObject):
             return
         self.results = []
         self.status_label.setStringValue_(f"検索に失敗しました: {message}")
+        self.last_results_time = time.time()
         self._render_results()
 
     @objc.python_method
@@ -373,6 +383,7 @@ class LauncherDelegate(AppKit.NSObject):
         self.results = items
         self.selected_index = 0
         self.status_label.setStringValue_(f"{total} 件")
+        self.last_results_time = time.time()
         self._render_results()
 
     @objc.python_method
