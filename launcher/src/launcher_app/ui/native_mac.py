@@ -420,17 +420,24 @@ class LauncherDelegate(AppKit.NSObject):
     @objc.python_method
     def _apply_card_style(self, card: AppKit.NSView, *, selected: bool) -> None:
         """
-        カードの背景色・ボーダー色・パスラベル色を選択状態に応じて更新する。
+        カードの背景色・ボーダー色・パスラベル色・タイトル色を選択状態に応じて更新する。
         """
         bg = (0.11, 0.31, 0.85, 0.98) if selected else (0.07, 0.09, 0.15, 0.98)
         border = (0.38, 0.65, 0.98, 0.9) if selected else (0.12, 0.16, 0.22, 0.9)
         card.layer().setBackgroundColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*bg).CGColor())
         card.layer().setBorderColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*border).CGColor())
-        # パスラベルは3番目のサブビュー (0: button, 1: title, 2: path)
+        
         subviews = card.subviews()
-        if len(subviews) > 2:
+        # 新しいサブビュー順序:
+        # 0: title, 1: path, 2: snippet, 3: invisible_button, 4: copy, 5: finder, 6: folder
+        if len(subviews) > 1:
+            # Title
+            title_color = (1.0, 1.0, 1.0, 1.0) if selected else (0.38, 0.80, 0.98, 1.0) # 選択時は白、非選択時は水色(リンク風)
+            subviews[0].setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*title_color))
+            
+            # Path
             path_color = (0.7, 0.8, 1.0, 1.0) if selected else (0.58, 0.64, 0.73, 1.0)
-            subviews[2].setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*path_color))
+            subviews[1].setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*path_color))
 
     @objc.python_method
     def _make_result_card(self, item: SearchResultItem, index: int, selected: bool) -> AppKit.NSView:
@@ -447,25 +454,18 @@ class LauncherDelegate(AppKit.NSObject):
         card.layer().setBorderColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*border_color).CGColor())
         card.layer().setBorderWidth_(1.0)
 
-        # クリック全体を覆う透明ボタンを背面に配置
-        invisible_button = AppKit.NSButton.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 74, 64))
-        invisible_button.setTitle_("")
-        invisible_button.setTransparent_(True)
-        invisible_button.setTarget_(self)
-        invisible_button.setAction_("openResult:")
-        invisible_button.setTag_(index)
-        card.addSubview_(invisible_button)
-
         title_label = AppKit.NSTextField.labelWithString_(item.file_name)
         title_label.setFrame_(AppKit.NSMakeRect(16, 6, PANEL_WIDTH - 340, 20))
-        title_label.setTextColor_(AppKit.NSColor.whiteColor())
+        title_color = (1.0, 1.0, 1.0, 1.0) if selected else (0.38, 0.80, 0.98, 1.0) # 水色でリンクっぽく
+        title_label.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*title_color))
         title_label.setFont_(AppKit.NSFont.boldSystemFontOfSize_(14))
         title_label.setLineBreakMode_(AppKit.NSLineBreakByTruncatingTail)
         card.addSubview_(title_label)
 
         path_label = AppKit.NSTextField.labelWithString_(item.full_path)
         path_label.setFrame_(AppKit.NSMakeRect(16, 26, PANEL_WIDTH - 340, 14))
-        path_label.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.58, 0.64, 0.73, 1.0) if not selected else AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.7, 0.8, 1.0, 1.0))
+        path_color = (0.7, 0.8, 1.0, 1.0) if selected else (0.58, 0.64, 0.73, 1.0)
+        path_label.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*path_color))
         path_label.setFont_(AppKit.NSFont.systemFontOfSize_(10))
         path_label.setLineBreakMode_(AppKit.NSLineBreakByTruncatingMiddle)
         card.addSubview_(path_label)
@@ -478,6 +478,15 @@ class LauncherDelegate(AppKit.NSObject):
         snippet_label.setLineBreakMode_(AppKit.NSLineBreakByTruncatingTail)
         snippet_label.setMaximumNumberOfLines_(1)
         card.addSubview_(snippet_label)
+
+        # クリック全体を覆う透明ボタンを前面（テキストの上）に配置
+        invisible_button = AppKit.NSButton.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 320, 64))
+        invisible_button.setTitle_("")
+        invisible_button.setTransparent_(True)
+        invisible_button.setTarget_(self)
+        invisible_button.setAction_("openResult:")
+        invisible_button.setTag_(index)
+        card.addSubview_(invisible_button)
 
         copy_button = AppKit.NSButton.buttonWithTitle_target_action_("フルパス", self, "copyPathResult:")
         copy_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 316, 20, 68, 24))
