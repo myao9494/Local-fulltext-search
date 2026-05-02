@@ -1,0 +1,407 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "https://excalidraw.com",
+  "elements": [
+    {
+      "id": "rect-os",
+      "type": "rectangle",
+      "x": 50,
+      "y": 50,
+      "width": 260,
+      "height": 450,
+      "strokeColor": "#1e293b",
+      "backgroundColor": "#f8fafc",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-os",
+      "type": "text",
+      "x": 70,
+      "y": 70,
+      "width": 200,
+      "height": 30,
+      "fontSize": 20,
+      "fontFamily": 1,
+      "text": "OS (Mac / Windows)",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+    {
+      "id": "rect-hotkey",
+      "type": "rectangle",
+      "x": 70,
+      "y": 120,
+      "width": 220,
+      "height": 80,
+      "strokeColor": "#3b82f6",
+      "backgroundColor": "#eff6ff",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-hotkey",
+      "type": "text",
+      "x": 80,
+      "y": 135,
+      "width": 200,
+      "height": 50,
+      "fontSize": 16,
+      "fontFamily": 1,
+      "text": "Global Hotkey\nOpt+Cmd / Alt+Win",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "rect-mouse",
+      "type": "rectangle",
+      "x": 70,
+      "y": 230,
+      "width": 220,
+      "height": 80,
+      "strokeColor": "#3b82f6",
+      "backgroundColor": "#eff6ff",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-mouse",
+      "type": "text",
+      "x": 80,
+      "y": 245,
+      "width": 200,
+      "height": 50,
+      "fontSize": 16,
+      "fontFamily": 1,
+      "text": "Mouse Tracking\nCursor Position",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "rect-launcher",
+      "type": "rectangle",
+      "x": 360,
+      "y": 50,
+      "width": 320,
+      "height": 450,
+      "strokeColor": "#1e293b",
+      "backgroundColor": "#f8fafc",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-launcher",
+      "type": "text",
+      "x": 380,
+      "y": 70,
+      "width": 200,
+      "height": 30,
+      "fontSize": 20,
+      "fontFamily": 1,
+      "text": "Launcher App",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+    {
+      "id": "rect-ui",
+      "type": "rectangle",
+      "x": 380,
+      "y": 120,
+      "width": 280,
+      "height": 90,
+      "strokeColor": "#10b981",
+      "backgroundColor": "#ecfdf5",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-ui",
+      "type": "text",
+      "x": 390,
+      "y": 135,
+      "width": 260,
+      "height": 60,
+      "fontSize": 16,
+      "fontFamily": 1,
+      "text": "Search Window\n(NSPanel on Mac)\n(Flet UI on Win/Fallback)",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "rect-client",
+      "type": "rectangle",
+      "x": 380,
+      "y": 240,
+      "width": 280,
+      "height": 70,
+      "strokeColor": "#10b981",
+      "backgroundColor": "#ecfdf5",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-client",
+      "type": "text",
+      "x": 390,
+      "y": 255,
+      "width": 260,
+      "height": 40,
+      "fontSize": 16,
+      "fontFamily": 1,
+      "text": "Launcher API Client\n(FastAPI Communications)",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "rect-action",
+      "type": "rectangle",
+      "x": 380,
+      "y": 340,
+      "width": 280,
+      "height": 70,
+      "strokeColor": "#10b981",
+      "backgroundColor": "#ecfdf5",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-action",
+      "type": "text",
+      "x": 390,
+      "y": 355,
+      "width": 260,
+      "height": 40,
+      "fontSize": 16,
+      "fontFamily": 1,
+      "text": "File Actions\nOpen / Show in Finder",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "rect-backend",
+      "type": "rectangle",
+      "x": 730,
+      "y": 50,
+      "width": 320,
+      "height": 450,
+      "strokeColor": "#1e293b",
+      "backgroundColor": "#f8fafc",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-backend",
+      "type": "text",
+      "x": 750,
+      "y": 70,
+      "width": 200,
+      "height": 30,
+      "fontSize": 20,
+      "fontFamily": 1,
+      "text": "Backend API Server",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+    {
+      "id": "rect-api",
+      "type": "rectangle",
+      "x": 750,
+      "y": 120,
+      "width": 280,
+      "height": 130,
+      "strokeColor": "#f59e0b",
+      "backgroundColor": "#fffbeb",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-api",
+      "type": "text",
+      "x": 760,
+      "y": 135,
+      "width": 260,
+      "height": 100,
+      "fontSize": 16,
+      "fontFamily": 1,
+      "text": "Search Endpoints (FastAPI)\n- /api/search\n- /api/search/click\n- /api/files/open-location",
+      "textAlign": "left",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "rect-db",
+      "type": "rectangle",
+      "x": 750,
+      "y": 280,
+      "width": 280,
+      "height": 80,
+      "strokeColor": "#f59e0b",
+      "backgroundColor": "#fffbeb",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-db",
+      "type": "text",
+      "x": 760,
+      "y": 295,
+      "width": 260,
+      "height": 50,
+      "fontSize": 16,
+      "fontFamily": 1,
+      "text": "Database\nSQLite / FTS5 Engine",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "arrow-hotkey",
+      "type": "arrow",
+      "x": 290,
+      "y": 160,
+      "width": 70,
+      "height": 1,
+      "strokeColor": "#64748b",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [70, 0]
+      ]
+    },
+    {
+      "id": "arrow-mouse",
+      "type": "arrow",
+      "x": 290,
+      "y": 270,
+      "width": 70,
+      "height": -100,
+      "strokeColor": "#64748b",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [70, -100]
+      ]
+    },
+    {
+      "id": "arrow-api-client",
+      "type": "arrow",
+      "x": 660,
+      "y": 275,
+      "width": 70,
+      "height": -90,
+      "strokeColor": "#64748b",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [70, -90]
+      ]
+    },
+    {
+      "id": "arrow-backend-db",
+      "type": "arrow",
+      "x": 890,
+      "y": 250,
+      "width": 1,
+      "height": 30,
+      "strokeColor": "#64748b",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [0, 30]
+      ]
+    },
+    {
+      "id": "arrow-ui-client",
+      "type": "arrow",
+      "x": 520,
+      "y": 210,
+      "width": 1,
+      "height": 30,
+      "strokeColor": "#64748b",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [0, 30]
+      ]
+    }
+  ],
+  "appState": {
+    "gridSize": null,
+    "viewBackgroundColor": "#ffffff"
+  },
+  "files": {}
+}

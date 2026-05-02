@@ -1,0 +1,524 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "https://excalidraw.com",
+  "elements": [
+    {
+      "id": "actor-ui",
+      "type": "rectangle",
+      "x": 50,
+      "y": 50,
+      "width": 240,
+      "height": 60,
+      "strokeColor": "#1e293b",
+      "backgroundColor": "#eff6ff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-actor-ui",
+      "type": "text",
+      "x": 60,
+      "y": 65,
+      "width": 220,
+      "height": 30,
+      "fontSize": 18,
+      "fontFamily": 1,
+      "text": "検索ウィンドウ (UI)",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "actor-client",
+      "type": "rectangle",
+      "x": 340,
+      "y": 50,
+      "width": 240,
+      "height": 60,
+      "strokeColor": "#1e293b",
+      "backgroundColor": "#eff6ff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-actor-client",
+      "type": "text",
+      "x": 350,
+      "y": 65,
+      "width": 220,
+      "height": 30,
+      "fontSize": 18,
+      "fontFamily": 1,
+      "text": "ランチャーAPIクライアント",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "actor-backend",
+      "type": "rectangle",
+      "x": 630,
+      "y": 50,
+      "width": 240,
+      "height": 60,
+      "strokeColor": "#1e293b",
+      "backgroundColor": "#eff6ff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-actor-backend",
+      "type": "text",
+      "x": 640,
+      "y": 65,
+      "width": 220,
+      "height": 30,
+      "fontSize": 18,
+      "fontFamily": 1,
+      "text": "バックエンドAPI",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "line-ui",
+      "type": "arrow",
+      "x": 170,
+      "y": 110,
+      "width": 0,
+      "height": 650,
+      "strokeColor": "#94a3b8",
+      "strokeWidth": 1,
+      "strokeStyle": "dashed",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [0, 650]
+      ]
+    },
+    {
+      "id": "line-client",
+      "type": "arrow",
+      "x": 460,
+      "y": 110,
+      "width": 0,
+      "height": 650,
+      "strokeColor": "#94a3b8",
+      "strokeWidth": 1,
+      "strokeStyle": "dashed",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [0, 650]
+      ]
+    },
+    {
+      "id": "line-backend",
+      "type": "arrow",
+      "x": 750,
+      "y": 110,
+      "width": 0,
+      "height": 650,
+      "strokeColor": "#94a3b8",
+      "strokeWidth": 1,
+      "strokeStyle": "dashed",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [0, 650]
+      ]
+    },
+    {
+      "id": "step-1-title",
+      "type": "text",
+      "x": 50,
+      "y": 140,
+      "width": 200,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "[ 検索実行 ]",
+      "strokeColor": "#3b82f6",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+    {
+      "id": "arrow-1",
+      "type": "arrow",
+      "x": 170,
+      "y": 170,
+      "width": 290,
+      "height": 0,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [290, 0]
+      ],
+      "endArrowhead": "arrow"
+    },
+    {
+      "id": "text-arrow-1",
+      "type": "text",
+      "x": 200,
+      "y": 145,
+      "width": 220,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "検索クエリ入力",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "arrow-2",
+      "type": "arrow",
+      "x": 460,
+      "y": 200,
+      "width": 290,
+      "height": 0,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [290, 0]
+      ],
+      "endArrowhead": "arrow"
+    },
+    {
+      "id": "text-arrow-2",
+      "type": "text",
+      "x": 490,
+      "y": 175,
+      "width": 230,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "POST /api/search (skip_refresh=true)",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "step-2-title",
+      "type": "text",
+      "x": 50,
+      "y": 230,
+      "width": 200,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "[ 検索結果の表示 ]",
+      "strokeColor": "#3b82f6",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+    {
+      "id": "arrow-3",
+      "type": "arrow",
+      "x": 750,
+      "y": 260,
+      "width": -290,
+      "height": 0,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "strokeStyle": "dashed",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [-290, 0]
+      ],
+      "endArrowhead": "arrow"
+    },
+    {
+      "id": "text-arrow-3",
+      "type": "text",
+      "x": 490,
+      "y": 235,
+      "width": 230,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "検索結果 JSON 返却 (アクセス順)",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "arrow-4",
+      "type": "arrow",
+      "x": 460,
+      "y": 290,
+      "width": -290,
+      "height": 0,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "strokeStyle": "dashed",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [-290, 0]
+      ],
+      "endArrowhead": "arrow"
+    },
+    {
+      "id": "text-arrow-4",
+      "type": "text",
+      "x": 200,
+      "y": 265,
+      "width": 230,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "検索結果をUIへ反映",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "step-3-title",
+      "type": "text",
+      "x": 50,
+      "y": 340,
+      "width": 300,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "[ 検索結果をクリック時 (ファイルを開く) ]",
+      "strokeColor": "#10b981",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+    {
+      "id": "arrow-click-1",
+      "type": "arrow",
+      "x": 170,
+      "y": 380,
+      "width": 290,
+      "height": 0,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [290, 0]
+      ],
+      "endArrowhead": "arrow"
+    },
+    {
+      "id": "text-arrow-click-1",
+      "type": "text",
+      "x": 200,
+      "y": 355,
+      "width": 220,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "ユーザーがカード/リンクをクリック",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "arrow-click-2",
+      "type": "arrow",
+      "x": 460,
+      "y": 420,
+      "width": 290,
+      "height": 0,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [290, 0]
+      ],
+      "endArrowhead": "arrow"
+    },
+    {
+      "id": "text-arrow-click-2",
+      "type": "text",
+      "x": 490,
+      "y": 395,
+      "width": 220,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "POST /api/search/click",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "rect-action-open",
+      "type": "rectangle",
+      "x": 50,
+      "y": 440,
+      "width": 240,
+      "height": 50,
+      "strokeColor": "#10b981",
+      "backgroundColor": "#ecfdf5",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-action-open",
+      "type": "text",
+      "x": 60,
+      "y": 455,
+      "width": 220,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "該当ファイルを規定アプリで開く",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "step-4-title",
+      "type": "text",
+      "x": 50,
+      "y": 510,
+      "width": 300,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "[ 検索結果をクリック時 (フォルダを表示) ]",
+      "strokeColor": "#f59e0b",
+      "textAlign": "left",
+      "verticalAlign": "top"
+    },
+    {
+      "id": "arrow-folder-1",
+      "type": "arrow",
+      "x": 170,
+      "y": 550,
+      "width": 290,
+      "height": 0,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [290, 0]
+      ],
+      "endArrowhead": "arrow"
+    },
+    {
+      "id": "text-arrow-folder-1",
+      "type": "text",
+      "x": 200,
+      "y": 525,
+      "width": 220,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "「フォルダを開く」ボタン押下",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "arrow-folder-2",
+      "type": "arrow",
+      "x": 460,
+      "y": 590,
+      "width": 290,
+      "height": 0,
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "points": [
+        [0, 0],
+        [290, 0]
+      ],
+      "endArrowhead": "arrow"
+    },
+    {
+      "id": "text-arrow-folder-2",
+      "type": "text",
+      "x": 490,
+      "y": 565,
+      "width": 220,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "POST /api/files/open-location",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    },
+    {
+      "id": "rect-action-folder",
+      "type": "rectangle",
+      "x": 630,
+      "y": 610,
+      "width": 240,
+      "height": 50,
+      "strokeColor": "#f59e0b",
+      "backgroundColor": "#fffbeb",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "strokeStyle": "solid",
+      "roughness": 0,
+      "opacity": 100,
+      "roundness": {
+        "type": 3
+      }
+    },
+    {
+      "id": "text-action-folder",
+      "type": "text",
+      "x": 640,
+      "y": 625,
+      "width": 220,
+      "height": 20,
+      "fontSize": 14,
+      "fontFamily": 1,
+      "text": "OSのFinder/Explorerで表示",
+      "textAlign": "center",
+      "verticalAlign": "middle"
+    }
+  ],
+  "appState": {
+    "viewBackgroundColor": "#ffffff",
+    "zoom": {
+      "value": 1
+    }
+  },
+  "files": {}
+}

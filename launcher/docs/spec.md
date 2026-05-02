@@ -26,6 +26,7 @@
 - **GUIフレームワーク**: macOS では PyObjC / Cocoa `NSPanel`。その他 OS では Flet 版をフォールバックとして利用する。
 - **バックエンド連携**: 既存の FastAPI サーバーに HTTP で接続。ランチャーの初期実装では `/api/search`, `/api/search/click`, `/api/files/open-location` を利用する。
 - **グローバルキー監視**: macOS では Cocoa `NSEvent` の modifier flags 監視で `Option + Command` を検出する。その他 OS では `pynput` を利用する。
+- **スリープ復帰対応**: macOS では `NSWorkspaceWillSleepNotification` / `NSWorkspaceDidWakeNotification` を監視し、復帰時に `NSEvent` monitor を再登録してホットキーを復旧する。
 - **常駐形態**: バックエンドサーバー配下の子プロセスとして起動し、Web フロントの「ランチャー」ページから状態確認・起動・停止・再起動・ログ確認を行う。システムトレイ常駐は未実装。
 
 ## 5. フォルダ構成
@@ -53,6 +54,7 @@ launcher/
 - ファイル結果を開いた場合は Web アプリと同じく `/api/search/click` でアクセス数を更新する。
 - `Finderで開く` は Web アプリと同じく `/api/files/open-location` を呼ぶ。
 - macOS では `NSWindowCollectionBehaviorCanJoinAllSpaces` により、アクティブな仮想デスクトップ上へ表示する。
+- macOS ではスリープ直前にホットキー押下状態をクリアし、復帰後に Cocoa のグローバル/ローカルイベント monitor を張り直す。
 
 ## 7. OS 別パーミッション・注意事項
 

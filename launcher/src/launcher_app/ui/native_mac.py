@@ -71,6 +71,8 @@ class LauncherDelegate(AppKit.NSObject):
         self.search_sequence = 0
         self.search_timer: threading.Timer | None = None
         self.hotkey_monitors: list[Any] = []
+        self.power_notification_center = None
+        self.power_notifications_registered = False
         self.hotkey_activated = False
         self.panel = None
         self.search_field = None
@@ -87,6 +89,7 @@ class LauncherDelegate(AppKit.NSObject):
             return
         self._build_panel()
         self._start_hotkey_monitor()
+        self._start_power_state_monitor()
         self.status_label.setStringValue_(f"Hotkey: {hotkey_spec_for_platform()}")
         self.show_panel()
 
@@ -230,6 +233,59 @@ class LauncherDelegate(AppKit.NSObject):
         global_monitor = AppKit.NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(mask, handler)
         local_monitor = AppKit.NSEvent.addLocalMonitorForEventsMatchingMask_handler_(mask, handler)
         self.hotkey_monitors = [monitor for monitor in (global_monitor, local_monitor) if monitor is not None]
+
+    @objc.python_method
+    def _stop_hotkey_monitor(self) -> None:
+        """
+        登録済みの Cocoa イベント監視を解除する。
+        """
+        for monitor in self.hotkey_monitors:
+            AppKit.NSEvent.removeMonitor_(monitor)
+        self.hotkey_monitors = []
+        self.hotkey_activated = False
+
+    @objc.python_method
+    def _restart_hotkey_monitor(self) -> None:
+        """
+        スリープ復帰後に失効することがあるホットキー監視を張り直す。
+        """
+        self._stop_hotkey_monitor()
+        self._start_hotkey_monitor()
+
+    @objc.python_method
+    def _start_power_state_monitor(self) -> None:
+        """
+        macOS のスリープ/復帰通知を監視し、復帰時にホットキーを再登録する。
+        """
+        if self.power_notifications_registered:
+            return
+        notification_center = AppKit.NSWorkspace.sharedWorkspace().notificationCenter()
+        notification_center.addObserver_selector_name_object_(
+            self,
+            "workspaceWillSleep:",
+            AppKit.NSWorkspaceWillSleepNotification,
+            None,
+        )
+        notification_center.addObserver_selector_name_object_(
+            self,
+            "workspaceDidWake:",
+            AppKit.NSWorkspaceDidWakeNotification,
+            None,
+        )
+        self.power_notification_center = notification_center
+        self.power_notifications_registered = True
+
+    def workspaceWillSleep_(self, notification: Any) -> None:
+        """
+        スリープ直前に修飾キーの押下状態をクリアする。
+        """
+        self.hotkey_activated = False
+
+    def workspaceDidWake_(self, notification: Any) -> None:
+        """
+        スリープ復帰後にグローバルホットキー監視を再登録する。
+        """
+        self._restart_hotkey_monitor()
 
     @objc.python_method
     def _handle_modifier_event(self, event: Any) -> None:
@@ -604,6 +660,7 @@ def run_native_mac_app(config: LauncherConfig | None = None) -> None:
     _delegate_ref = delegate
     delegate._build_panel()
     delegate._start_hotkey_monitor()
+    delegate._start_power_state_monitor()
     delegate.status_label.setStringValue_(f"Hotkey: {hotkey_spec_for_platform()}")
     app.setDelegate_(delegate)
     delegate.show_panel()
