@@ -109,7 +109,7 @@ class LauncherDelegate(AppKit.NSObject):
 
     def control_textView_doCommandBySelector_(self, control: Any, textView: Any, commandSelector: Any) -> bool:
         """
-        NSSearchField のテキスト入力中の上下キーとEnterキーを捕捉する。
+        NSSearchField のテキスト入力中の上下キー、Enterキー、ESCキーを捕捉する。
         """
         selector = str(commandSelector)
         if selector == "moveUp:":
@@ -120,6 +120,9 @@ class LauncherDelegate(AppKit.NSObject):
             return True
         elif selector == "insertNewline:":
             self._open_selected()
+            return True
+        elif selector == "cancelOperation:":
+            self.hide_panel()
             return True
         return False
 
@@ -560,6 +563,23 @@ def run_native_mac_app(config: LauncherConfig | None = None) -> None:
     global _delegate_ref
     app = AppKit.NSApplication.sharedApplication()
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+
+    # Cmd+C, Cmd+V などの標準ショートカットを有効にするため、ダミーのEditメニューを登録する
+    menubar = AppKit.NSMenu.alloc().init()
+    app_menu_item = AppKit.NSMenuItem.alloc().init()
+    menubar.addItem_(app_menu_item)
+    
+    edit_menu_item = AppKit.NSMenuItem.alloc().init()
+    edit_menu = AppKit.NSMenu.alloc().initWithTitle_("Edit")
+    edit_menu.addItemWithTitle_action_keyEquivalent_("Cut", "cut:", "x")
+    edit_menu.addItemWithTitle_action_keyEquivalent_("Copy", "copy:", "c")
+    edit_menu.addItemWithTitle_action_keyEquivalent_("Paste", "paste:", "v")
+    edit_menu.addItemWithTitle_action_keyEquivalent_("Select All", "selectAll:", "a")
+    edit_menu.addItemWithTitle_action_keyEquivalent_("Undo", "undo:", "z")
+    edit_menu_item.setSubmenu_(edit_menu)
+    menubar.addItem_(edit_menu_item)
+    app.setMainMenu_(menubar)
+
     delegate = LauncherDelegate.alloc().initWithClient_config_(client, app_config)
     _delegate_ref = delegate
     delegate._build_panel()
