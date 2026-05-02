@@ -279,6 +279,7 @@ class LauncherDelegate(AppKit.NSObject):
         self.panel.setOpaque_(False)
         self.panel.setBackgroundColor_(AppKit.NSColor.clearColor())
         self.panel.setHidesOnDeactivate_(False)
+        self.panel.setMovableByWindowBackground_(True)
         self.panel.setCollectionBehavior_(
             AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
             | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -300,6 +301,11 @@ class LauncherDelegate(AppKit.NSObject):
         self.search_field.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.9, 0.94, 1.0, 1.0))
         self.search_field.setDrawsBackground_(False)
         content.addSubview_(self.search_field)
+
+        gui_button = AppKit.NSButton.buttonWithTitle_target_action_("Web GUI", self, "openGuiUrl:")
+        gui_button.setFrame_(AppKit.NSMakeRect(34, PANEL_HEIGHT - 36, 80, 24))
+        gui_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
+        content.addSubview_(gui_button)
 
         scroll = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(24, 54, PANEL_WIDTH - 48, PANEL_HEIGHT - 158))
         scroll.setDrawsBackground_(False)
@@ -437,14 +443,14 @@ class LauncherDelegate(AppKit.NSObject):
         card.addSubview_(invisible_button)
 
         title_label = AppKit.NSTextField.labelWithString_(item.file_name)
-        title_label.setFrame_(AppKit.NSMakeRect(16, 6, PANEL_WIDTH - 300, 20))
+        title_label.setFrame_(AppKit.NSMakeRect(16, 6, PANEL_WIDTH - 340, 20))
         title_label.setTextColor_(AppKit.NSColor.whiteColor())
         title_label.setFont_(AppKit.NSFont.boldSystemFontOfSize_(14))
         title_label.setLineBreakMode_(AppKit.NSLineBreakByTruncatingTail)
         card.addSubview_(title_label)
 
         path_label = AppKit.NSTextField.labelWithString_(item.full_path)
-        path_label.setFrame_(AppKit.NSMakeRect(16, 26, PANEL_WIDTH - 300, 14))
+        path_label.setFrame_(AppKit.NSMakeRect(16, 26, PANEL_WIDTH - 340, 14))
         path_label.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.58, 0.64, 0.73, 1.0) if not selected else AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.7, 0.8, 1.0, 1.0))
         path_label.setFont_(AppKit.NSFont.systemFontOfSize_(10))
         path_label.setLineBreakMode_(AppKit.NSLineBreakByTruncatingMiddle)
@@ -452,12 +458,18 @@ class LauncherDelegate(AppKit.NSObject):
 
         snippet = strip_html(item.snippet)[:120].replace("\n", " ")
         snippet_label = AppKit.NSTextField.labelWithString_(snippet)
-        snippet_label.setFrame_(AppKit.NSMakeRect(16, 42, PANEL_WIDTH - 300, 16))
+        snippet_label.setFrame_(AppKit.NSMakeRect(16, 42, PANEL_WIDTH - 340, 16))
         snippet_label.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.8, 0.83, 0.88, 1.0))
         snippet_label.setFont_(AppKit.NSFont.systemFontOfSize_(11))
         snippet_label.setLineBreakMode_(AppKit.NSLineBreakByTruncatingTail)
         snippet_label.setMaximumNumberOfLines_(1)
         card.addSubview_(snippet_label)
+
+        copy_button = AppKit.NSButton.buttonWithTitle_target_action_("フルパス", self, "copyPathResult:")
+        copy_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 316, 20, 68, 24))
+        copy_button.setTag_(index)
+        copy_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
+        card.addSubview_(copy_button)
 
         finder_button = AppKit.NSButton.buttonWithTitle_target_action_("Finderで開く", self, "revealResult:")
         finder_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 240, 20, 76, 24))
@@ -506,6 +518,19 @@ class LauncherDelegate(AppKit.NSObject):
         except Exception as error:
             self.status_label.setStringValue_(f"保存場所を開けませんでした: {error}")
 
+    def copyPathResult_(self, sender: Any) -> None:
+        """
+        フルパスをクリップボードにコピーする。
+        """
+        index = int(sender.tag())
+        if index < 0 or index >= len(self.results):
+            return
+        item = self.results[index]
+        pasteboard = AppKit.NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        pasteboard.setString_forType_(item.full_path, AppKit.NSPasteboardTypeString)
+        self.status_label.setStringValue_("クリップボードにコピーしました")
+
     def openFolderResult_(self, sender: Any) -> None:
         """
         Web アプリのフォルダリンクと同じ URL を既定ブラウザで開く。
@@ -515,6 +540,13 @@ class LauncherDelegate(AppKit.NSObject):
             return
         item = self.results[index]
         webbrowser.open(folder_web_url_for_item(item, self.web_base_url))
+
+    def openGuiUrl_(self, sender: Any) -> None:
+        """
+        GUIへのリンクを既定ブラウザで開く。
+        """
+        webbrowser.open("http://127.0.0.1:8079/")
+        self.hide_panel()
 
 
 def run_native_mac_app(config: LauncherConfig | None = None) -> None:
