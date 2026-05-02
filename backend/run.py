@@ -1,3 +1,7 @@
+import os
+
+os.environ.setdefault("SEARCH_APP_LAUNCHER_AUTOSTART", "1")
+
 import uvicorn
 
 from app.config import settings

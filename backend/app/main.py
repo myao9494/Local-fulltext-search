@@ -17,11 +17,13 @@ from fastapi.responses import FileResponse
 from app.api.files import router as files_router
 from app.api.folders import router as folders_router
 from app.api.index import router as index_router
+from app.api.launcher import router as launcher_router
 from app.api.search import router as search_router
 from app.config import BACKEND_DIR, settings
 from app.db.connection import get_connection
 from app.db.schema import initialize_schema
 from app.services.scheduler_service import SchedulerMonitor
+from app.services.launcher_service import LauncherManager
 
 
 def configure_logging() -> QueueListener:
@@ -55,6 +57,7 @@ async def lifespan(app: FastAPI):
     """起動時にDBスキーマとスケジューラーモニターを準備する。"""
     log_listener = configure_logging()
     scheduler_monitor = None
+    launcher_manager = LauncherManager()
     try:
         startup_connection = get_connection()
         try:
@@ -64,9 +67,12 @@ async def lifespan(app: FastAPI):
         scheduler_monitor = SchedulerMonitor()
         scheduler_monitor.start()
         app.state.scheduler_monitor = scheduler_monitor
+        app.state.launcher_manager = launcher_manager
         app.state.log_listener = log_listener
+        launcher_manager.autostart_if_enabled()
         yield
     finally:
+        launcher_manager.stop()
         if scheduler_monitor is not None:
             scheduler_monitor.stop()
         log_listener.stop()
@@ -85,6 +91,7 @@ def create_app() -> FastAPI:
     app.include_router(files_router)
     app.include_router(folders_router)
     app.include_router(index_router)
+    app.include_router(launcher_router)
     app.include_router(search_router)
 
     @app.get("/api/health")

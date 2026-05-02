@@ -5,10 +5,13 @@ macOS Spaces 上でも現在のデスクトップへ表示できる Cocoa ネイ
 from __future__ import annotations
 
 import html
+import os
 import platform
 import re
 import threading
 from typing import Any
+from urllib.parse import quote
+import webbrowser
 
 import AppKit
 import objc
@@ -17,12 +20,12 @@ from PyObjCTools import AppHelper
 from launcher_app.api.client import LauncherApiClient
 from launcher_app.config import LauncherConfig
 from launcher_app.models import SearchResultItem
-from launcher_app.services.file_actions import open_path, reveal_path
 from launcher_app.services.hotkeys import hotkey_spec_for_platform
 
 
 PANEL_WIDTH = 780
 PANEL_HEIGHT = 520
+WEB_OPEN_BASE_URL = "http://localhost:8001"
 _delegate_ref: Any | None = None
 
 
@@ -65,6 +68,7 @@ class LauncherDelegate(AppKit.NSObject):
         self.search_field = None
         self.status_label = None
         self.results_stack = None
+        self.result_lookup: dict[int, SearchResultItem] = {}
         return self
 
     def applicationDidFinishLaunching_(self, notification: Any) -> None:
@@ -271,15 +275,22 @@ class LauncherDelegate(AppKit.NSObject):
         for view in list(self.results_stack.arrangedSubviews()):
             self.results_stack.removeArrangedSubview_(view)
             view.removeFromSuperview()
+        self.result_lookup = {item.file_id: item for item in self.results}
         for index, item in enumerate(self.results):
             self.results_stack.addArrangedSubview_(self._make_result_card(item, index == self.selected_index))
 
     @objc.python_method
-    def _make_result_card(self, item: SearchResultItem, selected: bool) -> AppKit.NSButton:
+    def _make_result_card(self, item: SearchResultItem, selected: bool) -> AppKit.NSView:
         """
-        検索結果 1 件をクリック可能なカードへ変換する。
+        検索結果 1 件を Web アプリの結果カードに近い操作群として描画する。
         """
-        title = f"{item.file_name}\n{item.full_path}\n{_strip_html(item.snippet)[:140]}"
+        card = AppKit.NSView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 74, 116))
+        card.setWantsLayer_(True)
+        color = (0.10, 0.32, 0.86, 0.98) if selected else (0.07, 0.11, 0.18, 0.98)
+        card.layer().setBackgroundColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*color).CGColor())
+        card.layer().setCornerRadius_(12)
+
+        title = f"{item.file_name}\n{item.full_path}\n{_strip_html(item.snippet)[:112]}"
         button = AppKit.NSButton.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 74, 96))
         button.setTitle_(title)
         button.setBezelStyle_(AppKit.NSBezelStyleRegularSquare)
@@ -290,27 +301,56 @@ class LauncherDelegate(AppKit.NSObject):
         button.setTarget_(self)
         button.setAction_("openResult:")
         button.setTag_(int(item.file_id))
-        button.setWantsLayer_(True)
-        color = (0.10, 0.32, 0.86, 0.98) if selected else (0.07, 0.11, 0.18, 0.98)
-        button.layer().setBackgroundColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*color).CGColor())
-        button.layer().setCornerRadius_(12)
-        return button
+        card.addSubview_(button)
+
+        finder_button = AppKit.NSButton.buttonWithTitle_target_action_("Finderで開く", self, "revealResult:")
+        finder_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 218, 8, 100, 26))
+        finder_button.setTag_(int(item.file_id))
+        card.addSubview_(finder_button)
+
+        folder_button = AppKit.NSButton.buttonWithTitle_target_action_("フォルダを開く", self, "openFolderResult:")
+        folder_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 112, 8, 104, 26))
+        folder_button.setTag_(int(item.file_id))
+        card.addSubview_(folder_button)
+        return card
 
     def openResult_(self, sender: Any) -> None:
         """
-        クリックされた検索結果を OS 標準アプリで開く。
+        Web アプリのタイトルリンクと同じ URL を既定ブラウザで開く。
         """
         file_id = int(sender.tag())
-        item = next((result for result in self.results if result.file_id == file_id), None)
+        item = self.result_lookup.get(file_id)
         if item is None:
             return
         try:
-            open_path(item.full_path)
+            webbrowser.open(primary_web_url_for_item(item))
             if item.result_kind == "file":
                 self.client.record_click(item.file_id)
             self.hide_panel()
         except Exception as error:
             self.status_label.setStringValue_(f"ファイルを開けませんでした: {error}")
+
+    def revealResult_(self, sender: Any) -> None:
+        """
+        Web アプリの Finder で開くボタンと同じ backend API を呼ぶ。
+        """
+        item = self.result_lookup.get(int(sender.tag()))
+        if item is None:
+            return
+        target_path = item.full_path if item.result_kind == "folder" else folder_path_for_item(item)
+        try:
+            self.client.open_location(target_path)
+        except Exception as error:
+            self.status_label.setStringValue_(f"保存場所を開けませんでした: {error}")
+
+    def openFolderResult_(self, sender: Any) -> None:
+        """
+        Web アプリのフォルダリンクと同じ URL を既定ブラウザで開く。
+        """
+        item = self.result_lookup.get(int(sender.tag()))
+        if item is None:
+            return
+        webbrowser.open(folder_web_url_for_item(item))
 
 
 def run_native_mac_app(config: LauncherConfig | None = None) -> None:
@@ -339,3 +379,43 @@ def _strip_html(value: str) -> str:
     API スニペットの HTML タグを Cocoa の通常テキストへ変換する。
     """
     return html.unescape(re.sub(r"<[^>]+>", "", value)).strip()
+
+
+def folder_path_for_item(item: SearchResultItem) -> str:
+    """
+    Web アプリの getFolderPath と同じ用途で、ファイルの親フォルダを返す。
+    """
+    if item.result_kind == "folder":
+        return item.full_path
+    folder_path = os.path.dirname(item.full_path)
+    return folder_path or item.full_path
+
+
+def full_path_web_url(path: str) -> str:
+    """
+    Web アプリの fullPathUrl と同じ URL を生成する。
+    """
+    return f"{WEB_OPEN_BASE_URL}/api/fullpath?path={quote(path, safe='')}"
+
+
+def folder_web_url(path: str) -> str:
+    """
+    Web アプリの folderUrl と同じ URL を生成する。
+    """
+    return f"{WEB_OPEN_BASE_URL}/?path={quote(path, safe='')}"
+
+
+def primary_web_url_for_item(item: SearchResultItem) -> str:
+    """
+    Web アプリの primaryUrl と同じ URL を生成する。
+    """
+    if item.result_kind == "folder":
+        return folder_web_url(item.full_path)
+    return full_path_web_url(item.full_path)
+
+
+def folder_web_url_for_item(item: SearchResultItem) -> str:
+    """
+    Web アプリのフォルダリンクと同じ URL を生成する。
+    """
+    return folder_web_url(folder_path_for_item(item))

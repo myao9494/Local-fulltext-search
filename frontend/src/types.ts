@@ -96,3 +96,13 @@ export type SchedulerSettings = {
   last_error: string | null;
   logs: SchedulerLog[];
 };
+
+export type LauncherStatus = {
+  status: "running" | "stopped" | "exited";
+  is_running: boolean;
+  pid: number | null;
+  returncode: number | null;
+  autostart: boolean;
+  log_path: string;
+  logs: string[];
+};

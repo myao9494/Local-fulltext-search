@@ -7,6 +7,7 @@ import type {
   SearchTargetCoverage,
   SchedulerSettings,
   SearchResponse,
+  LauncherStatus,
 } from "../types";
 
 const API_BASE = (import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL ?? "";
@@ -61,6 +62,31 @@ export async function startScheduler(payload: { paths: string[]; start_at: strin
   return request<SchedulerSettings>("/api/index/scheduler/start", {
     method: "POST",
     body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchLauncherStatus(): Promise<LauncherStatus> {
+  return request<LauncherStatus>("/api/launcher/status");
+}
+
+export async function startLauncher(): Promise<LauncherStatus> {
+  return request<LauncherStatus>("/api/launcher/start", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function stopLauncher(): Promise<LauncherStatus> {
+  return request<LauncherStatus>("/api/launcher/stop", {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function restartLauncher(): Promise<LauncherStatus> {
+  return request<LauncherStatus>("/api/launcher/restart", {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }
 

@@ -57,7 +57,7 @@ start_backend() {
   echo "Starting backend on ${BACKEND_HOST}:${BACKEND_PORT}"
   (
     cd "${BACKEND_DIR}"
-    SEARCH_APP_HOST="${BACKEND_HOST}" SEARCH_APP_PORT="${BACKEND_PORT}" \
+    SEARCH_APP_HOST="${BACKEND_HOST}" SEARCH_APP_PORT="${BACKEND_PORT}" SEARCH_APP_LAUNCHER_AUTOSTART="${SEARCH_APP_LAUNCHER_AUTOSTART:-1}" \
       nohup "${BACKEND_DIR}/.venv/bin/python" run.py > "${RUN_DIR}/backend.log" 2>&1 &
     echo $! > "${RUN_DIR}/backend.pid"
   )

@@ -1334,6 +1334,11 @@ button.small-btn {
   gap: 16px;
 }
 
+.launcher-panel {
+  display: grid;
+  gap: 16px;
+}
+
 .scheduler-card,
 .scheduler-log-panel {
   display: grid;
@@ -1382,6 +1387,42 @@ button.small-btn {
 
 .scheduler-status-card {
   gap: 8px;
+}
+
+.launcher-control-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.42fr);
+  gap: 16px;
+}
+
+.launcher-status-card,
+.launcher-actions-card {
+  gap: 10px;
+}
+
+.launcher-actions-card {
+  align-content: start;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.launcher-log-output {
+  min-height: 280px;
+  max-height: 480px;
+  margin: 0;
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  background: rgba(2, 6, 23, 0.72);
+  color: #cbd5e1;
+  font: 0.86rem/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 960px) {
+  .launcher-control-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .search-results-footer {

@@ -33,6 +33,8 @@ class Settings(BaseModel):
         "SEARCH_APP_CUSTOM_FILENAME_EXTENSIONS_NAME", "custom_filename_extensions.txt"
     )
     frontend_dist_dir: Path = Path(os.getenv("SEARCH_APP_FRONTEND_DIST_DIR", str(PROJECT_ROOT_DIR / "frontend" / "dist")))
+    launcher_autostart: bool = os.getenv("SEARCH_APP_LAUNCHER_AUTOSTART", "0").strip().lower() in {"1", "true", "yes", "on"}
+    launcher_log_name: str = os.getenv("SEARCH_APP_LAUNCHER_LOG_NAME", "launcher.log")
 
     @field_validator("data_dir", "frontend_dist_dir", mode="before")
     @classmethod
@@ -58,6 +60,7 @@ class Settings(BaseModel):
         "index_selected_extensions_name",
         "custom_content_extensions_name",
         "custom_filename_extensions_name",
+        "launcher_log_name",
     )
     @classmethod
     def _validate_file_name(cls, value: str) -> str:
@@ -103,6 +106,10 @@ class Settings(BaseModel):
     @property
     def custom_filename_extensions_path(self) -> Path:
         return (self.data_dir / self.custom_filename_extensions_name).resolve()
+
+    @property
+    def launcher_log_path(self) -> Path:
+        return (BACKEND_DIR / self.launcher_log_name).resolve()
 
 
 settings = Settings()

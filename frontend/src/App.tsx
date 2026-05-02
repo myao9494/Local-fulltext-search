@@ -9,25 +9,29 @@ import {
   deleteIndexedTargets,
   fetchFailedFiles,
   fetchIndexedTargets,
+  fetchLauncherStatus,
   fetchSearchTargets,
   fetchIndexStatus,
   fetchSchedulerSettings,
   addSearchTarget,
   pickFolder,
   reindexSearchTargets,
+  restartLauncher,
   resetDatabase,
+  startLauncher,
   recordSearchClick,
   openFileLocation,
   fetchSearchPage,
   setSearchTargetEnabled,
   startScheduler,
+  stopLauncher,
   updateAppSettings,
 } from "./api/client";
 import { ResultsList } from "./components/ResultsList";
 import { SearchBar } from "./components/SearchBar";
 import { filterSearchResultsByExtensions, normalizeExtensionToken } from "./extensionFilter";
 import { parseLaunchParams, shouldAutoSearch } from "./launchParams";
-import type { FailedFile, IndexedTarget, IndexStatus, SchedulerSettings, SearchResult, SearchTargetFolder } from "./types";
+import type { FailedFile, IndexedTarget, IndexStatus, LauncherStatus, SchedulerSettings, SearchResult, SearchTargetFolder } from "./types";
 
 const BASE_CONTENT_EXTENSIONS = [
   ".md",
@@ -90,7 +94,7 @@ const DEFAULT_EXCLUDE_KEYWORDS = [
 const DEFAULT_SYNONYM_GROUPS = "";
 const DEFAULT_SEARCH_FILTER_TEXT = "";
 
-type PageView = "search" | "indexed-targets" | "search-targets" | "scheduler";
+type PageView = "search" | "indexed-targets" | "search-targets" | "scheduler" | "launcher";
 type SearchTarget = "all" | "body" | "filename" | "folder" | "filename_and_folder";
 type SearchExecutionParams = {
   q: string;
@@ -337,6 +341,7 @@ function App() {
   const [isIndexExtensionMenuOpen, setIsIndexExtensionMenuOpen] = useState(false);
   const [isFailedFilesOpen, setIsFailedFilesOpen] = useState(false);
   const [schedulerState, setSchedulerState] = useState<SchedulerSettings | null>(null);
+  const [launcherState, setLauncherState] = useState<LauncherStatus | null>(null);
   const [schedulerPaths, setSchedulerPaths] = useState<string[]>([]);
   const [schedulerPathDraft, setSchedulerPathDraft] = useState("");
   const [schedulerStartAt, setSchedulerStartAt] = useState("");
@@ -373,6 +378,7 @@ function App() {
   const [isSavingObsidianSidebarExplorerDataPath, setIsSavingObsidianSidebarExplorerDataPath] = useState(false);
   const [isSavingIndexExtensions, setIsSavingIndexExtensions] = useState(false);
   const [isStartingScheduler, setIsStartingScheduler] = useState(false);
+  const [isLauncherActionRunning, setIsLauncherActionRunning] = useState(false);
   const [hasLoadedAppSettings, setHasLoadedAppSettings] = useState(false);
   const isIndexCancelling = Boolean(indexStatus?.is_running && indexStatus?.cancel_requested);
   const isIndexRunning = Boolean(indexStatus?.is_running && !indexStatus?.cancel_requested);
@@ -428,6 +434,7 @@ function App() {
   const visibleResults = filterSearchResultsByExtensions(sortedResults, searchFilterText);
   const loadMoreTriggerRef = useRef<HTMLDivElement | null>(null);
   const isSchedulerPage = pageView === "scheduler";
+  const isLauncherPage = pageView === "launcher";
   const isSearchTargetsPage = pageView === "search-targets";
   const candidateSearchTargetPath = fullPath.trim();
   const fallbackCoveredByLocalTargets = isPathCoveredByTarget(candidateSearchTargetPath, searchTargets);
@@ -447,6 +454,11 @@ function App() {
     setSchedulerState(response);
     setSchedulerPaths(response.paths);
     setSchedulerStartAt(toLocalDateTimeInputValue(response.start_at));
+  }
+
+  async function refreshLauncherState(): Promise<void> {
+    const response = await fetchLauncherStatus();
+    setLauncherState(response);
   }
 
   /**
@@ -506,6 +518,7 @@ function App() {
       setHasLoadedAppSettings(true);
       await refreshIndexStatus();
       await refreshSchedulerState();
+      await refreshLauncherState();
       await refreshSearchTargets();
     } catch (error) {
       setNoticeMessage("");
@@ -656,6 +669,20 @@ function App() {
       window.clearInterval(timerId);
     };
   }, [pageView, schedulerState?.is_enabled, schedulerState?.status]);
+
+  useEffect(() => {
+    if (pageView !== "launcher" && !launcherState?.is_running) {
+      return;
+    }
+
+    const timerId = window.setInterval(() => {
+      void refreshLauncherState().catch(() => undefined);
+    }, 1500);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [pageView, launcherState?.is_running]);
 
   useEffect(() => {
     if (!shouldAutoSearch(launchParams)) {
@@ -1223,6 +1250,40 @@ function App() {
         setErrorMessage(error instanceof Error ? error.message : "スケジューラー設定の取得に失敗しました。");
       }
     }
+    if (nextView === "launcher") {
+      try {
+        await refreshLauncherState();
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : "ランチャー状態の取得に失敗しました。");
+      }
+    }
+  }
+
+  async function handleLauncherAction(action: "start" | "stop" | "restart"): Promise<void> {
+    setIsLauncherActionRunning(true);
+    setErrorMessage("");
+    setNoticeMessage("");
+    try {
+      const response =
+        action === "start"
+          ? await startLauncher()
+          : action === "stop"
+            ? await stopLauncher()
+            : await restartLauncher();
+      setLauncherState(response);
+      setNoticeMessage(
+        action === "start"
+          ? "ランチャーを起動しました。"
+          : action === "stop"
+            ? "ランチャーを停止しました。"
+            : "ランチャーを再起動しました。",
+      );
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "ランチャー操作に失敗しました。");
+    } finally {
+      setIsLauncherActionRunning(false);
+    }
   }
 
   /**
@@ -1576,6 +1637,13 @@ function App() {
             type="button"
           >
             検索対象フォルダ
+          </button>
+          <button
+            className={`secondary-button page-tab ${pageView === "launcher" ? "active" : ""}`}
+            onClick={() => void handleChangePage("launcher")}
+            type="button"
+          >
+            ランチャー
           </button>
         </div>
 
@@ -2002,6 +2070,82 @@ function App() {
               </div>
             </div>
           </section>
+        ) : isLauncherPage ? (
+          <section className="launcher-panel">
+            <div className="indexed-targets-panel-header">
+              <div className="section-header">
+                <div>
+                  <h2>ランチャー</h2>
+                  <div className="form-help">
+                    デスクトップランチャーの起動状態、停止・再起動、ログを確認できます。
+                  </div>
+                </div>
+                <div className="section-header-actions">
+                  <span>{launcherState?.status ?? "unknown"}</span>
+                  <button className="menu-button" onClick={() => setIsMenuOpen((value) => !value)} type="button" aria-label="設定">
+                    <svg fill="currentColor" viewBox="0 0 24 24" width="24" height="24">
+                      <path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="launcher-control-grid">
+              <div className="status-card launcher-status-card">
+                <div>状態: {launcherState?.status ?? "-"}</div>
+                <div>PID: {launcherState?.pid ?? "-"}</div>
+                <div>終了コード: {launcherState?.returncode ?? "-"}</div>
+                <div>自動起動: {launcherState?.autostart ? "有効" : "無効"}</div>
+                <div>ログ: {launcherState?.log_path ?? "-"}</div>
+              </div>
+
+              <div className="scheduler-card launcher-actions-card">
+                <button
+                  className="secondary-button settings-save-button"
+                  onClick={() => void handleLauncherAction("start")}
+                  type="button"
+                  disabled={isLauncherActionRunning || launcherState?.is_running}
+                >
+                  起動
+                </button>
+                <button
+                  className="secondary-button settings-save-button"
+                  onClick={() => void handleLauncherAction("restart")}
+                  type="button"
+                  disabled={isLauncherActionRunning}
+                >
+                  再起動
+                </button>
+                <button
+                  className="secondary-button danger settings-save-button"
+                  onClick={() => void handleLauncherAction("stop")}
+                  type="button"
+                  disabled={isLauncherActionRunning || !launcherState?.is_running}
+                >
+                  停止
+                </button>
+                <button
+                  className="secondary-button settings-save-button"
+                  onClick={() => void refreshLauncherState()}
+                  type="button"
+                  disabled={isLauncherActionRunning}
+                >
+                  再読込
+                </button>
+              </div>
+            </div>
+
+            <div className="scheduler-log-panel launcher-log-panel">
+              <div className="section-header">
+                <h3>ログ</h3>
+                <span>{launcherState?.logs.length ?? 0}行</span>
+              </div>
+              <pre className="launcher-log-output">
+                {launcherState?.logs.length ? launcherState.logs.join("\n") : "ログはまだありません。"}
+              </pre>
+            </div>
+          </section>
         ) : null}
 
         <aside className={`settings-drawer ${isMenuOpen ? "open" : ""}`} aria-hidden={!isMenuOpen}>
@@ -2018,6 +2162,13 @@ function App() {
                 スケジューラー
               </button>
               <div className="form-help">複数フォルダと開始日時を指定し、別プロセスで順次インデックスできます。</div>
+            </div>
+
+            <div className="settings-action-row">
+              <button className="secondary-button" onClick={() => void handleChangePage("launcher")} type="button">
+                ランチャー
+              </button>
+              <div className="form-help">デスクトップランチャーの起動・停止・再起動とログ確認を行います。</div>
             </div>
 
             <div className="folder-form">

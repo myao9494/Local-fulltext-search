@@ -1,4 +1,4 @@
-# ローカル全文検索 - ランチャーアプリ仕様書 (Flet版)
+# ローカル全文検索 - ランチャーアプリ仕様書
 
 ## 1. 概要
 本アプリケーションは、ローカル全文検索システムのバックエンドを利用し、デスクトップ上でいつでも呼び出し可能な高速検索インターフェース（ランチャー）を提供します。MacのSpotlightやRaycastのような操作感を目指します。
@@ -8,8 +8,9 @@
 - **SpotlightスタイルUI**: 画面中央にフローティング表示される、枠のないスタイリッシュな検索バー。
 - **リアルタイム検索**: 入力と同時にバックエンドへ問い合わせを行い、結果を動的に表示。
 - **アクション**:
-    - `Enter`: 選択したファイルをOS標準のアプリケーションで開く。
-    - `Cmd/Ctrl + Enter`: ファイルの保存場所（フォルダ）を開く。
+    - 検索結果タイトル相当のクリック: Web アプリと同じ `http://localhost:8001/api/fullpath?path=...` または `http://localhost:8001/?path=...` を開く。
+    - `Finderで開く`: Web アプリと同じ `/api/files/open-location` を使い、ファイルの場合は親フォルダ、フォルダの場合はそのフォルダを開く。
+    - `フォルダを開く`: Web アプリと同じ `http://localhost:8001/?path=...` を開く。
 - **オートハイド**:
     - 実行完了（ファイル起動）時に自動的に非表示。
     - ウィンドウ外をクリック（フォーカス喪失）した際に自動的に非表示。
@@ -22,9 +23,9 @@
 - **配置**: マウスカーソルが存在するディスプレイの中央に表示。
 
 ## 4. 技術スタック
-- **GUIフレームワーク**: [Flet](https://flet.dev/) (Python)
+- **GUIフレームワーク**: macOS では PyObjC / Cocoa `NSPanel`。その他 OS では Flet 版をフォールバックとして利用する。
 - **バックエンド連携**: 既存の FastAPI サーバーに HTTP で接続。ランチャーの初期実装では `/api/search`, `/api/search/click`, `/api/files/open-location` を利用する。
-- **グローバルキー監視**: `pynput` ライブラリを使用。未導入環境では Flet ウィンドウがフォーカスされている間のキー操作だけ有効。
+- **グローバルキー監視**: macOS では Cocoa `NSEvent` の modifier flags 監視で `Option + Command` を検出する。その他 OS では `pynput` を利用する。
 - **常駐形態**: システムトレイ（タスクトレイ）にアイコンとして常駐し、バックエンドサーバーと共に起動。
 
 ## 5. フォルダ構成
@@ -36,7 +37,7 @@ launcher/
 ├── src/              # ソースコード (Python)
 │   └── launcher_app/
 │       ├── main.py       # エントリーポイント
-│       ├── ui/           # Flet コンポーネント
+│       ├── ui/           # Cocoa / Flet UI
 │       ├── api/          # バックエンド連携ロジック
 │       └── services/     # OS連携・ホットキー監視
 ├── tests/            # ランチャー専用テスト
@@ -44,13 +45,15 @@ launcher/
 ```
 
 ## 6. 現在の実装
-- `launcher_app.main` から Flet ランチャーを起動する。
+- `launcher_app.main` から OS に応じたランチャーを起動する。macOS では仮想デスクトップ対応の Cocoa `NSPanel` を使う。
+- `backend/run.py` または `start_dev.sh` でバックエンドを起動すると、`SEARCH_APP_LAUNCHER_AUTOSTART=1` によりランチャーも子プロセスとして自動起動する。
+- Web フロントの「ランチャー」ページから、起動・停止・再起動・状態確認・ログ確認を行える。
 - 検索は全DB対象 (`search_all_enabled=true`) かつ既存インデックス優先 (`skip_refresh=true`) で実行する。
-- `Enter` は選択ファイルを OS 標準アプリで開き、ファイル結果の場合は `/api/search/click` でアクセス数を更新する。
-- `Cmd/Ctrl + Enter` は Finder / Explorer で保存場所を開く。
-- `Escape` またはウィンドウ blur で最小化し、Flet セッションは維持する。`window.visible=false` はデスクトップセッションを閉じるため使わない。
-- 画面配置は初期実装では `window.center()` を使う。マウスカーソルのあるディスプレイ中央配置は、`screeninfo` 等を追加して後続で実装する。
-- macOS ではグローバルホットキーを有効にするため、起動元のターミナル/アプリまたは Flet に「システム設定 > プライバシーとセキュリティ > アクセシビリティ」の許可が必要。
+- 検索結果タイトル相当のクリックは Web アプリと同じ URL (`http://localhost:8001/api/fullpath?path=...` / `http://localhost:8001/?path=...`) を既定ブラウザで開く。
+- ファイル結果を開いた場合は Web アプリと同じく `/api/search/click` でアクセス数を更新する。
+- `Finderで開く` は Web アプリと同じく `/api/files/open-location` を呼ぶ。
+- macOS では `NSWindowCollectionBehaviorCanJoinAllSpaces` により、アクティブな仮想デスクトップ上へ表示する。
+- macOS ではグローバルホットキーを有効にするため、起動元のターミナル/アプリに「システム設定 > プライバシーとセキュリティ > アクセシビリティ」の許可が必要。
 
 ## 7. 起動方法
 ```bash
@@ -63,6 +66,12 @@ PYTHONPATH=src python -m launcher_app.main
 - `LAUNCHER_API_BASE_URL`: 接続先 API。既定値は `http://127.0.0.1:8079`。
 - `LAUNCHER_SEARCH_LIMIT`: ランチャーに表示する検索結果数。既定値は `8`。
 - `LAUNCHER_REQUEST_TIMEOUT`: API タイムアウト秒数。既定値は `5.0`。
+- `SEARCH_APP_LAUNCHER_AUTOSTART`: バックエンド起動時にランチャーも起動するか。`backend/run.py` と `start_dev.sh` では既定で `1`。
+- `SEARCH_APP_LAUNCHER_LOG_NAME`: ランチャーログファイル名。既定値は `launcher.log`。
+
+関連する Web オープン先:
+- ファイル: `http://localhost:8001/api/fullpath?path=<encoded full_path>`
+- フォルダ: `http://localhost:8001/?path=<encoded folder_path>`
 
 ## 8. 今後の課題（プロトタイプ後に検討）
 - ネオン調のグロー効果などの装飾。
