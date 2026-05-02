@@ -59,7 +59,9 @@ test("検索結果には親フォルダを開くリンクを含める", () => {
   const source = readFileSync(resultsListPath, "utf-8");
 
   assert.match(source, /getFolderPath\(item\.full_path\)/);
-  assert.match(source, /http:\/\/localhost:8001\/\?path=\$\{encodeURIComponent\(item\.result_kind === "folder" \? item\.full_path : folderPath\)\}/);
+  assert.match(source, /getWebAppBaseUrl\(\)/);
+  assert.match(source, /const fullPathUrl = `\$\{webAppBaseUrl\}\/api\/fullpath\?path=\$\{encodeURIComponent\(item\.full_path\)\}`/);
+  assert.match(source, /const folderUrl = `\$\{webAppBaseUrl\}\/\?path=\$\{encodeURIComponent\(item\.result_kind === "folder" \? item\.full_path : folderPath\)\}`/);
   assert.match(source, /result-folder-link/);
   assert.match(source, /フォルダを開く/);
   assert.match(source, /openFileLocation/);

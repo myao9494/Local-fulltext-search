@@ -35,7 +35,7 @@ def test_file_primary_url_matches_web_app_fullpath_url() -> None:
     """
     item = make_item(result_kind="file", full_path="/tmp/docs/a b.md")
 
-    assert primary_web_url_for_item(item) == "http://127.0.0.1:8079/api/fullpath?path=%2Ftmp%2Fdocs%2Fa%20b.md"
+    assert primary_web_url_for_item(item) == "http://localhost:8001/api/fullpath?path=%2Ftmp%2Fdocs%2Fa%20b.md"
 
 
 def test_folder_primary_url_matches_web_app_folder_url() -> None:
@@ -44,7 +44,7 @@ def test_folder_primary_url_matches_web_app_folder_url() -> None:
     """
     item = make_item(result_kind="folder", full_path="/tmp/docs")
 
-    assert primary_web_url_for_item(item) == "http://127.0.0.1:8079/?path=%2Ftmp%2Fdocs"
+    assert primary_web_url_for_item(item) == "http://localhost:8001/?path=%2Ftmp%2Fdocs"
 
 
 def test_folder_link_uses_parent_for_file_results() -> None:
@@ -54,7 +54,7 @@ def test_folder_link_uses_parent_for_file_results() -> None:
     item = make_item(result_kind="file", full_path="/tmp/docs/a.md")
 
     assert folder_path_for_item(item) == "/tmp/docs"
-    assert folder_web_url_for_item(item) == "http://127.0.0.1:8079/?path=%2Ftmp%2Fdocs"
+    assert folder_web_url_for_item(item) == "http://localhost:8001/?path=%2Ftmp%2Fdocs"
 
 
 def test_full_path_url_encodes_japanese_paths() -> None:
@@ -62,5 +62,5 @@ def test_full_path_url_encodes_japanese_paths() -> None:
     日本語パスも Web アプリの encodeURIComponent 相当でエンコードする。
     """
     assert full_path_web_url("/tmp/明和高校.md") == (
-        "http://127.0.0.1:8079/api/fullpath?path=%2Ftmp%2F%E6%98%8E%E5%92%8C%E9%AB%98%E6%A0%A1.md"
+        "http://localhost:8001/api/fullpath?path=%2Ftmp%2F%E6%98%8E%E5%92%8C%E9%AB%98%E6%A0%A1.md"
     )

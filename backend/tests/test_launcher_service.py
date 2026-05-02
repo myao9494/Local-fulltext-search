@@ -54,7 +54,7 @@ def test_launcher_manager_starts_process(monkeypatch, tmp_path) -> None:
     assert captured["command"][-2:] == ["-m", "launcher_app.main"]
     assert str(captured["command"][0]).endswith("python") or str(captured["command"][0]).endswith("python.exe")
     assert "PYTHONPATH" in captured["kwargs"]["env"]
-    assert captured["kwargs"]["env"]["LAUNCHER_WEB_BASE_URL"] == "http://127.0.0.1:8079"
+    assert captured["kwargs"]["env"]["LAUNCHER_WEB_BASE_URL"] == "http://localhost:8001"
 
 
 def test_launcher_manager_stop_terminates_process(tmp_path) -> None:

@@ -1242,9 +1242,19 @@ class SearchService:
 
     def _should_use_literal_term_search(self, term: str) -> bool:
         """
-        先頭が `-` の語は FTS5 MATCH では壊れやすいため、LIKE ベースの文字列検索へ切り替える。
+        先頭が `-` の語や `mp3` のような英数字混在語は FTS5 MATCH で取りこぼすことがあるため、
+        LIKE ベースの文字列検索へ切り替える。
         """
-        return term.startswith("-")
+        return term.startswith("-") or self._contains_ascii_letters_and_digits(term)
+
+    def _contains_ascii_letters_and_digits(self, term: str) -> bool:
+        """
+        ASCII 英字と数字を両方含む検索語かどうかを返す。
+        `mp3`, `h264`, `mp4a` などの語は SQLite の標準 tokenizer で安定しないため特別扱いする。
+        """
+        has_ascii_letter = any(("a" <= char.lower() <= "z") for char in term)
+        has_digit = any(char.isdigit() for char in term)
+        return has_ascii_letter and has_digit
 
     def _should_use_filename_fts(self, term: str) -> bool:
         """

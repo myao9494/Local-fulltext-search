@@ -14,7 +14,7 @@ def test_default_config_values() -> None:
     config = LauncherConfig()
 
     assert config.api_base_url == "http://127.0.0.1:8079"
-    assert config.web_base_url == "http://127.0.0.1:8079"
+    assert config.web_base_url == "http://localhost:8001"
     assert config.search_limit == 8
     assert config.request_timeout == 5.0
 

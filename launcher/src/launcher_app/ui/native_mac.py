@@ -12,6 +12,10 @@ import webbrowser
 
 import AppKit
 import objc
+try:
+    import Quartz
+except ImportError:  # pragma: no cover - macOS 以外のテスト環境向け
+    Quartz = None
 from PyObjCTools import AppHelper
 
 from launcher_app.api.client import LauncherApiClient
@@ -71,6 +75,10 @@ class LauncherDelegate(AppKit.NSObject):
         self.search_sequence = 0
         self.search_timer: threading.Timer | None = None
         self.hotkey_monitors: list[Any] = []
+        self.hotkey_event_tap = None
+        self.hotkey_event_tap_location = None
+        self.hotkey_event_tap_source = None
+        self.hotkey_event_tap_callback = None
         self.power_notification_center = None
         self.power_notifications_registered = False
         self.hotkey_activated = False
@@ -219,11 +227,12 @@ class LauncherDelegate(AppKit.NSObject):
     @objc.python_method
     def _start_hotkey_monitor(self) -> None:
         """
-        Cocoa の modifier flags 監視で Option + Command を検出する。
+        セッション全体の入力イベント監視で Option + Command を検出する。
         既に登録済みの場合は二重登録しない。
         """
-        if self.hotkey_monitors:
+        if self.hotkey_monitors or self.hotkey_event_tap is not None:
             return
+        self._start_hotkey_event_tap()
         mask = AppKit.NSEventMaskFlagsChanged
 
         def handler(event: Any) -> Any:
@@ -235,13 +244,66 @@ class LauncherDelegate(AppKit.NSObject):
         self.hotkey_monitors = [monitor for monitor in (global_monitor, local_monitor) if monitor is not None]
 
     @objc.python_method
+    def _start_hotkey_event_tap(self) -> None:
+        """
+        アプリに依存しにくい CGEventTap で修飾キー変更を監視する。
+        """
+        if Quartz is None or self.hotkey_event_tap is not None:
+            return
+
+        def callback(proxy: Any, event_type: int, event: Any, refcon: Any) -> Any:
+            if event_type == Quartz.kCGEventTapDisabledByTimeout:
+                Quartz.CGEventTapEnable(self.hotkey_event_tap, True)
+                return event
+            if event_type == Quartz.kCGEventFlagsChanged:
+                self._handle_modifier_flags(Quartz.CGEventGetFlags(event))
+            return event
+
+        event_mask = Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged)
+        event_tap = None
+        event_tap_location = None
+        for location in (Quartz.kCGHIDEventTap, Quartz.kCGSessionEventTap):
+            event_tap = Quartz.CGEventTapCreate(
+                location,
+                Quartz.kCGHeadInsertEventTap,
+                Quartz.kCGEventTapOptionListenOnly,
+                event_mask,
+                callback,
+                None,
+            )
+            if event_tap is not None:
+                event_tap_location = location
+                break
+        if event_tap is None:
+            return
+        source = Quartz.CFMachPortCreateRunLoopSource(None, event_tap, 0)
+        Quartz.CFRunLoopAddSource(Quartz.CFRunLoopGetCurrent(), source, Quartz.kCFRunLoopCommonModes)
+        Quartz.CGEventTapEnable(event_tap, True)
+        self.hotkey_event_tap = event_tap
+        self.hotkey_event_tap_location = event_tap_location
+        self.hotkey_event_tap_source = source
+        self.hotkey_event_tap_callback = callback
+
+    @objc.python_method
     def _stop_hotkey_monitor(self) -> None:
         """
-        登録済みの Cocoa イベント監視を解除する。
+        登録済みの入力イベント監視を解除する。
         """
         for monitor in self.hotkey_monitors:
             AppKit.NSEvent.removeMonitor_(monitor)
         self.hotkey_monitors = []
+        if Quartz is not None and self.hotkey_event_tap is not None:
+            if self.hotkey_event_tap_source is not None:
+                Quartz.CFRunLoopRemoveSource(
+                    Quartz.CFRunLoopGetCurrent(),
+                    self.hotkey_event_tap_source,
+                    Quartz.kCFRunLoopCommonModes,
+                )
+            Quartz.CFMachPortInvalidate(self.hotkey_event_tap)
+        self.hotkey_event_tap = None
+        self.hotkey_event_tap_location = None
+        self.hotkey_event_tap_source = None
+        self.hotkey_event_tap_callback = None
         self.hotkey_activated = False
 
     @objc.python_method
@@ -292,7 +354,13 @@ class LauncherDelegate(AppKit.NSObject):
         """
         Option + Command が揃った瞬間にだけ表示状態を切り替える。
         """
-        flags = event.modifierFlags()
+        self._handle_modifier_flags(event.modifierFlags())
+
+    @objc.python_method
+    def _handle_modifier_flags(self, flags: int) -> None:
+        """
+        修飾キーの bit flag から Option + Command の押下状態を判定する。
+        """
         required = AppKit.NSEventModifierFlagCommand | AppKit.NSEventModifierFlagOption
         active = (flags & required) == required
         if active and not self.hotkey_activated:

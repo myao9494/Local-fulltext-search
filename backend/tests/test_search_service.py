@@ -741,6 +741,29 @@ def test_search_matches_content_indexed_file_by_filename_in_normal_mode(tmp_path
     assert [item.file_name for item in result.items] == ["project-alpha.md"]
 
 
+def test_search_matches_ascii_term_with_digits_in_body(tmp_path: Path) -> None:
+    """
+    `mp3` のような英数字混在語は FTS5 で落ちる場合があるため、本文検索を文字列検索へフォールバックしてヒットさせる。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "docs"
+    target.mkdir()
+    (target / "music.md").write_text("skillsを使ってmp3をダウンロードする。", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(
+            q="mp3",
+            full_path=str(target),
+            index_depth=0,
+            refresh_window_minutes=60,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["music.md"]
+    assert "<mark>mp3</mark>" in result.items[0].snippet.lower()
+
+
 def test_search_matches_parent_folder_name_in_normal_mode(tmp_path: Path) -> None:
     """
     親フォルダー名に一致したときは、通常検索でフォルダー自体を結果に出す。

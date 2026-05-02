@@ -57,6 +57,14 @@ function fallbackCopyTextToClipboard(text: string): boolean {
   return didCopy;
 }
 
+/**
+ * 検索結果クリック時に使う Web アプリ側のベース URL を返す。
+ * 検索結果の遷移先は OS や起動元にかかわらず Web フロントの 8001 番を正とする。
+ */
+function getWebAppBaseUrl(): string {
+  return "http://localhost:8001";
+}
+
 type ResultCardProps = {
   item: SearchResult;
   dateField: "created" | "modified";
@@ -91,8 +99,9 @@ function ResultCard({
   const [isSnippetExpandable, setIsSnippetExpandable] = useState(false);
   const snippetRef = useRef<HTMLParagraphElement | null>(null);
   const folderPath = getFolderPath(item.full_path);
-  const fullPathUrl = `http://localhost:8001/api/fullpath?path=${encodeURIComponent(item.full_path)}`;
-  const folderUrl = `http://localhost:8001/?path=${encodeURIComponent(item.result_kind === "folder" ? item.full_path : folderPath)}`;
+  const webAppBaseUrl = getWebAppBaseUrl();
+  const fullPathUrl = `${webAppBaseUrl}/api/fullpath?path=${encodeURIComponent(item.full_path)}`;
+  const folderUrl = `${webAppBaseUrl}/?path=${encodeURIComponent(item.result_kind === "folder" ? item.full_path : folderPath)}`;
   const primaryUrl = item.result_kind === "folder" ? folderUrl : fullPathUrl;
 
   useEffect(() => {

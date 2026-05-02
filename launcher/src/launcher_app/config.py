@@ -13,7 +13,7 @@ class LauncherConfig:
     """
 
     api_base_url: str = "http://127.0.0.1:8079"
-    web_base_url: str = "http://127.0.0.1:8079"
+    web_base_url: str = "http://localhost:8001"
     search_limit: int = 8
     request_timeout: float = 5.0
 
