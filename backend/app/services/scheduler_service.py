@@ -24,7 +24,7 @@ from app.services.index_service import IndexService
 from app.services.path_service import AbsolutePathRequiredError, normalize_path
 
 
-type ProcessFactory = Callable[..., subprocess.Popen[bytes] | subprocess.Popen[str]]
+ProcessFactory = Callable[..., subprocess.Popen[bytes] | subprocess.Popen[str]]
 
 
 class SchedulerService:

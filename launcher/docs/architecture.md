@@ -53,6 +53,7 @@ macOS では Flet の最小化・復帰が Spaces と相性が悪いため、PyO
 
 - `NSWindowCollectionBehaviorCanJoinAllSpaces` でアクティブな仮想デスクトップに表示する。
 - `NSEvent` の modifier flags 監視で `Option + Command` を検出する。
+- `NSWorkspaceWillSleepNotification` / `NSWorkspaceDidWakeNotification` でスリープ前後を検知し、復帰時に `NSEvent` monitor を再登録する。
 - ボーダーレスでも入力できるよう `canBecomeKeyWindow()` / `canBecomeMainWindow()` を `True` にした `LauncherPanel` を使う。
 
 ### バックエンドとの通信

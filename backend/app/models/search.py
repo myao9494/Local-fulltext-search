@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from pathlib import PurePosixPath
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -15,6 +16,8 @@ def _validate_absolute_path_or_unc(value: str, *, field_name: str) -> str:
     API で受け取る検索対象パスは、絶対パスまたは UNC パスだけを許可する。
     """
     if value == "":
+        return value
+    if PurePosixPath(value).is_absolute():
         return value
     if is_windows_absolute_path(value):
         return value
