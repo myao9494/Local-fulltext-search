@@ -32,6 +32,7 @@ class FakeQuartz:
     kCGEventFlagsChanged = 12
     kCGHIDEventTap = 0
     kCGSessionEventTap = 1
+    kCGEventSourceStateCombinedSessionState = 0
     kCGHeadInsertEventTap = 0
     kCGEventTapOptionListenOnly = 1
     kCFRunLoopCommonModes = "common"
@@ -41,6 +42,7 @@ class FakeQuartz:
     removed: list[tuple[str, str]] = []
     created_locations: list[int] = []
     unavailable_locations: set[int] = set()
+    flags_state = 0
     callback = None
 
     @staticmethod
@@ -79,6 +81,22 @@ class FakeQuartz:
     def CFMachPortInvalidate(event_tap: str) -> None:
         FakeQuartz.invalidated.append(event_tap)
 
+    @staticmethod
+    def CGEventSourceFlagsState(state_id: int) -> int:
+        return FakeQuartz.flags_state
+
+
+class FakeTimer:
+    """
+    NSTimer の停止状態を記録する。
+    """
+
+    def __init__(self) -> None:
+        self.invalidated = False
+
+    def invalidate(self) -> None:
+        self.invalidated = True
+
 
 class FakeNotificationCenter:
     """
@@ -106,12 +124,14 @@ def test_restart_hotkey_monitor_removes_existing_monitors(monkeypatch) -> None:
     delegate.hotkey_event_tap_location = FakeQuartz.kCGHIDEventTap
     delegate.hotkey_event_tap_source = "event-source"
     delegate.hotkey_event_tap_callback = object()
+    delegate.hotkey_watchdog_timer = FakeTimer()
 
     def start_hotkey_monitor() -> None:
         delegate.started += 1
         delegate.hotkey_monitors = ["new-global", "new-local"]
 
     delegate._stop_hotkey_monitor = native_mac.LauncherDelegate._stop_hotkey_monitor.__get__(delegate)
+    delegate._stop_hotkey_watchdog = native_mac.LauncherDelegate._stop_hotkey_watchdog.__get__(delegate)
     delegate._start_hotkey_monitor = start_hotkey_monitor
     delegate._restart_hotkey_monitor = native_mac.LauncherDelegate._restart_hotkey_monitor.__get__(delegate)
 
@@ -125,6 +145,7 @@ def test_restart_hotkey_monitor_removes_existing_monitors(monkeypatch) -> None:
     assert delegate.hotkey_event_tap_location is None
     assert delegate.hotkey_event_tap_source is None
     assert delegate.hotkey_event_tap_callback is None
+    assert delegate.hotkey_watchdog_timer is None
     assert delegate.hotkey_activated is False
     assert delegate.started == 1
 
@@ -207,6 +228,42 @@ def test_power_state_monitor_registers_sleep_and_wake_once(monkeypatch) -> None:
         (delegate, "workspaceWillSleep:", "will-sleep", None),
         (delegate, "workspaceDidWake:", "did-wake", None),
     ]
+
+
+def test_poll_hotkey_state_reads_current_modifier_flags_and_reenables_tap(monkeypatch) -> None:
+    """
+    watchdog は現在の修飾キー状態を読み、event tap も再有効化する。
+    """
+    FakeQuartz.enabled = []
+    FakeQuartz.flags_state = 123
+    monkeypatch.setattr(native_mac, "Quartz", FakeQuartz)
+    delegate = native_mac.LauncherDelegate.alloc().init()
+    delegate.hotkey_event_tap = "event-tap-0"
+    handled_flags = []
+
+    def handle_modifier_flags(self, flags: int) -> None:
+        handled_flags.append(flags)
+
+    monkeypatch.setattr(native_mac.LauncherDelegate, "_handle_modifier_flags", handle_modifier_flags)
+
+    native_mac.LauncherDelegate.pollHotkeyState_(delegate, None)
+
+    assert FakeQuartz.enabled == [("event-tap-0", True)]
+    assert handled_flags == [123]
+
+
+def test_stop_hotkey_watchdog_invalidates_timer() -> None:
+    """
+    hotkey 停止時は watchdog timer も停止する。
+    """
+    timer = FakeTimer()
+    delegate = SimpleNamespace(hotkey_watchdog_timer=timer)
+    delegate._stop_hotkey_watchdog = native_mac.LauncherDelegate._stop_hotkey_watchdog.__get__(delegate)
+
+    delegate._stop_hotkey_watchdog()
+
+    assert timer.invalidated is True
+    assert delegate.hotkey_watchdog_timer is None
 
 
 def test_workspace_wake_restarts_hotkey_monitor(monkeypatch) -> None:

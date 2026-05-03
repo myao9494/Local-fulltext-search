@@ -25,8 +25,9 @@
 ## 4. 技術スタック
 - **GUIフレームワーク**: macOS では PyObjC / Cocoa `NSPanel`。その他 OS では Flet 版をフォールバックとして利用する。
 - **バックエンド連携**: 既存の FastAPI サーバーに HTTP で接続。ランチャーの初期実装では `/api/search`, `/api/search/click`, `/api/files/open-location` を利用する。
-- **グローバルキー監視**: macOS では `CGEventTap` の HID レベル監視を優先して modifier flags を監視し、作成できない場合は session レベルへフォールバックする。補助的に Cocoa `NSEvent` の monitor も登録して `Option + Command` を検出する。その他 OS では `pynput` を利用する。
+- **グローバルキー監視**: macOS では `CGEventTap` の HID レベル監視を優先して modifier flags を監視し、作成できない場合は session レベルへフォールバックする。補助的に Cocoa `NSEvent` の monitor と `CGEventSourceFlagsState` の watchdog polling も使い、`Option + Command` を検出する。その他 OS では `pynput` を利用する。
 - **スリープ復帰対応**: macOS では `NSWorkspaceWillSleepNotification` / `NSWorkspaceDidWakeNotification` を監視し、復帰時に `CGEventTap` と `NSEvent` monitor を再登録してホットキーを復旧する。
+- **仮想デスクトップ復帰**: パネル表示直前に Space 関連の `NSWindowCollectionBehavior`、window level、非アクティブ時の非表示設定を張り直し、長時間放置による App Nap を抑止する。
 - **常駐形態**: バックエンドサーバー配下の子プロセスとして起動し、Web フロントの「ランチャー」ページから状態確認・起動・停止・再起動・ログ確認を行う。システムトレイ常駐は未実装。
 
 ## 5. フォルダ構成
@@ -54,7 +55,8 @@ launcher/
 - ファイル結果を開いた場合は Web アプリと同じく `/api/search/click` でアクセス数を更新する。
 - `Finderで開く` は Web アプリと同じく `/api/files/open-location` を呼ぶ。
 - macOS では `NSWindowCollectionBehaviorCanJoinAllSpaces` により、アクティブな仮想デスクトップ上へ表示する。
-- macOS ではスリープ直前にホットキー押下状態をクリアし、復帰後に `CGEventTap` と Cocoa のグローバル/ローカルイベント monitor を張り直す。
+- macOS ではスリープ直前にホットキー押下状態をクリアし、復帰後に `CGEventTap`、watchdog polling、Cocoa のグローバル/ローカルイベント monitor を張り直す。
+- macOS では表示のたびに `CanJoinAllSpaces` / `FullScreenAuxiliary` / `Stationary` / `Transient` と `NSStatusWindowLevel` を再適用し、現在の Space 上で前面表示する。
 
 ## 7. OS 別パーミッション・注意事項
 

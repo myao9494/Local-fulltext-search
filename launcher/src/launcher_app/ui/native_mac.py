@@ -33,6 +33,7 @@ from launcher_app.utils import strip_html
 
 PANEL_WIDTH = 780
 PANEL_HEIGHT = 520
+HOTKEY_WATCHDOG_INTERVAL_SECONDS = 0.08
 _delegate_ref: Any | None = None
 
 class FlippedView(AppKit.NSView):
@@ -79,8 +80,10 @@ class LauncherDelegate(AppKit.NSObject):
         self.hotkey_event_tap_location = None
         self.hotkey_event_tap_source = None
         self.hotkey_event_tap_callback = None
+        self.hotkey_watchdog_timer = None
         self.power_notification_center = None
         self.power_notifications_registered = False
+        self.activity_token = None
         self.hotkey_activated = False
         self.panel = None
         self.search_field = None
@@ -95,6 +98,7 @@ class LauncherDelegate(AppKit.NSObject):
         """
         if self.panel is not None:
             return
+        self._begin_activity()
         self._build_panel()
         self._start_hotkey_monitor()
         self._start_power_state_monitor()
@@ -233,6 +237,7 @@ class LauncherDelegate(AppKit.NSObject):
         if self.hotkey_monitors or self.hotkey_event_tap is not None:
             return
         self._start_hotkey_event_tap()
+        self._start_hotkey_watchdog()
         mask = AppKit.NSEventMaskFlagsChanged
 
         def handler(event: Any) -> Any:
@@ -285,10 +290,49 @@ class LauncherDelegate(AppKit.NSObject):
         self.hotkey_event_tap_callback = callback
 
     @objc.python_method
+    def _start_hotkey_watchdog(self) -> None:
+        """
+        event tap の取りこぼしに備え、現在の修飾キー状態を定期確認する。
+        """
+        if self.hotkey_watchdog_timer is not None:
+            return
+        timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            HOTKEY_WATCHDOG_INTERVAL_SECONDS,
+            self,
+            "pollHotkeyState:",
+            None,
+            True,
+        )
+        AppKit.NSRunLoop.currentRunLoop().addTimer_forMode_(timer, AppKit.NSRunLoopCommonModes)
+        self.hotkey_watchdog_timer = timer
+
+    @objc.python_method
+    def _stop_hotkey_watchdog(self) -> None:
+        """
+        修飾キー状態の定期確認タイマーを停止する。
+        """
+        if self.hotkey_watchdog_timer is None:
+            return
+        self.hotkey_watchdog_timer.invalidate()
+        self.hotkey_watchdog_timer = None
+
+    def pollHotkeyState_(self, timer: Any) -> None:
+        """
+        前面アプリがイベントを握る場合でも現在の Option + Command 状態を読む。
+        """
+        if Quartz is None:
+            return
+        if self.hotkey_event_tap is not None:
+            Quartz.CGEventTapEnable(self.hotkey_event_tap, True)
+        flags = Quartz.CGEventSourceFlagsState(Quartz.kCGEventSourceStateCombinedSessionState)
+        self._handle_modifier_flags(flags)
+
+    @objc.python_method
     def _stop_hotkey_monitor(self) -> None:
         """
         登録済みの入力イベント監視を解除する。
         """
+        self._stop_hotkey_watchdog()
         for monitor in self.hotkey_monitors:
             AppKit.NSEvent.removeMonitor_(monitor)
         self.hotkey_monitors = []
@@ -365,20 +409,63 @@ class LauncherDelegate(AppKit.NSObject):
         active = (flags & required) == required
         if active and not self.hotkey_activated:
             self.hotkey_activated = True
-            self.toggle_panel()
+            AppHelper.callAfter(self.toggle_panel)
         elif not active:
             self.hotkey_activated = False
+
+    @objc.python_method
+    def _panel_collection_behavior(self) -> int:
+        """
+        仮想デスクトップやフルスクリーン上でも表示するための挙動を返す。
+        """
+        return (
+            AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
+            | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
+            | AppKit.NSWindowCollectionBehaviorStationary
+            | getattr(AppKit, "NSWindowCollectionBehaviorTransient", 0)
+        )
+
+    @objc.python_method
+    def _prepare_panel_for_active_space(self) -> None:
+        """
+        時間経過後も現在の仮想デスクトップへ出るように表示属性を張り直す。
+        """
+        self.panel.setCollectionBehavior_(self._panel_collection_behavior())
+        self.panel.setLevel_(AppKit.NSStatusWindowLevel)
+        self.panel.setHidesOnDeactivate_(False)
+        if self.panel.isMiniaturized():
+            self.panel.deminiaturize_(None)
+
+    @objc.python_method
+    def _begin_activity(self) -> None:
+        """
+        常駐ランチャーが App Nap で眠らないように activity token を保持する。
+        """
+        if self.activity_token is not None:
+            return
+        process_info = AppKit.NSProcessInfo.processInfo()
+        options = (
+            getattr(AppKit, "NSActivityUserInitiatedAllowingIdleSystemSleep", 0)
+            | getattr(AppKit, "NSActivityLatencyCritical", 0)
+        )
+        self.activity_token = process_info.beginActivityWithOptions_reason_(
+            options,
+            "Local Fulltext Search launcher hotkey monitor",
+        )
 
     @objc.python_method
     def show_panel(self) -> None:
         """
         現在の仮想デスクトップ上にパネルを表示する。
         """
+        self._prepare_panel_for_active_space()
+        self.panel.orderOut_(None)
         self._center_panel_on_mouse_screen()
         self.panel.setAlphaValue_(1.0)
         AppKit.NSApp.activateIgnoringOtherApps_(True)
         self.panel.makeKeyWindow()
         self.panel.makeKeyAndOrderFront_(None)
+        self.panel.orderFrontRegardless()
         self.search_field.becomeFirstResponder()
 
     @objc.python_method
@@ -416,11 +503,7 @@ class LauncherDelegate(AppKit.NSObject):
         self.panel.setBackgroundColor_(AppKit.NSColor.clearColor())
         self.panel.setHidesOnDeactivate_(False)
         self.panel.setMovableByWindowBackground_(True)
-        self.panel.setCollectionBehavior_(
-            AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces
-            | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
-            | AppKit.NSWindowCollectionBehaviorStationary
-        )
+        self.panel.setCollectionBehavior_(self._panel_collection_behavior())
 
         content = AppKit.NSView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH, PANEL_HEIGHT))
         content.setWantsLayer_(True)
@@ -726,6 +809,7 @@ def run_native_mac_app(config: LauncherConfig | None = None) -> None:
 
     delegate = LauncherDelegate.alloc().initWithClient_config_(client, app_config)
     _delegate_ref = delegate
+    delegate._begin_activity()
     delegate._build_panel()
     delegate._start_hotkey_monitor()
     delegate._start_power_state_monitor()
