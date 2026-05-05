@@ -65,8 +65,11 @@ class SearchService:
                 else normalize_path_str(params.full_path)
             )
         app_settings = self.index_service.get_app_settings()
+        default_exclude_keywords = (
+            app_settings.web_exclude_keywords if params.source_type == "web" else app_settings.exclude_keywords
+        )
         effective_exclude_keywords = (
-            params.exclude_keywords if params.exclude_keywords is not None else app_settings.exclude_keywords
+            params.exclude_keywords if params.exclude_keywords is not None else default_exclude_keywords
         )
         excluded_keywords = self.index_service._parse_exclude_keywords(effective_exclude_keywords)
         refresh_flags = {"used_existing_index": False, "background_refresh_scheduled": False}

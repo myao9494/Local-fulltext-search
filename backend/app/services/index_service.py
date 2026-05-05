@@ -278,7 +278,10 @@ class IndexService:
         is_partial_target_refresh = normalized_full_path != effective_full_path
         scan_depth = index_depth + self._relative_directory_depth(effective_full_path, normalized_full_path)
         app_settings = self.get_app_settings()
-        normalized_keywords = self._normalize_exclude_keywords(exclude_keywords)
+        default_exclude_keywords = app_settings.web_exclude_keywords if source_type == "web" else app_settings.exclude_keywords
+        normalized_keywords = self._normalize_exclude_keywords(
+            exclude_keywords if exclude_keywords is not None else default_exclude_keywords
+        )
         normalized_extensions = self._normalize_selected_extensions(
             types,
             custom_content_extensions=app_settings.custom_content_extensions,
@@ -498,6 +501,7 @@ class IndexService:
         custom_filename_extensions = self._read_persisted_custom_filename_extensions()
         return AppSettingsResponse(
             exclude_keywords=self._read_persisted_exclude_keywords(),
+            web_exclude_keywords=self._read_persisted_web_exclude_keywords(),
             hidden_indexed_targets=self._read_persisted_hidden_indexed_targets(),
             synonym_groups=self._read_persisted_synonym_groups(),
             obsidian_sidebar_explorer_data_path=self._read_persisted_obsidian_sidebar_explorer_data_path(),
@@ -513,6 +517,7 @@ class IndexService:
         self,
         *,
         exclude_keywords: str | None = None,
+        web_exclude_keywords: str | None = None,
         hidden_indexed_targets: str | None = None,
         synonym_groups: str | None = None,
         obsidian_sidebar_explorer_data_path: str | None = None,
@@ -526,6 +531,11 @@ class IndexService:
         current = self.get_app_settings()
         normalized_exclude_keywords = (
             self._normalize_exclude_keywords(exclude_keywords) if exclude_keywords is not None else current.exclude_keywords
+        )
+        normalized_web_exclude_keywords = (
+            self._normalize_exclude_keywords(web_exclude_keywords)
+            if web_exclude_keywords is not None
+            else current.web_exclude_keywords
         )
         normalized_hidden_indexed_targets = (
             self._normalize_hidden_indexed_targets(hidden_indexed_targets)
@@ -564,6 +574,7 @@ class IndexService:
             )
         )
         self._write_persisted_exclude_keywords(normalized_exclude_keywords)
+        self._write_persisted_web_exclude_keywords(normalized_web_exclude_keywords)
         self._write_persisted_hidden_indexed_targets(normalized_hidden_indexed_targets)
         self._write_persisted_synonym_groups(normalized_synonym_groups)
         self._write_persisted_obsidian_sidebar_explorer_data_path(normalized_obsidian_sidebar_explorer_data_path)
@@ -572,6 +583,7 @@ class IndexService:
         self._write_persisted_index_selected_extensions(normalized_index_selected_extensions)
         return AppSettingsResponse(
             exclude_keywords=normalized_exclude_keywords,
+            web_exclude_keywords=normalized_web_exclude_keywords,
             hidden_indexed_targets=normalized_hidden_indexed_targets,
             synonym_groups=normalized_synonym_groups,
             obsidian_sidebar_explorer_data_path=normalized_obsidian_sidebar_explorer_data_path,
@@ -601,6 +613,27 @@ class IndexService:
         """
         ensure_data_dir()
         path = settings.exclude_keywords_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._normalize_exclude_keywords(value), encoding="utf-8")
+
+    def _read_persisted_web_exclude_keywords(self) -> str:
+        """
+        Web クロール専用の除外キーワードをテキストファイルから読み込む。
+        """
+        ensure_data_dir()
+        path = settings.web_exclude_keywords_path
+        if path.exists():
+            return self._normalize_exclude_keywords(path.read_text(encoding="utf-8"))
+
+        self._write_persisted_web_exclude_keywords("")
+        return ""
+
+    def _write_persisted_web_exclude_keywords(self, value: str) -> None:
+        """
+        Web クロール専用の除外キーワードを改行区切りのプレーンテキストとして保存する。
+        """
+        ensure_data_dir()
+        path = settings.web_exclude_keywords_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self._normalize_exclude_keywords(value), encoding="utf-8")
 
@@ -776,11 +809,32 @@ class IndexService:
         ).fetchall()
         return FailedFileListResponse(items=[FailedFileItem.model_validate(dict(row)) for row in rows])
 
-    def list_indexed_targets(self) -> IndexedTargetListResponse:
+    def list_indexed_targets(self, *, source_type: str = "local") -> IndexedTargetListResponse:
         """
         UI 向けに、実際にインデックス済みファイルが存在する全フォルダ一覧を返す。
         件数は各フォルダ直下のファイル数とし、子孫フォルダの件数は親へ合算しない。
         """
+        if source_type == "web":
+            rows = self.connection.execute(
+                """
+                SELECT normalized_path, indexed_at
+                FROM files
+                WHERE source_type = 'web'
+                ORDER BY indexed_at DESC, normalized_path ASC
+                """
+            ).fetchall()
+            return IndexedTargetListResponse(
+                items=[
+                    IndexedTargetItem(
+                        full_path=str(row["normalized_path"]),
+                        source_type="web",
+                        last_indexed_at=row["indexed_at"],
+                        indexed_file_count=1,
+                    )
+                    for row in rows
+                ]
+            )
+
         rows = self.connection.execute(
             """
             SELECT
@@ -812,6 +866,7 @@ class IndexService:
                 if folder_entry is None:
                     folder_map[folder_path] = {
                         "full_path": folder_path,
+                        "source_type": "local",
                         "last_indexed_at": indexed_at,
                         "indexed_file_count": 0,
                     }
@@ -992,16 +1047,19 @@ class IndexService:
         return ReindexSearchTargetsResponse(reindexed_count=reindexed_count)
 
     def delete_indexed_folders(self, folder_paths: list[str]) -> DeleteIndexedFoldersResponse:
+        return self.delete_indexed_targets(folder_paths)
+
+    def delete_indexed_targets(self, target_paths: list[str]) -> DeleteIndexedFoldersResponse:
         """
-        選択したフォルダ群配下のインデックスを削除し、重なる targets は次回再取得される状態へ戻す。
+        選択したフォルダ群または Web URL のインデックスを削除し、重なる targets は次回再取得される状態へ戻す。
         """
         if self._is_running():
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Indexing is already running.")
         normalized_paths = sorted(
             {
-                normalize_path(folder_path).as_posix()
-                for folder_path in folder_paths
-                if str(folder_path).strip()
+                self._normalize_target_identifier_or_raise(target_path)[0]
+                for target_path in target_paths
+                if str(target_path).strip()
             }
         )
         if not normalized_paths:

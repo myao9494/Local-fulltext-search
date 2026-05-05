@@ -94,7 +94,7 @@ const DEFAULT_EXCLUDE_KEYWORDS = [
 const DEFAULT_SYNONYM_GROUPS = "";
 const DEFAULT_SEARCH_FILTER_TEXT = "";
 
-type PageView = "search" | "indexed-targets" | "search-targets" | "scheduler" | "launcher";
+type PageView = "search" | "indexed-targets" | "search-targets" | "scheduler" | "launcher" | "indexed-web-targets";
 type SearchSource = "local" | "web";
 type SearchTarget = "all" | "body" | "filename" | "folder" | "filename_and_folder";
 type SearchExecutionParams = {
@@ -314,6 +314,8 @@ function App() {
   const [refreshWindowMinutes, setRefreshWindowMinutes] = useState(() => localStorage.getItem("refresh_window_minutes") ?? "60");
   const [savedExcludeKeywords, setSavedExcludeKeywords] = useState(DEFAULT_EXCLUDE_KEYWORDS);
   const [excludeKeywordsDraft, setExcludeKeywordsDraft] = useState(DEFAULT_EXCLUDE_KEYWORDS);
+  const [savedWebExcludeKeywords, setSavedWebExcludeKeywords] = useState("");
+  const [webExcludeKeywordsDraft, setWebExcludeKeywordsDraft] = useState("");
   const [savedHiddenIndexedTargets, setSavedHiddenIndexedTargets] = useState("");
   const [savedSynonymGroups, setSavedSynonymGroups] = useState(DEFAULT_SYNONYM_GROUPS);
   const [synonymGroupsDraft, setSynonymGroupsDraft] = useState(DEFAULT_SYNONYM_GROUPS);
@@ -377,6 +379,7 @@ function App() {
   const [openingIndexedTargetPath, setOpeningIndexedTargetPath] = useState<string | null>(null);
   const [isIgnoringResultPath, setIsIgnoringResultPath] = useState<string | null>(null);
   const [isSavingExcludeKeywords, setIsSavingExcludeKeywords] = useState(false);
+  const [isSavingWebExcludeKeywords, setIsSavingWebExcludeKeywords] = useState(false);
   const [isSavingSynonymGroups, setIsSavingSynonymGroups] = useState(false);
   const [isSavingObsidianSidebarExplorerDataPath, setIsSavingObsidianSidebarExplorerDataPath] = useState(false);
   const [isSavingIndexExtensions, setIsSavingIndexExtensions] = useState(false);
@@ -392,6 +395,7 @@ function App() {
     typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("windows")
       ? "Explorerで開く"
       : "Finderで開く";
+  const isIndexedWebTargetsPage = pageView === "indexed-web-targets";
 
   const normalizedFilterKeyword = filterKeyword.trim();
   const loweredFilterKeyword = normalizedFilterKeyword.toLowerCase();
@@ -424,6 +428,8 @@ function App() {
     filteredSearchTargets.length > 0 && filteredSearchTargets.every((item) => item.is_enabled);
   const normalizedExcludeKeywordsDraft = normalizeExcludeKeywords(excludeKeywordsDraft);
   const hasUnsavedExcludeKeywords = normalizedExcludeKeywordsDraft !== savedExcludeKeywords;
+  const normalizedWebExcludeKeywordsDraft = normalizeExcludeKeywords(webExcludeKeywordsDraft);
+  const hasUnsavedWebExcludeKeywords = normalizedWebExcludeKeywordsDraft !== savedWebExcludeKeywords;
   const normalizedSynonymGroupsDraft = normalizeSynonymGroups(synonymGroupsDraft);
   const hasUnsavedSynonymGroups = normalizedSynonymGroupsDraft !== savedSynonymGroups;
   const normalizedObsidianSidebarExplorerDataPathDraft = obsidianSidebarExplorerDataPathDraft.trim();
@@ -467,10 +473,10 @@ function App() {
   /**
    * インデックス済みフォルダ一覧を取得し、消えた選択状態は自動で外す。
    */
-  async function refreshIndexedTargets(): Promise<void> {
+  async function refreshIndexedTargets(sourceType: SearchSource = "local"): Promise<void> {
     setIsLoadingTargets(true);
     try {
-      const response = await fetchIndexedTargets();
+      const response = await fetchIndexedTargets(sourceType);
       setIndexedTargets(response.items);
       setSelectedTargetPaths((current) => current.filter((path) => response.items.some((item) => item.full_path === path)));
     } finally {
@@ -495,6 +501,7 @@ function App() {
     try {
       const appSettings = await fetchAppSettings();
       const normalizedExcludeKeywords = normalizeExcludeKeywords(appSettings.exclude_keywords);
+      const normalizedWebExcludeKeywords = normalizeExcludeKeywords(appSettings.web_exclude_keywords);
       const normalizedHiddenIndexedTargets = normalizeHiddenIndexedTargets(appSettings.hidden_indexed_targets);
       const normalizedSynonymGroups = normalizeSynonymGroups(appSettings.synonym_groups);
       const loadedCustomContentExtensions = parseExtensionText(appSettings.custom_content_extensions);
@@ -506,6 +513,8 @@ function App() {
       );
       setSavedExcludeKeywords(normalizedExcludeKeywords);
       setExcludeKeywordsDraft(normalizedExcludeKeywords);
+      setSavedWebExcludeKeywords(normalizedWebExcludeKeywords);
+      setWebExcludeKeywordsDraft(normalizedWebExcludeKeywords);
       setSavedHiddenIndexedTargets(normalizedHiddenIndexedTargets);
       setHideKeyword(normalizedHiddenIndexedTargets);
       setSavedSynonymGroups(normalizedSynonymGroups);
@@ -766,8 +775,10 @@ function App() {
       localStorage.setItem("search_filter_extensions", searchFilterText);
       if (options?.isAutoRefresh) {
         setNoticeMessage("バックグラウンド再インデックスが完了したため、検索結果を自動更新しました。");
-      } else if (hasUnsavedExcludeKeywords) {
+      } else if (searchSource === "local" && hasUnsavedExcludeKeywords) {
         setNoticeMessage("未保存の除外キーワードは今回の検索に反映していません。保存後に再検索してください。");
+      } else if (searchSource === "web" && hasUnsavedWebExcludeKeywords) {
+        setNoticeMessage("未保存のWeb除外キーワードは今回の検索に反映していません。保存後に再検索してください。");
       } else if (hasUnsavedSynonymGroups) {
         setNoticeMessage("未保存の同義語リストは今回の検索に反映していません。保存後に再検索してください。");
       } else if (response.background_refresh_scheduled) {
@@ -1176,6 +1187,27 @@ function App() {
   }
 
   /**
+   * Web クロール用の除外キーワードはローカルフォルダ用と分けて保存する。
+   */
+  async function handleSaveWebExcludeKeywords(): Promise<void> {
+    const normalized = normalizeExcludeKeywords(webExcludeKeywordsDraft);
+    try {
+      setIsSavingWebExcludeKeywords(true);
+      const savedSettings = await updateAppSettings({ web_exclude_keywords: normalized });
+      const savedValue = normalizeExcludeKeywords(savedSettings.web_exclude_keywords);
+      setSavedWebExcludeKeywords(savedValue);
+      setWebExcludeKeywordsDraft(savedValue);
+      setErrorMessage("");
+      setNoticeMessage("Web除外キーワードを保存しました。次回Web検索から反映されます。");
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "Web除外キーワードの保存に失敗しました。");
+    } finally {
+      setIsSavingWebExcludeKeywords(false);
+    }
+  }
+
+  /**
    * 同義語リストは明示的な保存ボタンでだけ確定し、通常検索の表記ゆれ対応へ反映する。
    */
   async function handleSaveSynonymGroups(): Promise<void> {
@@ -1241,11 +1273,11 @@ function App() {
     setPageView(nextView);
     setErrorMessage("");
     setNoticeMessage("");
-    if (nextView === "indexed-targets") {
+    if (nextView === "indexed-targets" || nextView === "indexed-web-targets") {
       try {
-        await refreshIndexedTargets();
+        await refreshIndexedTargets(nextView === "indexed-web-targets" ? "web" : "local");
       } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : "インデックス済みフォルダの取得に失敗しました。");
+        setErrorMessage(error instanceof Error ? error.message : "インデックス済み対象の取得に失敗しました。");
       }
     }
     if (nextView === "search-targets") {
@@ -1325,6 +1357,10 @@ function App() {
    * インデックス済みフォルダ一覧から、そのフォルダ位置を OS のファイルマネージャーで開く。
    */
   async function handleOpenIndexedTargetLocation(folderPath: string): Promise<void> {
+    if (isIndexedWebTargetsPage) {
+      window.open(folderPath, "_blank", "noopener,noreferrer");
+      return;
+    }
     setOpeningIndexedTargetPath(folderPath);
     try {
       await openFileLocation(folderPath);
@@ -1362,6 +1398,21 @@ function App() {
     setFilterKeyword("");
     setErrorMessage("");
     setNoticeMessage(`「${nextKeyword}」を除外キーワードへ追加しました。保存すると次回検索から反映されます。`);
+    setIsMenuOpen(true);
+  }
+
+  /**
+   * インデックス済み Web ページの絞り込みキーワードを Web 専用の除外キーワードへ追記する。
+   */
+  function handleAppendFilterKeywordToWebExcludeKeywords(): void {
+    const nextKeyword = filterKeyword.trim();
+    if (!nextKeyword) {
+      return;
+    }
+    setWebExcludeKeywordsDraft((current) => normalizeExcludeKeywords([current, nextKeyword].filter(Boolean).join("\n")));
+    setFilterKeyword("");
+    setErrorMessage("");
+    setNoticeMessage(`「${nextKeyword}」をWeb除外キーワードへ追加しました。保存すると次回Web検索から反映されます。`);
     setIsMenuOpen(true);
   }
 
@@ -1547,7 +1598,9 @@ function App() {
     }
 
     const confirmed = window.confirm(
-      "選択したフォルダのインデックスを削除します。\n対象フォルダ配下の検索インデックスと失敗履歴が消えます。続行しますか？",
+      isIndexedWebTargetsPage
+        ? "選択したWebページのインデックスを削除します。\n対象URLの検索インデックスと失敗履歴が消えます。続行しますか？"
+        : "選択したフォルダのインデックスを削除します。\n対象フォルダ配下の検索インデックスと失敗履歴が消えます。続行しますか？",
     );
     if (!confirmed) {
       return;
@@ -1560,9 +1613,9 @@ function App() {
       const response = await deleteIndexedTargets(selectedTargetPaths);
       setResults([]);
       setSelectedTargetPaths([]);
-      await refreshIndexedTargets();
+      await refreshIndexedTargets(isIndexedWebTargetsPage ? "web" : "local");
       await refreshIndexStatus().catch(() => undefined);
-      setNoticeMessage(`${response.deleted_count}件のインデックス済みフォルダを削除しました。`);
+      setNoticeMessage(`${response.deleted_count}件のインデックス済み${isIndexedWebTargetsPage ? "Webページ" : "フォルダ"}を削除しました。`);
     } catch (error) {
       setNoticeMessage("");
       setErrorMessage(error instanceof Error ? error.message : "インデックス済みフォルダの削除に失敗しました。");
@@ -1647,6 +1700,13 @@ function App() {
             type="button"
           >
             インデックス済みフォルダ
+          </button>
+          <button
+            className={`secondary-button page-tab ${pageView === "indexed-web-targets" ? "active" : ""}`}
+            onClick={() => void handleChangePage("indexed-web-targets")}
+            type="button"
+          >
+            インデックス済みWebページ
           </button>
           <button
             className={`secondary-button page-tab ${pageView === "search-targets" ? "active" : ""}`}
@@ -1746,16 +1806,18 @@ function App() {
               </div>
             ) : null}
           </section>
-        ) : pageView === "indexed-targets" || pageView === "search-targets" ? (
+        ) : pageView === "indexed-targets" || pageView === "search-targets" || pageView === "indexed-web-targets" ? (
           <section className="indexed-targets-panel">
             <div className="indexed-targets-panel-header">
               <div className="section-header">
                 <div>
-                  <h2>{isSearchTargetsPage ? "検索対象フォルダ" : "インデックス済みフォルダ"}</h2>
+                  <h2>{isSearchTargetsPage ? "検索対象フォルダ" : isIndexedWebTargetsPage ? "インデックス済みWebページ" : "インデックス済みフォルダ"}</h2>
                   <div className="form-help">
                     {isSearchTargetsPage
                       ? "検索対象フォルダを有効/無効で管理し、必要なら再インデックスできます。"
-                      : "どのフォルダがインデックスされているか確認し、選択して削除できます。"}
+                      : isIndexedWebTargetsPage
+                        ? "インデックス済みWebページをURLごとに確認し、必要なページを選択できます。"
+                        : "どのフォルダがインデックスされているか確認し、選択して削除できます。"}
                   </div>
                 </div>
                 <div className="section-header-actions">
@@ -1789,11 +1851,11 @@ function App() {
                     {!isSearchTargetsPage ? (
                       <button
                         className="secondary-button indexed-targets-inline-button"
-                        onClick={handleAppendFilterKeywordToExcludeKeywords}
+                        onClick={isIndexedWebTargetsPage ? handleAppendFilterKeywordToWebExcludeKeywords : handleAppendFilterKeywordToExcludeKeywords}
                         type="button"
                         disabled={!filterKeyword.trim()}
                       >
-                        除外キーワードへ追加
+                        {isIndexedWebTargetsPage ? "Web除外キーワードへ追加" : "除外キーワードへ追加"}
                       </button>
                     ) : null}
                   </div>
@@ -1814,7 +1876,7 @@ function App() {
                     )}
                     <button
                       className="secondary-button indexed-targets-secondary-action"
-                      onClick={() => void (isSearchTargetsPage ? refreshSearchTargets() : refreshIndexedTargets())}
+                      onClick={() => void (isSearchTargetsPage ? refreshSearchTargets() : refreshIndexedTargets(isIndexedWebTargetsPage ? "web" : "local"))}
                       type="button"
                       disabled={isLoadingTargets}
                     >
@@ -1836,7 +1898,7 @@ function App() {
                         type="button"
                         disabled={selectedTargetPaths.length === 0 || isDeletingTargets}
                       >
-                        {isDeletingTargets ? "削除中..." : "選択したフォルダのインデックスを削除"}
+                        {isDeletingTargets ? "削除中..." : isIndexedWebTargetsPage ? "選択したWebページのインデックスを削除" : "選択したフォルダのインデックスを削除"}
                       </button>
                     )}
                   </div>
@@ -1937,8 +1999,16 @@ function App() {
                 )
               ) : (
                 filteredTargets.length === 0 ? (
-                  <div className="empty-panel">
-                    <div>{indexedTargets.length === 0 ? "まだインデックス済みフォルダはありません。" : "条件に一致するフォルダはありません。"}</div>
+                      <div className="empty-panel">
+                    <div>
+                      {indexedTargets.length === 0
+                        ? isIndexedWebTargetsPage
+                          ? "まだインデックス済みWebページはありません。"
+                          : "まだインデックス済みフォルダはありません。"
+                        : isIndexedWebTargetsPage
+                          ? "条件に一致するWebページはありません。"
+                          : "条件に一致するフォルダはありません。"}
+                    </div>
                   </div>
                 ) : (
                   filteredTargets.map((item) => (
@@ -1952,7 +2022,8 @@ function App() {
                         <div className="target-list-content">
                           <div className="target-list-path">{item.full_path}</div>
                           <div className="target-list-meta">
-                            <span>ファイル数: {item.indexed_file_count}</span>
+                            {isIndexedWebTargetsPage ? <span>URL: {item.full_path}</span> : null}
+                            <span>{isIndexedWebTargetsPage ? "ページ数" : "ファイル数"}: {item.indexed_file_count}</span>
                             <span>
                               最終取得: {item.last_indexed_at ? new Date(item.last_indexed_at).toLocaleString() : "-"}
                             </span>
@@ -1968,7 +2039,11 @@ function App() {
                             type="button"
                             disabled={openingIndexedTargetPath === item.full_path}
                           >
-                            {openingIndexedTargetPath === item.full_path ? "開いています..." : openLocationLabel}
+                            {isIndexedWebTargetsPage
+                              ? "Webページを開く"
+                              : openingIndexedTargetPath === item.full_path
+                                ? "開いています..."
+                                : openLocationLabel}
                           </button>
                         </div>
                       </div>
@@ -2386,6 +2461,34 @@ function App() {
               <div className="form-help">
                 1行1キーワードで入力します。`.git` や `node_modules`、`old`、`旧`、Python / React 開発で不要になりやすい
                 キャッシュやビルド成果物を既定で除外します。
+              </div>
+
+              <label className="form-help" htmlFor="web-exclude-keywords">
+                Web除外キーワード
+              </label>
+              <textarea
+                id="web-exclude-keywords"
+                className="settings-textarea"
+                value={webExcludeKeywordsDraft}
+                onChange={(event) => setWebExcludeKeywordsDraft(event.target.value)}
+                placeholder="/tag/&#10;?replytocom=&#10;/login"
+                rows={8}
+              />
+              <div className="settings-action-row">
+                <button
+                  className="secondary-button settings-save-button"
+                  onClick={() => void handleSaveWebExcludeKeywords()}
+                  type="button"
+                  disabled={!hasUnsavedWebExcludeKeywords || isSavingWebExcludeKeywords}
+                >
+                  {isSavingWebExcludeKeywords ? "保存中..." : "保存"}
+                </button>
+                <div className={`settings-save-status ${hasUnsavedWebExcludeKeywords ? "dirty" : "saved"}`}>
+                  {hasUnsavedWebExcludeKeywords ? "未保存の変更があります" : "保存済み"}
+                </div>
+              </div>
+              <div className="form-help">
+                WebページのURLに含まれる文字列を1行1キーワードで指定します。ローカルフォルダ用の除外キーワードとは独立しています。
               </div>
 
               <label className="form-help" htmlFor="synonym-groups">

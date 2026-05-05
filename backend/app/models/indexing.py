@@ -34,6 +34,15 @@ class DeleteIndexedFoldersRequest(BaseModel):
     folder_paths: list[str]
 
 
+class DeleteIndexedTargetsRequest(BaseModel):
+    """
+    一括削除したいインデックス済み対象パスを受け取る。
+    """
+
+    target_paths: list[str] | None = None
+    folder_paths: list[str] | None = None
+
+
 class IndexRunRequest(BaseModel):
     folder_id: int | None = None
 
@@ -153,6 +162,7 @@ class AppSettingsResponse(BaseModel):
     """
 
     exclude_keywords: str
+    web_exclude_keywords: str = ""
     hidden_indexed_targets: str
     synonym_groups: str
     obsidian_sidebar_explorer_data_path: str
@@ -167,6 +177,7 @@ class AppSettingsUpdateRequest(BaseModel):
     """
 
     exclude_keywords: str | None = None
+    web_exclude_keywords: str | None = None
     hidden_indexed_targets: str | None = None
     synonym_groups: str | None = None
     obsidian_sidebar_explorer_data_path: str | None = None

@@ -92,6 +92,7 @@ export async function restartLauncher(): Promise<LauncherStatus> {
 
 export async function updateAppSettings(payload: {
   exclude_keywords?: string;
+  web_exclude_keywords?: string;
   hidden_indexed_targets?: string;
   synonym_groups?: string;
   obsidian_sidebar_explorer_data_path?: string;
@@ -109,14 +110,15 @@ export async function fetchFailedFiles(): Promise<FailedFileListResponse> {
   return request<FailedFileListResponse>("/api/index/failed-files");
 }
 
-export async function fetchIndexedTargets(): Promise<IndexedTargetListResponse> {
-  return request<IndexedTargetListResponse>("/api/index/targets");
+export async function fetchIndexedTargets(sourceType: "local" | "web" = "local"): Promise<IndexedTargetListResponse> {
+  const query = new URLSearchParams({ source_type: sourceType });
+  return request<IndexedTargetListResponse>(`/api/index/targets?${query.toString()}`);
 }
 
 export async function deleteIndexedTargets(folderPaths: string[]): Promise<{ deleted_count: number }> {
   return request<{ deleted_count: number }>("/api/index/targets", {
     method: "DELETE",
-    body: JSON.stringify({ folder_paths: folderPaths }),
+    body: JSON.stringify({ target_paths: folderPaths }),
   });
 }
 

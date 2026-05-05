@@ -43,6 +43,7 @@ class StubIndexService:
         self.did_cancel = False
         self.deleted_target_ids: list[int] = []
         self.saved_exclude_keywords = ".git\nnode_modules"
+        self.saved_web_exclude_keywords = "/tag/\n/login"
         self.saved_hidden_indexed_targets = "obsidian\nAgent_Skills"
         self.saved_synonym_groups = "スマートフォン,スマホ,モバイル"
         self.saved_obsidian_sidebar_explorer_data_path = ""
@@ -90,27 +91,35 @@ class StubIndexService:
 
         return Status()
 
-    def list_indexed_targets(self) -> object:
+    def list_indexed_targets(self, *, source_type: str = "local") -> object:
         class IndexedTargets:
+            def __init__(self, source_type: str) -> None:
+                self.source_type = source_type
+
             def model_dump(self) -> dict[str, object]:
+                full_path = "https://example.com/docs/" if self.source_type == "web" else "/tmp/docs"
                 return {
                     "items": [
                         {
-                            "full_path": "/tmp/docs",
+                            "full_path": full_path,
+                            "source_type": self.source_type,
                             "last_indexed_at": "2026-04-15T00:00:00+00:00",
                             "indexed_file_count": 4,
                         }
                     ]
                 }
 
-        return IndexedTargets()
+        return IndexedTargets(source_type)
 
     def delete_indexed_folders(self, folder_paths: list[str]) -> object:
-        self.deleted_target_ids = list(range(len(folder_paths)))
+        return self.delete_indexed_targets(folder_paths)
+
+    def delete_indexed_targets(self, target_paths: list[str]) -> object:
+        self.deleted_target_ids = list(range(len(target_paths)))
 
         class DeleteResult:
             def model_dump(self) -> dict[str, object]:
-                return {"deleted_count": len(folder_paths)}
+                return {"deleted_count": len(target_paths)}
 
         return DeleteResult()
 
@@ -119,6 +128,7 @@ class StubIndexService:
             def __init__(
                 self,
                 exclude_keywords: str,
+                web_exclude_keywords: str,
                 hidden_indexed_targets: str,
                 synonym_groups: str,
                 obsidian_sidebar_explorer_data_path: str,
@@ -127,6 +137,7 @@ class StubIndexService:
                 custom_filename_extensions: str,
             ) -> None:
                 self.exclude_keywords = exclude_keywords
+                self.web_exclude_keywords = web_exclude_keywords
                 self.hidden_indexed_targets = hidden_indexed_targets
                 self.synonym_groups = synonym_groups
                 self.obsidian_sidebar_explorer_data_path = obsidian_sidebar_explorer_data_path
@@ -137,6 +148,7 @@ class StubIndexService:
             def model_dump(self) -> dict[str, object]:
                 return {
                     "exclude_keywords": self.exclude_keywords,
+                    "web_exclude_keywords": self.web_exclude_keywords,
                     "hidden_indexed_targets": self.hidden_indexed_targets,
                     "synonym_groups": self.synonym_groups,
                     "obsidian_sidebar_explorer_data_path": self.obsidian_sidebar_explorer_data_path,
@@ -147,6 +159,7 @@ class StubIndexService:
 
         return AppSettings(
             self.saved_exclude_keywords,
+            self.saved_web_exclude_keywords,
             self.saved_hidden_indexed_targets,
             self.saved_synonym_groups,
             self.saved_obsidian_sidebar_explorer_data_path,
@@ -159,6 +172,7 @@ class StubIndexService:
         self,
         *,
         exclude_keywords: str | None = None,
+        web_exclude_keywords: str | None = None,
         hidden_indexed_targets: str | None = None,
         synonym_groups: str | None = None,
         obsidian_sidebar_explorer_data_path: str | None = None,
@@ -168,6 +182,8 @@ class StubIndexService:
     ) -> object:
         if exclude_keywords is not None:
             self.saved_exclude_keywords = exclude_keywords
+        if web_exclude_keywords is not None:
+            self.saved_web_exclude_keywords = web_exclude_keywords
         if hidden_indexed_targets is not None:
             self.saved_hidden_indexed_targets = hidden_indexed_targets
         if synonym_groups is not None:
@@ -360,6 +376,7 @@ def test_get_app_settings_endpoint_returns_saved_settings() -> None:
     payload = get_app_settings(service)
 
     assert payload["exclude_keywords"] == ".git\nnode_modules"
+    assert payload["web_exclude_keywords"] == "/tag/\n/login"
     assert payload["hidden_indexed_targets"] == "obsidian\nAgent_Skills"
     assert payload["synonym_groups"] == "スマートフォン,スマホ,モバイル"
     assert payload["index_selected_extensions"] == ".md\n.json"
@@ -376,6 +393,7 @@ def test_update_app_settings_endpoint_returns_updated_settings() -> None:
     payload = update_app_settings(
         AppSettingsUpdateRequest(
             exclude_keywords="dist\nbuild",
+            web_exclude_keywords="/private\n/logout",
             hidden_indexed_targets="obsidian\nAgent_Skills\nnotes",
             synonym_groups="スマートフォン,スマホ,モバイル\nノートPC,ラップトップ",
             index_selected_extensions=".md\n.py",
@@ -386,8 +404,10 @@ def test_update_app_settings_endpoint_returns_updated_settings() -> None:
     )
 
     assert payload["exclude_keywords"] == "dist\nbuild"
+    assert payload["web_exclude_keywords"] == "/private\n/logout"
     assert payload["hidden_indexed_targets"] == "obsidian\nAgent_Skills\nnotes"
     assert service.saved_exclude_keywords == "dist\nbuild"
+    assert service.saved_web_exclude_keywords == "/private\n/logout"
     assert service.saved_hidden_indexed_targets == "obsidian\nAgent_Skills\nnotes"
     assert payload["synonym_groups"] == "スマートフォン,スマホ,モバイル\nノートPC,ラップトップ"
     assert service.saved_synonym_groups == "スマートフォン,スマホ,モバイル\nノートPC,ラップトップ"

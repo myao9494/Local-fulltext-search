@@ -19,6 +19,7 @@ class Settings(BaseModel):
     data_dir: Path = Path(os.getenv("SEARCH_APP_DATA_DIR", str(BACKEND_DIR / "data")))
     database_name: str = os.getenv("SEARCH_APP_DB_NAME", "search.db")
     exclude_keywords_name: str = os.getenv("SEARCH_APP_EXCLUDE_KEYWORDS_NAME", "exclude_keywords.txt")
+    web_exclude_keywords_name: str = os.getenv("SEARCH_APP_WEB_EXCLUDE_KEYWORDS_NAME", "web_exclude_keywords.txt")
     hidden_indexed_targets_name: str = os.getenv(
         "SEARCH_APP_HIDDEN_INDEXED_TARGETS_NAME", "hidden_indexed_targets.txt"
     )
@@ -53,6 +54,7 @@ class Settings(BaseModel):
     @field_validator(
         "database_name",
         "exclude_keywords_name",
+        "web_exclude_keywords_name",
         "hidden_indexed_targets_name",
         "synonym_groups_name",
         "obsidian_sidebar_explorer_data_path_name",
@@ -78,6 +80,10 @@ class Settings(BaseModel):
     @property
     def exclude_keywords_path(self) -> Path:
         return (self.data_dir / self.exclude_keywords_name).resolve()
+
+    @property
+    def web_exclude_keywords_path(self) -> Path:
+        return (self.data_dir / self.web_exclude_keywords_name).resolve()
 
     @property
     def hidden_indexed_targets_path(self) -> Path:

@@ -10,8 +10,8 @@ from fastapi import Query
 from app.api.deps import get_index_service, get_scheduler_service
 from app.models.indexing import (
     AppSettingsUpdateRequest,
+    DeleteIndexedTargetsRequest,
     DeleteSearchTargetsRequest,
-    DeleteIndexedFoldersRequest,
     ReindexSearchTargetsRequest,
     SchedulerUpdateRequest,
     SearchTargetAddRequest,
@@ -46,6 +46,7 @@ def update_app_settings(
     """
     return service.update_app_settings(
         exclude_keywords=payload.exclude_keywords,
+        web_exclude_keywords=payload.web_exclude_keywords,
         hidden_indexed_targets=payload.hidden_indexed_targets,
         synonym_groups=payload.synonym_groups,
         obsidian_sidebar_explorer_data_path=payload.obsidian_sidebar_explorer_data_path,
@@ -61,22 +62,28 @@ def get_failed_files(service: IndexService = Depends(get_index_service)) -> dict
 
 
 @router.get("/targets")
-def get_indexed_targets(service: IndexService = Depends(get_index_service)) -> dict[str, object]:
+def get_indexed_targets(
+    service: IndexService = Depends(get_index_service),
+    source_type: str = Query("local"),
+) -> dict[str, object]:
     """
     画面表示用に、インデックス済みフォルダ一覧を返す。
     """
-    return service.list_indexed_targets().model_dump()
+    return service.list_indexed_targets(source_type=source_type).model_dump()
 
 
 @router.delete("/targets")
 def delete_indexed_targets(
-    payload: DeleteIndexedFoldersRequest,
+    payload: DeleteIndexedTargetsRequest,
     service: IndexService = Depends(get_index_service),
 ) -> dict[str, object]:
     """
     選択したフォルダ群のインデックスをまとめて削除する。
     """
-    return service.delete_indexed_folders(payload.folder_paths).model_dump()
+    target_paths = getattr(payload, "target_paths", None)
+    folder_paths = getattr(payload, "folder_paths", None)
+    paths = target_paths if target_paths is not None else folder_paths or []
+    return service.delete_indexed_targets(paths).model_dump()
 
 
 @router.get("/search-targets")
