@@ -4,6 +4,7 @@
 
 from collections.abc import Callable
 import json
+import platform
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
@@ -38,23 +39,38 @@ class LauncherApiClient:
 
     def search(self, query: str, *, limit: int = 8) -> SearchResponse:
         """
-        全 DB の既存インデックスを対象に、アクセス数順で検索する。
+        macOS では検索時にインデックス更新を許可し、他 OS では高速な既存インデックス専用 API を使用する。
         """
-        payload = {
-            "q": query,
-            "full_path": "",
-            "search_all_enabled": True,
-            "skip_refresh": True,
-            "index_depth": 5,
-            "refresh_window_minutes": 60,
-            "search_target": "all",
-            "sort_by": "click_count",
-            "sort_order": "desc",
-            "limit": limit,
-            "offset": 0,
-            "include_snippets": True,
-        }
-        response = self._request_json("/api/search", payload)
+        is_mac = platform.system() == "Darwin"
+        
+        if is_mac:
+            # macOS: 検索時に登録済みフォルダのインデックス更新を走らせる
+            endpoint = "/api/search"
+            payload = {
+                "q": query,
+                "full_path": "",
+                "search_all_enabled": False,  # 登録済みフォルダを順次更新して検索するトリガー
+                "skip_refresh": False,        # 更新を許可
+                "index_depth": 5,
+                "refresh_window_minutes": 60,
+                "search_target": "all",
+                "sort_by": "click_count",
+                "sort_order": "desc",
+                "limit": limit,
+                "offset": 0,
+                "include_snippets": True,
+            }
+        else:
+            # 他 OS: 既存インデックスのみを使用して高速にレスポンスを返す
+            endpoint = "/api/search/indexed"
+            payload = {
+                "q": query,
+                "folder_path": "",            # 空文字で DB 全体を対象（既存インデックスのみ）
+                "limit": limit,
+                "offset": 0,
+            }
+
+        response = self._request_json(endpoint, payload)
         return SearchResponse(
             total=int(response.get("total", 0)),
             has_more=bool(response.get("has_more", False)),

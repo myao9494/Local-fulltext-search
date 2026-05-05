@@ -50,7 +50,9 @@ launcher/
 - `launcher_app.main` から OS に応じたランチャーを起動する。macOS では仮想デスクトップ対応の Cocoa `NSPanel` を使う。
 - `backend/run.py` または `start_dev.sh` でバックエンドを起動すると、`SEARCH_APP_LAUNCHER_AUTOSTART=1` によりランチャーも子プロセスとして自動起動する。
 - Web フロントの「ランチャー」ページから、起動・停止・再起動・状態確認・ログ確認を行える。
-- 検索は全DB対象 (`search_all_enabled=true`) かつ既存インデックス優先 (`skip_refresh=true`) で実行する。
+- **検索のプラットフォーム別挙動**:
+    - **macOS**: `/api/search` を使い、登録済みフォルダを検索時に順次更新する (`skip_refresh=false`, `search_all_enabled=false`)。
+    - **その他 OS**: `/api/search/indexed` を使い、更新チェックをスキップして既存インデックスのみから高速に検索する。
 - 検索結果タイトル相当のクリックは Web アプリと同じ URL (`http://127.0.0.1:8079/api/fullpath?path=...` / `http://127.0.0.1:8079/?path=...`) を既定ブラウザで開く。
 - ファイル結果を開いた場合は Web アプリと同じく `/api/search/click` でアクセス数を更新する。
 - `Finderで開く` は Web アプリと同じく `/api/files/open-location` を呼ぶ。
