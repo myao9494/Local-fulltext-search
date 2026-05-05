@@ -5,6 +5,7 @@ type SearchBarProps = {
   fullPath: string;
   indexDepth: string;
   searchFilterText: string;
+  searchSource: "local" | "web";
   searchTarget: "all" | "body" | "filename" | "folder" | "filename_and_folder";
   dateField: "created" | "modified";
   sortBy: "created" | "modified" | "click_count";
@@ -22,6 +23,7 @@ type SearchBarProps = {
   onFullPathChange: (value: string) => void;
   onIndexDepthChange: (value: string) => void;
   onSearchFilterTextChange: (value: string) => void;
+  onSearchSourceChange: (value: "local" | "web") => void;
   onSearchTargetChange: (value: "all" | "body" | "filename" | "folder" | "filename_and_folder") => void;
   onDateFieldChange: (value: "created" | "modified") => void;
   onSortByChange: (value: "created" | "modified" | "click_count") => void;
@@ -46,6 +48,7 @@ export function SearchBar({
   fullPath,
   indexDepth,
   searchFilterText,
+  searchSource,
   searchTarget,
   dateField,
   sortBy,
@@ -63,6 +66,7 @@ export function SearchBar({
   onFullPathChange,
   onIndexDepthChange,
   onSearchFilterTextChange,
+  onSearchSourceChange,
   onSearchTargetChange,
   onDateFieldChange,
   onSortByChange,
@@ -86,9 +90,27 @@ export function SearchBar({
       <div className="top-filters">
         <div className="top-filters-main">
           <div className="filter-group path-group">
-            <label className="filter-label">フォルダ:</label>
+            <label className="filter-label">{searchSource === "web" ? "Web:" : "フォルダ:"}</label>
             <div className="path-picker-block">
               <div className="path-picker-row top-path-picker">
+                <div className="source-toggle" role="group" aria-label="検索対象">
+                  <button
+                    className={`secondary-button small-btn source-toggle-button ${searchSource === "local" ? "active" : ""}`}
+                    onClick={() => onSearchSourceChange("local")}
+                    type="button"
+                    aria-pressed={searchSource === "local"}
+                  >
+                    ローカル
+                  </button>
+                  <button
+                    className={`secondary-button small-btn source-toggle-button ${searchSource === "web" ? "active" : ""}`}
+                    onClick={() => onSearchSourceChange("web")}
+                    type="button"
+                    aria-pressed={searchSource === "web"}
+                  >
+                    Web
+                  </button>
+                </div>
                 <button
                   className={`secondary-button small-btn search-all-button ${isSearchAllEnabled ? "active" : ""}`}
                   onClick={onSearchAllToggle}
@@ -101,15 +123,15 @@ export function SearchBar({
                   className="small-input path-input"
                   value={fullPath}
                   onChange={(event) => onFullPathChange(event.target.value)}
-                  placeholder="フルパス"
+                  placeholder={searchSource === "web" ? "https://example.com/docs/" : "フルパス"}
                 />
-                <button className="secondary-button small-btn" onClick={onPickFolder} type="button">
+                <button className="secondary-button small-btn" onClick={onPickFolder} type="button" disabled={searchSource === "web"}>
                   選択
                 </button>
               </div>
               {showSearchTargetHint ? (
                 <div className="search-target-inline-hint">
-                  <span>このフォルダはまだ検索対象フォルダに含まれていません。</span>
+                  <span>{searchSource === "web" ? "このWebページはまだ検索対象に含まれていません。" : "このフォルダはまだ検索対象フォルダに含まれていません。"}</span>
                   <button className="secondary-button small-btn" onClick={onAddSearchTarget} type="button" disabled={isAddingSearchTarget}>
                     {isAddingSearchTarget ? "追加中..." : "検索対象に追加"}
                   </button>

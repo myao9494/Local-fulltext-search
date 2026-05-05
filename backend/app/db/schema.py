@@ -13,6 +13,7 @@ SCHEMA_STATEMENTS: list[str] = [
         is_search_target_enabled INTEGER NOT NULL DEFAULT 1,
         indexed_file_count INTEGER NOT NULL DEFAULT 0,
         index_version INTEGER NOT NULL DEFAULT 0,
+        source_type TEXT NOT NULL DEFAULT 'local',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         UNIQUE(full_path)
@@ -31,7 +32,8 @@ SCHEMA_STATEMENTS: list[str] = [
         obsidian_click_count INTEGER NOT NULL DEFAULT 0,
         size INTEGER NOT NULL,
         indexed_at TEXT NOT NULL,
-        last_error TEXT
+        last_error TEXT,
+        source_type TEXT NOT NULL DEFAULT 'local'
     );
     """,
     """
@@ -210,6 +212,8 @@ def _apply_non_destructive_migrations(connection: Connection) -> None:
         connection.execute("ALTER TABLE files ADD COLUMN click_count INTEGER NOT NULL DEFAULT 0;")
     if "obsidian_click_count" not in file_columns:
         connection.execute("ALTER TABLE files ADD COLUMN obsidian_click_count INTEGER NOT NULL DEFAULT 0;")
+    if "source_type" not in file_columns:
+        connection.execute("ALTER TABLE files ADD COLUMN source_type TEXT NOT NULL DEFAULT 'local';")
     _rebuild_files_name_fts(connection)
     if "indexed_file_count" not in target_columns:
         connection.execute("ALTER TABLE targets ADD COLUMN indexed_file_count INTEGER NOT NULL DEFAULT 0;")
@@ -217,6 +221,8 @@ def _apply_non_destructive_migrations(connection: Connection) -> None:
         connection.execute("ALTER TABLE targets ADD COLUMN index_version INTEGER NOT NULL DEFAULT 0;")
     if "is_search_target_enabled" not in target_columns:
         connection.execute("ALTER TABLE targets ADD COLUMN is_search_target_enabled INTEGER NOT NULL DEFAULT 1;")
+    if "source_type" not in target_columns:
+        connection.execute("ALTER TABLE targets ADD COLUMN source_type TEXT NOT NULL DEFAULT 'local';")
 
 
 def _needs_schema_reset(connection: Connection) -> bool:
@@ -238,6 +244,7 @@ def _needs_schema_reset(connection: Connection) -> bool:
         "is_search_target_enabled",
         "indexed_file_count",
         "index_version",
+        "source_type",
         "created_at",
         "updated_at",
     }
@@ -254,6 +261,7 @@ def _needs_schema_reset(connection: Connection) -> bool:
         "size",
         "indexed_at",
         "last_error",
+        "source_type",
     }
     expected_index_run_columns = {
         "id",
@@ -286,10 +294,16 @@ def _needs_schema_reset(connection: Connection) -> bool:
     scheduler_paths_columns = _get_columns(connection, "scheduler_paths")
     scheduler_runtime_columns = _get_columns(connection, "scheduler_runtime")
     scheduler_logs_columns = _get_columns(connection, "scheduler_logs")
-    legacy_file_columns = expected_file_columns - {"click_count", "obsidian_click_count"}
+    legacy_target_columns = expected_target_columns - {"source_type"}
+    legacy_file_columns = expected_file_columns - {"click_count", "obsidian_click_count", "source_type"}
+    legacy_file_columns_with_clicks = expected_file_columns - {"source_type"}
     return (
-        target_columns != expected_target_columns
-        or (file_columns != expected_file_columns and file_columns != legacy_file_columns)
+        (target_columns != expected_target_columns and target_columns != legacy_target_columns)
+        or (
+            file_columns != expected_file_columns
+            and file_columns != legacy_file_columns
+            and file_columns != legacy_file_columns_with_clicks
+        )
         or index_run_columns != expected_index_run_columns
         or failed_file_columns != expected_failed_file_columns
         or (scheduler_settings_columns and scheduler_settings_columns != expected_scheduler_settings_columns)

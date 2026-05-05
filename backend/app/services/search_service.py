@@ -7,6 +7,7 @@ import re
 from sqlite3 import Connection
 import threading
 import time as time_module
+from urllib.parse import urlparse, urlunparse
 
 from fastapi import HTTPException, status
 
@@ -37,10 +38,32 @@ class SearchService:
         self.connection = connection or get_connection()
         self.index_service = IndexService(connection=self.connection)
 
+    def _normalize_web_url(self, value: str) -> str:
+        """
+        Web 検索の絞り込みに使う URL をフラグメントなしへ正規化する。
+        """
+        parsed = urlparse(value.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Web target must be an http or https URL.")
+        path = parsed.path or "/"
+        return urlunparse(
+            parsed._replace(
+                scheme=parsed.scheme.lower(),
+                netloc=parsed.netloc.lower(),
+                path=path,
+                params="",
+                fragment="",
+            )
+        )
+
     def search(self, params: SearchQueryParams) -> SearchResponse:
         normalized_target_path = ""
         if params.full_path:
-            normalized_target_path = normalize_path_str(params.full_path)
+            normalized_target_path = (
+                self._normalize_web_url(params.full_path)
+                if params.source_type == "web"
+                else normalize_path_str(params.full_path)
+            )
         app_settings = self.index_service.get_app_settings()
         effective_exclude_keywords = (
             params.exclude_keywords if params.exclude_keywords is not None else app_settings.exclude_keywords
@@ -55,6 +78,7 @@ class SearchService:
                 index_types=params.index_types,
                 custom_content_extensions=app_settings.custom_content_extensions,
                 custom_filename_extensions=app_settings.custom_filename_extensions,
+                source_type=params.source_type,
             )
         if normalized_target_path and not params.search_all_enabled and not params.skip_refresh:
             refresh_flags = self._refresh_target_for_search(
@@ -90,14 +114,15 @@ class SearchService:
         index_types: str | None,
         custom_content_extensions: str,
         custom_filename_extensions: str,
+        source_type: str = "local",
     ) -> None:
         """
         フォルダ未指定かつ全 DB 検索 OFF のときは、検索対象フォルダを順次再インデックスする。
         有効対象があればそれを優先し、0 件なら登録済みフォルダ全体へフォールバックする。
         """
-        target_paths = self.index_service.list_registered_search_target_paths(enabled_only=True)
+        target_paths = self.index_service.list_registered_search_target_paths(enabled_only=True, source_type=source_type)
         if not target_paths:
-            target_paths = self.index_service.list_registered_search_target_paths(enabled_only=False)
+            target_paths = self.index_service.list_registered_search_target_paths(enabled_only=False, source_type=source_type)
         if not target_paths:
             return
 
@@ -164,7 +189,11 @@ class SearchService:
             custom_filename_extensions=custom_filename_extensions,
         )
         effective_target_path = (
-            self.index_service._resolve_enabled_target_covering_path(normalized_target_path) or normalized_target_path
+            self.index_service._resolve_enabled_target_covering_path(
+                normalized_target_path,
+                source_type="web" if self.index_service._is_web_url(normalized_target_path) else "local",
+            )
+            or normalized_target_path
         )
         try:
             target = self.index_service._ensure_target(
@@ -369,6 +398,7 @@ class SearchService:
             created_to=params.created_to,
             custom_content_extensions=app_settings.custom_content_extensions,
             custom_filename_extensions=app_settings.custom_filename_extensions,
+            source_type=params.source_type,
         )
         cte_elapsed = time_module.perf_counter() - fts_start
         logger.info("FTS: Scoped files CTE build time: %.3fs", cte_elapsed)
@@ -564,6 +594,7 @@ class SearchService:
                         scoped_files.mtime,
                         scoped_files.click_count,
                         scoped_files.obsidian_click_count,
+                        scoped_files.source_type,
                         filtered.snippet,
                         filtered.segment_type,
                         filtered.body_content
@@ -638,6 +669,7 @@ class SearchService:
                             scoped_files.mtime,
                             scoped_files.click_count,
                             scoped_files.obsidian_click_count,
+                            scoped_files.source_type,
                             filtered.snippet,
                             filtered.segment_type,
                             filtered.body_content,
@@ -658,6 +690,7 @@ class SearchService:
                         paged_matches.mtime,
                         paged_matches.click_count,
                         paged_matches.obsidian_click_count,
+                        paged_matches.source_type,
                         paged_matches.snippet,
                         paged_matches.segment_type,
                         paged_matches.body_content,
@@ -756,6 +789,7 @@ class SearchService:
             created_to=params.created_to,
             custom_content_extensions=app_settings.custom_content_extensions,
             custom_filename_extensions=app_settings.custom_filename_extensions,
+            source_type=params.source_type,
         )
         cte_elapsed = time_module.perf_counter() - regex_start
         logger.info("Regex: Scoped files CTE build time: %.3fs", cte_elapsed)
@@ -778,6 +812,7 @@ class SearchService:
                 scoped_files.mtime,
                 scoped_files.click_count,
                 scoped_files.obsidian_click_count,
+                scoped_files.source_type,
                 file_segments.content
             FROM scoped_files
             LEFT JOIN file_segments
@@ -825,6 +860,7 @@ class SearchService:
                     SearchResultItem(
                         file_id=int(row["file_id"]),
                         result_kind="file",
+                        source_type="web" if str(row["source_type"] or "local") == "web" else "local",
                         target_path=normalized_target_path,
                         file_name=file_name,
                         full_path=normalized_path,
@@ -851,6 +887,7 @@ class SearchService:
                 folder_items_by_path[folder_path] = SearchResultItem(
                     file_id=-len(folder_items_by_path) - 1,
                     result_kind="folder",
+                    source_type="local",
                     target_path=normalized_target_path,
                     file_name=self._resolve_result_display_name("folder", folder_path, folder_path),
                     full_path=folder_path,
@@ -1119,6 +1156,9 @@ class SearchService:
         """
         if not excluded_keywords:
             return False
+        if target_path.startswith(("http://", "https://")) or candidate_path.startswith(("http://", "https://")):
+            lowered_candidate = candidate_path.lower()
+            return any(keyword.lower() in lowered_candidate for keyword in excluded_keywords)
         if not target_path:
             return self.index_service._should_exclude_path(normalize_path(candidate_path), excluded_keywords)
 
@@ -1284,18 +1324,25 @@ class SearchService:
         created_to: date | None = None,
         custom_content_extensions: str = "",
         custom_filename_extensions: str = "",
+        source_type: str = "local",
     ) -> tuple[str, list[object]]:
         """
         検索モード共通のパス・階層・拡張子・日付フィルタを組み立てる。
         """
         filters: list[str] = []
+        normalized_source_type = "web" if source_type == "web" else "local"
+        filters.append(f"files.source_type = '{normalized_source_type}'")
         values: list[object] = []
         date_column = "files.created_at" if date_field == "created" else "files.mtime"
 
         if normalized_target_path:
             prefix_start, prefix_end = get_descendant_path_range(normalized_target_path)
-            filters.extend(["files.normalized_path >= ?", "files.normalized_path < ?"])
-            values.extend([prefix_start, prefix_end])
+            if normalized_source_type == "web":
+                filters.append("(files.normalized_path = ? OR (files.normalized_path >= ? AND files.normalized_path < ?))")
+                values.extend([normalized_target_path, prefix_start, prefix_end])
+            else:
+                filters.extend(["files.normalized_path >= ?", "files.normalized_path < ?"])
+                values.extend([prefix_start, prefix_end])
 
             if path_depth_limit is not None:
                 descendant_prefix = get_descendant_path_prefix(normalized_target_path)
@@ -1306,10 +1353,10 @@ class SearchService:
                 filters.append(f"{depth_expression} <= ?")
                 values.extend([descendant_prefix, descendant_prefix, path_depth_limit])
         elif not search_all_enabled:
-            enabled_target_paths = self.index_service.list_registered_search_target_paths(enabled_only=True)
+            enabled_target_paths = self.index_service.list_registered_search_target_paths(enabled_only=True, source_type=source_type)
             target_paths = enabled_target_paths
             if not target_paths:
-                target_paths = self.index_service.list_registered_search_target_paths(enabled_only=False)
+                target_paths = self.index_service.list_registered_search_target_paths(enabled_only=False, source_type=source_type)
             if not target_paths:
                 return "0 = 1", values
 
@@ -1358,6 +1405,7 @@ class SearchService:
         created_to: date | None = None,
         custom_content_extensions: str = "",
         custom_filename_extensions: str = "",
+        source_type: str = "local",
     ) -> tuple[str, list[object]]:
         """
         フォルダ・階層・拡張子・日付の候補絞り込みを1回だけ行う scoped_files CTE を組み立てる。
@@ -1372,6 +1420,7 @@ class SearchService:
             created_to=created_to,
             custom_content_extensions=custom_content_extensions,
             custom_filename_extensions=custom_filename_extensions,
+            source_type=source_type,
         )
         return (
             f"""
@@ -1384,7 +1433,8 @@ class SearchService:
                     files.created_at,
                     files.mtime,
                     files.click_count,
-                    files.obsidian_click_count
+                    files.obsidian_click_count,
+                    files.source_type
                 FROM files
                 WHERE {where_clause}
             )
@@ -1438,6 +1488,10 @@ class SearchService:
         DB 行から UI 用の検索結果モデルを組み立てる。
         """
         result_kind = str(row["result_kind"] or "file")
+        try:
+            source_type = str(row["source_type"] or "local")
+        except (KeyError, IndexError):
+            source_type = "local"
         full_path = str(row["normalized_path"])
         raw_name = str(row["file_name"])
         display_name = self._resolve_result_display_name(result_kind, full_path, raw_name)
@@ -1445,6 +1499,7 @@ class SearchService:
         return SearchResultItem(
             file_id=int(row["file_id"]),
             result_kind="folder" if result_kind == "folder" else "file",
+            source_type="web" if source_type == "web" else "local",
             target_path=normalized_target_path,
             file_name=display_name,
             full_path=full_path,

@@ -117,7 +117,7 @@ def add_search_target(
     """
     検索対象フォルダへ新規追加する。
     """
-    return service.add_search_target(folder_path=payload.folder_path).model_dump()
+    return service.add_search_target(folder_path=payload.folder_path, index_depth=payload.index_depth).model_dump()
 
 
 @router.delete("/search-targets")

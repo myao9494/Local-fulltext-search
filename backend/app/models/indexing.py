@@ -65,6 +65,7 @@ class IndexedTargetItem(BaseModel):
     """
 
     full_path: str
+    source_type: str = "local"
     last_indexed_at: datetime | None
     indexed_file_count: int
 
@@ -79,6 +80,7 @@ class SearchTargetItem(BaseModel):
     """
 
     full_path: str
+    source_type: str = "local"
     is_enabled: bool
     last_indexed_at: datetime | None
     indexed_file_count: int
@@ -94,6 +96,7 @@ class SearchTargetCoverageResponse(BaseModel):
     """
 
     normalized_path: str
+    source_type: str = "local"
     is_covered: bool
     covering_path: str | None
 
@@ -113,6 +116,7 @@ class SearchTargetAddRequest(BaseModel):
     """
 
     folder_path: str
+    index_depth: int = 3
 
 
 class ReindexSearchTargetsRequest(BaseModel):

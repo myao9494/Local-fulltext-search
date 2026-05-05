@@ -31,6 +31,7 @@ def _validate_absolute_path_or_unc(value: str, *, field_name: str) -> str:
 class SearchResultItem(BaseModel):
     file_id: int
     result_kind: Literal["file", "folder"] = "file"
+    source_type: Literal["local", "web"] = "local"
     target_path: str
     file_name: str
     full_path: str
@@ -55,6 +56,7 @@ class SearchQueryParams(BaseModel):
     full_path: str = ""
     search_all_enabled: bool = False
     skip_refresh: bool = False
+    source_type: Literal["local", "web"] = "local"
     index_depth: int = Field(ge=0, le=128)
     refresh_window_minutes: int = Field(default=60, ge=0, le=1440)
     regex_enabled: bool = False
@@ -77,6 +79,8 @@ class SearchQueryParams(BaseModel):
         """
         検索対象パスは、現在の作業ディレクトリに依存しない絶対パスだけを受け付ける。
         """
+        if value.startswith(("http://", "https://")):
+            return value
         return _validate_absolute_path_or_unc(value, field_name="full_path")
 
     @field_validator("created_to")

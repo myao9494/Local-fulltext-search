@@ -228,7 +228,7 @@ class StubIndexService:
         )
         return self.list_search_targets()
 
-    def add_search_target(self, *, folder_path: str) -> object:
+    def add_search_target(self, *, folder_path: str, index_depth: int = 3) -> object:
         return self.set_search_target_enabled(folder_path=folder_path, is_enabled=True)
 
     def delete_search_targets(self, folder_paths: list[str]) -> object:

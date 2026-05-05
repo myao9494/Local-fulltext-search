@@ -5,8 +5,11 @@
 
 import logging
 import sqlite3
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -68,6 +71,182 @@ def test_indexing_emits_phase_timing_logs(tmp_path: Path, caplog) -> None:
     assert any("Index: DB write time" in message for message in messages)
     assert any("Index: cleanup time" in message for message in messages)
     assert any("Index: total time" in message for message in messages)
+
+
+def test_web_search_target_indexes_linked_pages_under_base_url(tmp_path: Path) -> None:
+    """
+    URL を検索対象に追加すると、トップページ配下のリンク先ページも Web インデックスへ登録する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+
+    pages = {
+        "/docs/": """
+            <html><head><title>Docs Home</title></head>
+            <body><main>alpha home <a href="/docs/guide.html">Guide</a><a href="/blog/out.html">Out</a></main></body></html>
+        """,
+        "/docs/guide.html": """
+            <html><head><title>Guide Page</title></head>
+            <body><main>beta guide content</main></body></html>
+        """,
+        "/blog/out.html": """
+            <html><head><title>Out Page</title></head>
+            <body><main>outside content</main></body></html>
+        """,
+    }
+
+    with _serve_pages(pages) as base_url:
+        service.add_search_target(folder_path=f"{base_url}/docs/", index_depth=2)
+
+    rows = connection.execute(
+        """
+        SELECT file_name, normalized_path, source_type
+        FROM files
+        ORDER BY normalized_path
+        """
+    ).fetchall()
+
+    assert [row["file_name"] for row in rows] == ["Docs Home", "Guide Page"]
+    assert {row["source_type"] for row in rows} == {"web"}
+
+
+def test_web_search_target_can_reindex_exact_page_url(tmp_path: Path) -> None:
+    """
+    ベース URL が HTML ファイルそのものでも、再インデックス時に既存レコードを更新できる。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    pages = {
+        "/docs/readme.html": """
+            <html><head><title>Readme Page</title></head>
+            <body><main>alpha readme content</main></body></html>
+        """,
+    }
+
+    with _serve_pages(pages) as base_url:
+        target_url = f"{base_url}/docs/readme.html"
+        service.add_search_target(folder_path=target_url, index_depth=1)
+        service.ensure_fresh_target(full_path=target_url, refresh_window_minutes=0, index_depth=1)
+
+    row = connection.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM files
+        WHERE source_type = 'web'
+        """
+    ).fetchone()
+    failed = connection.execute("SELECT COUNT(*) AS count FROM failed_files").fetchone()
+
+    assert row["count"] == 1
+    assert failed["count"] == 0
+
+
+def test_web_search_target_page_url_indexes_sibling_pages_in_same_hierarchy(tmp_path: Path) -> None:
+    """
+    ベース URL が HTML ファイルでも、その親階層にあるリンク先ページをクロール対象に含める。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    pages = {
+        "/docs/readme.html": """
+            <html><head><title>Readme Page</title></head>
+            <body><main>alpha readme <a href="guide.html">Guide</a><a href="../outside.html">Outside</a></main></body></html>
+        """,
+        "/docs/guide.html": """
+            <html><head><title>Guide Page</title></head>
+            <body><main>beta guide content</main></body></html>
+        """,
+        "/outside.html": """
+            <html><head><title>Outside Page</title></head>
+            <body><main>outside content</main></body></html>
+        """,
+    }
+
+    with _serve_pages(pages) as base_url:
+        service.add_search_target(folder_path=f"{base_url}/docs/readme.html", index_depth=1)
+
+    rows = connection.execute(
+        """
+        SELECT file_name, normalized_path
+        FROM files
+        WHERE source_type = 'web'
+        ORDER BY normalized_path
+        """
+    ).fetchall()
+
+    assert [row["file_name"] for row in rows] == ["Guide Page", "Readme Page"]
+
+
+def test_web_search_target_uses_json_ld_breadcrumb_scope(tmp_path: Path) -> None:
+    """
+    JSON-LD BreadcrumbList がある場合は、URL親階層より広いパンくず階層をクロール範囲にする。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    pages = {
+        "/docs/tutorial/readme.html": """
+            <html><head><title>Tutorial Readme</title>
+            <script type="application/ld+json">
+            {
+              "@context": "https://schema.org",
+              "@type": "BreadcrumbList",
+              "itemListElement": [
+                {"@type": "ListItem", "position": 1, "item": "http://example.invalid/docs/"},
+                {"@type": "ListItem", "position": 2, "item": "http://example.invalid/docs/tutorial/readme.html"}
+              ]
+            }
+            </script></head>
+            <body><main>alpha tutorial <a href="../api.html">API</a><a href="../../outside.html">Outside</a></main></body></html>
+        """,
+        "/docs/api.html": """
+            <html><head><title>API Page</title></head>
+            <body><main>beta api content</main></body></html>
+        """,
+        "/outside.html": """
+            <html><head><title>Outside Page</title></head>
+            <body><main>outside content</main></body></html>
+        """,
+    }
+
+    with _serve_pages(pages) as base_url:
+        html = pages["/docs/tutorial/readme.html"].replace("http://example.invalid", base_url)
+        pages["/docs/tutorial/readme.html"] = html
+        service.add_search_target(folder_path=f"{base_url}/docs/tutorial/readme.html", index_depth=1)
+
+    rows = connection.execute(
+        """
+        SELECT file_name
+        FROM files
+        WHERE source_type = 'web'
+        ORDER BY normalized_path
+        """
+    ).fetchall()
+
+    assert [row["file_name"] for row in rows] == ["API Page", "Tutorial Readme"]
+
+
+def test_web_search_target_skips_non_html_links_without_failed_file(tmp_path: Path) -> None:
+    """
+    HTML ページからリンクされたソース txt などは、ページ取得失敗ではなく対象外として扱う。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    pages = {
+        "/docs/readme.html": """
+            <html><head><title>Readme Page</title></head>
+            <body><main>alpha readme <a href="source.txt">Source</a></main></body></html>
+        """,
+        "/docs/source.txt": "plain source text",
+    }
+
+    with _serve_pages(pages) as base_url:
+        service.add_search_target(folder_path=f"{base_url}/docs/readme.html", index_depth=1)
+
+    failed = connection.execute("SELECT COUNT(*) AS count FROM failed_files").fetchone()
+    files = connection.execute("SELECT COUNT(*) AS count FROM files WHERE source_type = 'web'").fetchone()
+
+    assert failed["count"] == 0
+    assert files["count"] == 1
 
 
 def test_unchanged_files_are_skipped_on_reindex(tmp_path: Path) -> None:
@@ -926,6 +1105,38 @@ def test_list_indexed_targets_returns_all_indexed_folders_from_files(tmp_path: P
     assert nested_item.last_indexed_at is not None
 
 
+def test_list_indexed_targets_ignores_web_page_records(tmp_path: Path) -> None:
+    """
+    インデックス済みフォルダ一覧は Web URL レコードをローカルパスとして扱わず除外する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    indexed_at = datetime(2026, 5, 5, tzinfo=UTC).isoformat()
+    connection.execute(
+        """
+        INSERT INTO files(
+            full_path, normalized_path, file_name, file_ext,
+            created_at, mtime, size, indexed_at, last_error, source_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'web')
+        """,
+        (
+            "https://creopyson.readthedocs.io/en/latest/readme.html",
+            "https://creopyson.readthedocs.io/en/latest/readme.html",
+            "creopyson",
+            ".html",
+            datetime(2026, 5, 5, tzinfo=UTC).timestamp(),
+            datetime(2026, 5, 5, tzinfo=UTC).timestamp(),
+            128,
+            indexed_at,
+        ),
+    )
+    connection.commit()
+
+    targets = service.list_indexed_targets().items
+
+    assert targets == []
+
+
 def test_delete_indexed_folders_removes_selected_folder_indexes_and_marks_targets_stale(tmp_path: Path) -> None:
     """
     選択したフォルダ配下の files・segments を削除し、重なる targets は再取得対象へ戻す。
@@ -1319,3 +1530,38 @@ def _create_connection(tmp_path: Path) -> sqlite3.Connection:
     connection.execute("PRAGMA foreign_keys = ON;")
     initialize_schema(connection)
     return connection
+
+
+@contextmanager
+def _serve_pages(pages: dict[str, str]):
+    """
+    Web クロールテスト用の一時 HTTP サーバーを起動する。
+    """
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            body = pages.get(self.path)
+            if body is None:
+                self.send_response(404)
+                self.end_headers()
+                return
+            encoded_body = body.encode("utf-8")
+            self.send_response(200)
+            content_type = "text/plain; charset=utf-8" if self.path.endswith(".txt") else "text/html; charset=utf-8"
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(encoded_body)))
+            self.end_headers()
+            self.wfile.write(encoded_body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

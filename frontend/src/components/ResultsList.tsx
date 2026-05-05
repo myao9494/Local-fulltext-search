@@ -65,6 +65,21 @@ function getWebAppBaseUrl(): string {
   return "http://localhost:8001";
 }
 
+/**
+ * Web 結果のスニペットから Text Fragment に使う短い語を取り出す。
+ */
+function buildWebTextFragmentUrl(item: SearchResult): string {
+  const match = item.snippet.match(/<mark>(.*?)<\/mark>/i);
+  if (!match?.[1]) {
+    return item.full_path;
+  }
+  const highlightedText = match[1].replace(/<[^>]+>/g, "").trim();
+  if (!highlightedText) {
+    return item.full_path;
+  }
+  return `${item.full_path}#:~:text=${encodeURIComponent(highlightedText)}`;
+}
+
 type ResultCardProps = {
   item: SearchResult;
   dateField: "created" | "modified";
@@ -102,7 +117,8 @@ function ResultCard({
   const webAppBaseUrl = getWebAppBaseUrl();
   const fullPathUrl = `${webAppBaseUrl}/api/fullpath?path=${encodeURIComponent(item.full_path)}`;
   const folderUrl = `${webAppBaseUrl}/?path=${encodeURIComponent(item.result_kind === "folder" ? item.full_path : folderPath)}`;
-  const primaryUrl = item.result_kind === "folder" ? folderUrl : fullPathUrl;
+  const isWebResult = item.source_type === "web";
+  const primaryUrl = isWebResult ? buildWebTextFragmentUrl(item) : item.result_kind === "folder" ? folderUrl : fullPathUrl;
 
   useEffect(() => {
     const snippetElement = snippetRef.current;
@@ -145,25 +161,29 @@ function ResultCard({
           >
             パスをコピー
           </button>
-          <button
-            type="button"
-            className="result-open-location-button"
-            onClick={() => void onOpenLocation(item.file_id, item.result_kind === "folder" ? item.full_path : folderPath)}
-            title={item.result_kind === "folder" ? openLocationLabel : `${openLocationLabel}（親フォルダ）`}
-            disabled={openingLocationFileId === item.file_id}
-          >
-            {openingLocationFileId === item.file_id ? "開いています..." : openLocationLabel}
-          </button>
-          <a
-            className="result-folder-link"
-            href={folderUrl}
-            target="_blank"
-            rel="noreferrer"
-            title={item.result_kind === "folder" ? "フォルダを開く" : "親フォルダを開く"}
-          >
-            フォルダを開く
-          </a>
-          {item.result_kind === "file" ? (
+          {!isWebResult ? (
+            <button
+              type="button"
+              className="result-open-location-button"
+              onClick={() => void onOpenLocation(item.file_id, item.result_kind === "folder" ? item.full_path : folderPath)}
+              title={item.result_kind === "folder" ? openLocationLabel : `${openLocationLabel}（親フォルダ）`}
+              disabled={openingLocationFileId === item.file_id}
+            >
+              {openingLocationFileId === item.file_id ? "開いています..." : openLocationLabel}
+            </button>
+          ) : null}
+          {!isWebResult ? (
+            <a
+              className="result-folder-link"
+              href={folderUrl}
+              target="_blank"
+              rel="noreferrer"
+              title={item.result_kind === "folder" ? "フォルダを開く" : "親フォルダを開く"}
+            >
+              フォルダを開く
+            </a>
+          ) : null}
+          {item.result_kind === "file" && !isWebResult ? (
             <button
               type="button"
               className="result-ignore-button"
@@ -174,7 +194,7 @@ function ResultCard({
               {ignoringResultPath === item.full_path ? "無視中..." : "無視"}
             </button>
           ) : null}
-          {item.result_kind === "file" ? (
+          {item.result_kind === "file" && !isWebResult ? (
             <button
               type="button"
               className="result-delete-button"
@@ -207,7 +227,7 @@ function ResultCard({
         </h3>
         <div className="result-meta">
           <span>{dateField === "created" ? "作成" : "編集"}: {new Date(dateField === "created" ? item.created_at : item.mtime).toLocaleString()}</span>
-          {item.result_kind === "file" ? <span>アクセス: {item.click_count}</span> : <span>種別: フォルダ</span>}
+          {isWebResult ? <span>種別: Web</span> : item.result_kind === "file" ? <span>アクセス: {item.click_count}</span> : <span>種別: フォルダ</span>}
         </div>
       </div>
       <div className="result-snippet-wrapper">

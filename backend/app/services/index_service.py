@@ -14,13 +14,18 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 import threading
 import time as time_module
 from concurrent.futures import ALL_COMPLETED, FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from sqlite3 import Connection, OperationalError
+from urllib.error import HTTPError, URLError
+from urllib.parse import urldefrag, urljoin, urlparse, urlunparse
+from urllib.request import Request, urlopen
 
 from fastapi import HTTPException, status
 
@@ -73,9 +78,42 @@ class IndexedFileCandidate:
     existing_id: int | None
 
 
+@dataclass(frozen=True)
+class IndexedWebPageCandidate:
+    """
+    Web ページのメタデータと抽出済み本文を保持する。
+    """
+
+    url: str
+    title: str
+    content: str
+    fetched_at: float
+    size: int
+    existing_id: int | None
+
+
+@dataclass(frozen=True)
+class ExtractedWebPage:
+    """
+    HTML から取り出したタイトル・本文・リンク一覧。
+    """
+
+    title: str
+    content: str
+    links: tuple[str, ...]
+    breadcrumb_links: tuple[str, ...]
+    json_ld_blocks: tuple[str, ...]
+
+
 class IndexingCancelledError(Exception):
     """
     利用者がインデックス中止を要求したことを表す。
+    """
+
+
+class UnsupportedWebContentTypeError(ValueError):
+    """
+    Web クロール中に HTML ではないリンクを見つけたことを表す。
     """
 
 
@@ -108,6 +146,86 @@ class IndexRunController:
                 return False
             self._last_database_check_at = now
             return True
+
+
+class WebPageParser(HTMLParser):
+    """
+    Web ページ検索用に、HTML からタイトル・本文テキスト・リンクを抽出する。
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.title_parts: list[str] = []
+        self.body_parts: list[str] = []
+        self.links: list[str] = []
+        self.breadcrumb_links: list[str] = []
+        self.json_ld_blocks: list[str] = []
+        self._tag_stack: list[str] = []
+        self._ignored_depth = 0
+        self._breadcrumb_depth = 0
+        self._json_ld_depth = 0
+        self._json_ld_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        normalized_tag = tag.lower()
+        attr_map = {name.lower(): value or "" for name, value in attrs}
+        self._tag_stack.append(normalized_tag)
+        if normalized_tag in {"script", "style", "noscript", "svg"}:
+            self._ignored_depth += 1
+        if normalized_tag == "script" and "ld+json" in attr_map.get("type", "").lower():
+            self._json_ld_depth += 1
+            self._json_ld_parts = []
+        if normalized_tag == "nav" and self._is_breadcrumb_attrs(attr_map):
+            self._breadcrumb_depth += 1
+        if normalized_tag == "a":
+            href = attr_map.get("href")
+            if href:
+                self.links.append(href)
+                if self._breadcrumb_depth > 0 or self._is_breadcrumb_attrs(attr_map):
+                    self.breadcrumb_links.append(href)
+
+    def handle_endtag(self, tag: str) -> None:
+        normalized_tag = tag.lower()
+        if normalized_tag == "script" and self._json_ld_depth > 0:
+            self.json_ld_blocks.append("".join(self._json_ld_parts))
+            self._json_ld_parts = []
+            self._json_ld_depth -= 1
+        if normalized_tag in {"script", "style", "noscript", "svg"} and self._ignored_depth > 0:
+            self._ignored_depth -= 1
+        if normalized_tag == "nav" and self._breadcrumb_depth > 0:
+            self._breadcrumb_depth -= 1
+        if self._tag_stack:
+            self._tag_stack.pop()
+
+    def handle_data(self, data: str) -> None:
+        if self._json_ld_depth > 0:
+            self._json_ld_parts.append(data)
+            return
+        text = " ".join(data.split())
+        if not text or self._ignored_depth > 0:
+            return
+        if self._tag_stack and self._tag_stack[-1] == "title":
+            self.title_parts.append(text)
+            return
+        self.body_parts.append(text)
+
+    def extract(self) -> ExtractedWebPage:
+        title = " ".join(self.title_parts).strip()
+        content = " ".join(self.body_parts).strip()
+        return ExtractedWebPage(
+            title=title,
+            content=content,
+            links=tuple(self.links),
+            breadcrumb_links=tuple(self.breadcrumb_links),
+            json_ld_blocks=tuple(self.json_ld_blocks),
+        )
+
+    def _is_breadcrumb_attrs(self, attrs: dict[str, str]) -> bool:
+        """
+        HTML のパンくず領域らしい属性かどうかを判定する。
+        """
+        haystack = " ".join([attrs.get("aria-label", ""), attrs.get("class", ""), attrs.get("id", "")]).lower()
+        return "breadcrumb" in haystack or "bread-crumb" in haystack or "パンくず" in haystack
 
 
 CURRENT_TARGET_INDEX_VERSION = 1
@@ -154,9 +272,9 @@ class IndexService:
         if self._is_running():
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Indexing is already running.")
 
-        normalized_full_path = self._normalize_target_path_or_raise(full_path)
-        self._assert_indexing_allowed_for_search_target(normalized_full_path)
-        effective_full_path = self._resolve_enabled_target_covering_path(normalized_full_path) or normalized_full_path
+        normalized_full_path, source_type = self._normalize_target_identifier_or_raise(full_path)
+        self._assert_indexing_allowed_for_search_target(normalized_full_path, source_type=source_type)
+        effective_full_path = self._resolve_enabled_target_covering_path(normalized_full_path, source_type=source_type) or normalized_full_path
         is_partial_target_refresh = normalized_full_path != effective_full_path
         scan_depth = index_depth + self._relative_directory_depth(effective_full_path, normalized_full_path)
         app_settings = self.get_app_settings()
@@ -259,6 +377,38 @@ class IndexService:
                 detail="Folder path must be an absolute path or Windows UNC path.",
             ) from error
 
+    def _normalize_target_identifier_or_raise(self, full_path: str) -> tuple[str, str]:
+        """
+        ローカルフォルダまたは Web URL を検索対象識別子として正規化する。
+        """
+        if self._is_web_url(full_path):
+            return self._normalize_web_url(full_path), "web"
+        return self._normalize_target_path_or_raise(full_path), "local"
+
+    def _is_web_url(self, value: str) -> bool:
+        """
+        HTTP/HTTPS URL かどうかを判定する。
+        """
+        parsed = urlparse(value.strip())
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+    def _normalize_web_url(self, value: str) -> str:
+        """
+        Web ページ検索で使う URL をフラグメントなし・安定表記へ正規化する。
+        """
+        parsed = urlparse(value.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Web target must be an http or https URL.")
+        path = parsed.path or "/"
+        normalized = parsed._replace(
+            scheme=parsed.scheme.lower(),
+            netloc=parsed.netloc.lower(),
+            path=path,
+            params="",
+            fragment="",
+        )
+        return urlunparse(normalized)
+
     def _relative_directory_depth(self, root_path: str, descendant_path: str) -> int:
         """
         ルートから子孫フォルダまでの相対ディレクトリ階層数を返す。
@@ -271,7 +421,7 @@ class IndexService:
         relative_path = descendant_path[len(root_prefix):]
         return len([part for part in relative_path.split("/") if part])
 
-    def _resolve_enabled_target_covering_path(self, normalized_path: str) -> str | None:
+    def _resolve_enabled_target_covering_path(self, normalized_path: str, *, source_type: str = "local") -> str | None:
         """
         有効な検索対象フォルダのうち、指定パスを包含する最も深い親フォルダを返す。
         """
@@ -281,11 +431,13 @@ class IndexService:
                 SELECT full_path
                 FROM targets
                 WHERE is_search_target_enabled = 1
+                  AND source_type = ?
                 ORDER BY length(full_path) DESC
-                """
+                """,
+                (source_type,),
             ).fetchall()
         except OperationalError as error:
-            if "no such column: is_search_target_enabled" in str(error):
+            if "no such column: is_search_target_enabled" in str(error) or "no such column: source_type" in str(error):
                 return None
             raise
         for row in enabled_rows:
@@ -294,20 +446,21 @@ class IndexService:
                 return root_path
         return None
 
-    def _assert_indexing_allowed_for_search_target(self, full_path: str) -> None:
+    def _assert_indexing_allowed_for_search_target(self, full_path: str, *, source_type: str = "local") -> None:
         """
         検索対象フォルダが設定済みなら、その配下パスだけをインデックス許可する。
         """
-        normalized_path = self._normalize_target_path_or_raise(full_path)
-        covering_path = self._resolve_enabled_target_covering_path(normalized_path)
+        normalized_path = self._normalize_web_url(full_path) if source_type == "web" else self._normalize_target_path_or_raise(full_path)
+        covering_path = self._resolve_enabled_target_covering_path(normalized_path, source_type=source_type)
         if covering_path is not None:
             return
         try:
             enabled_count = self.connection.execute(
-                "SELECT COUNT(*) AS count FROM targets WHERE is_search_target_enabled = 1"
+                "SELECT COUNT(*) AS count FROM targets WHERE is_search_target_enabled = 1 AND source_type = ?",
+                (source_type,),
             ).fetchone()
         except OperationalError as error:
-            if "no such column: is_search_target_enabled" in str(error):
+            if "no such column: is_search_target_enabled" in str(error) or "no such column: source_type" in str(error):
                 return
             raise
         if enabled_count is None or int(enabled_count["count"] or 0) == 0:
@@ -634,6 +787,7 @@ class IndexService:
                 normalized_path,
                 indexed_at
             FROM files
+            WHERE source_type = 'local'
             ORDER BY normalized_path ASC
             """
         ).fetchall()
@@ -642,6 +796,7 @@ class IndexService:
             SELECT full_path
             FROM targets
             WHERE last_indexed_at IS NOT NULL
+              AND source_type = 'local'
             ORDER BY length(full_path) DESC
             """
         ).fetchall()
@@ -683,7 +838,7 @@ class IndexService:
         """
         rows = self.connection.execute(
             """
-            SELECT full_path, is_search_target_enabled, last_indexed_at, indexed_file_count
+            SELECT full_path, source_type, is_search_target_enabled, last_indexed_at, indexed_file_count
             FROM targets
             ORDER BY is_search_target_enabled DESC, full_path ASC
             """
@@ -691,6 +846,7 @@ class IndexService:
         items = [
             SearchTargetItem(
                 full_path=str(row["full_path"]),
+                source_type=str(row["source_type"] or "local"),
                 is_enabled=bool(row["is_search_target_enabled"]),
                 last_indexed_at=row["last_indexed_at"],
                 indexed_file_count=int(row["indexed_file_count"] or 0),
@@ -703,28 +859,39 @@ class IndexService:
         """
         指定パスが有効な検索対象フォルダでカバーされるか判定する。
         """
-        normalized_path = self._normalize_target_path_or_raise(folder_path)
-        covering_path = self._resolve_enabled_target_covering_path(normalized_path)
+        normalized_path, source_type = self._normalize_target_identifier_or_raise(folder_path)
+        covering_path = self._resolve_enabled_target_covering_path(normalized_path, source_type=source_type)
         return SearchTargetCoverageResponse(
             normalized_path=normalized_path,
+            source_type=source_type,
             is_covered=covering_path is not None,
             covering_path=covering_path,
         )
 
-    def list_registered_search_target_paths(self, *, enabled_only: bool) -> list[str]:
+    def list_registered_search_target_paths(self, *, enabled_only: bool, source_type: str = "local") -> list[str]:
         """
         検索対象フォルダとして登録済みのパス一覧を返す。
         有効対象が 0 件のときは、無効化済みフォルダもフォールバック候補として使う。
         """
-        where_clause = "WHERE is_search_target_enabled = 1" if enabled_only else ""
-        rows = self.connection.execute(
-            f"""
-            SELECT full_path
-            FROM targets
-            {where_clause}
-            ORDER BY full_path
-            """
-        ).fetchall()
+        where_clause = "WHERE source_type = ?"
+        if enabled_only:
+            where_clause += " AND is_search_target_enabled = 1"
+        try:
+            rows = self.connection.execute(
+                f"""
+                SELECT full_path
+                FROM targets
+                {where_clause}
+                ORDER BY full_path
+                """,
+                (source_type,),
+            ).fetchall()
+        except OperationalError as error:
+            if "no such column: source_type" in str(error):
+                return []
+            raise
+        if source_type == "web":
+            return [self._normalize_web_url(str(row["full_path"])) for row in rows]
         return [normalize_path(str(row["full_path"])).as_posix() for row in rows]
 
     def set_search_target_enabled(self, *, folder_path: str, is_enabled: bool) -> SearchTargetListResponse:
@@ -749,11 +916,20 @@ class IndexService:
         self.connection.commit()
         return self.list_search_targets()
 
-    def add_search_target(self, *, folder_path: str) -> SearchTargetListResponse:
+    def add_search_target(self, *, folder_path: str, index_depth: int = 3) -> SearchTargetListResponse:
         """
         検索対象フォルダへ新規追加し、有効状態にする。
         """
-        return self.set_search_target_enabled(folder_path=folder_path, is_enabled=True)
+        response = self.set_search_target_enabled(folder_path=folder_path, is_enabled=True)
+        normalized_path, source_type = self._normalize_target_identifier_or_raise(folder_path)
+        if source_type == "web":
+            self.ensure_fresh_target(
+                full_path=normalized_path,
+                refresh_window_minutes=0,
+                index_depth=index_depth,
+            )
+            return self.list_search_targets()
+        return response
 
     def delete_search_targets(self, folder_paths: list[str]) -> DeleteSearchTargetsResponse:
         """
@@ -764,7 +940,7 @@ class IndexService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Indexing is already running.")
         normalized_paths = sorted(
             {
-                normalize_path(folder_path).as_posix()
+                self._normalize_target_identifier_or_raise(folder_path)[0]
                 for folder_path in folder_paths
                 if str(folder_path).strip()
             }
@@ -794,14 +970,15 @@ class IndexService:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Indexing is already running.")
         reindexed_count = 0
         for folder_path in folder_paths:
-            normalized_folder_path = normalize_path(folder_path).as_posix()
+            normalized_folder_path, source_type = self._normalize_target_identifier_or_raise(folder_path)
             target_row = self.connection.execute(
                 """
                 SELECT index_depth, selected_extensions
                 FROM targets
                 WHERE full_path = ? AND is_search_target_enabled = 1
+                  AND source_type = ?
                 """,
-                (normalized_folder_path,),
+                (normalized_folder_path, source_type),
             ).fetchone()
             if target_row is None:
                 continue
@@ -849,26 +1026,25 @@ class IndexService:
         index_depth: int,
         selected_extensions: str,
     ) -> dict[str, object]:
-        try:
-            normalized_path = normalize_path(full_path)
-        except AbsolutePathRequiredError as error:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Folder path must be an absolute path or Windows UNC path.",
-            ) from error
-        if not normalized_path.exists() or not normalized_path.is_dir():
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Folder path must be an existing directory.")
+        normalized_identifier, source_type = self._normalize_target_identifier_or_raise(full_path)
+        if source_type == "local":
+            normalized_path = normalize_path(normalized_identifier)
+            if not normalized_path.exists() or not normalized_path.is_dir():
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Folder path must be an existing directory.")
+            stored_path = normalized_path.as_posix()
+        else:
+            stored_path = normalized_identifier
 
         row = self.connection.execute(
             """
             SELECT
                 id, full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
                 is_search_target_enabled,
-                indexed_file_count, index_version, created_at, updated_at
+                indexed_file_count, index_version, source_type, created_at, updated_at
             FROM targets
             WHERE full_path = ?
             """,
-            (normalized_path.as_posix(),),
+            (stored_path,),
         ).fetchone()
         if row is not None:
             return dict(row)
@@ -878,11 +1054,11 @@ class IndexService:
             """
             INSERT INTO targets(
                 full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
-                is_search_target_enabled, indexed_file_count, index_version, created_at, updated_at
+                is_search_target_enabled, indexed_file_count, index_version, source_type, created_at, updated_at
             )
-            VALUES (?, NULL, ?, ?, ?, 1, 0, 0, ?, ?)
+            VALUES (?, NULL, ?, ?, ?, 1, 0, 0, ?, ?, ?)
             """,
-            (normalized_path.as_posix(), exclude_keywords, index_depth, selected_extensions, now, now),
+            (stored_path, exclude_keywords, index_depth, selected_extensions, source_type, now, now),
         )
         self.connection.commit()
         created = self.connection.execute(
@@ -890,7 +1066,7 @@ class IndexService:
             SELECT
                 id, full_path, last_indexed_at, exclude_keywords, index_depth, selected_extensions,
                 is_search_target_enabled,
-                indexed_file_count, index_version, created_at, updated_at
+                indexed_file_count, index_version, source_type, created_at, updated_at
             FROM targets
             WHERE id = ?
             """,
@@ -938,6 +1114,14 @@ class IndexService:
         指定ターゲット配下を高速に再走査する。
         走査は os.scandir、本文抽出はスレッド並列、DB 書き込みは直列でまとめる。
         """
+        if str(target.get("source_type") or "local") == "web":
+            return self._index_web_target(
+                target,
+                exclude_keywords,
+                controller=controller,
+                index_depth=index_depth,
+                cleanup_root_url=cleanup_root_path,
+            )
         total_start = time_module.perf_counter()
         folder_path = normalize_path(str(target["full_path"]))
         normalized_paths: set[str] = set()
@@ -1163,6 +1347,377 @@ class IndexService:
             "exclude_keywords": self._normalize_keyword_list([*keywords, *sorted(auto_excluded_paths)]),
         }
 
+    def _index_web_target(
+        self,
+        target: dict[str, object],
+        exclude_keywords: str,
+        controller: IndexRunController,
+        *,
+        index_depth: int,
+        cleanup_root_url: str,
+    ) -> dict[str, object]:
+        """
+        ベース URL 配下の HTML ページをクロールし、本文を files/file_segments へ登録する。
+        """
+        base_url = self._normalize_web_url(str(target["full_path"]))
+        keywords = self._parse_exclude_keywords(exclude_keywords)
+        normalized_paths: set[str] = set()
+        failed_paths: set[str] = set()
+        preloaded_pages: dict[str, tuple[str, ExtractedWebPage]] = {}
+        try:
+            base_html = self._fetch_web_page(base_url)
+            base_extracted = self._extract_web_page(base_html)
+            preloaded_pages[base_url] = (base_html, base_extracted)
+        except Exception as error:
+            failed_paths.add(base_url)
+            self._record_web_error(base_url, error)
+            self.connection.commit()
+            return {"file_count": 0, "error_count": 1, "exclude_keywords": self._normalize_keyword_list(keywords)}
+
+        scope_url = self._resolve_web_scope_url(base_url, base_extracted)
+        cleanup_url = scope_url
+        existing_files = self._load_existing_files(scope_url)
+        queue: list[tuple[str, int, bool]] = [(base_url, 0, True)]
+        queued_urls = {base_url}
+        if scope_url != base_url:
+            queue.append((scope_url, 0, False))
+            queued_urls.add(scope_url)
+        file_count = 0
+        error_count = 0
+        max_pages = 500
+
+        while queue and len(normalized_paths) < max_pages:
+            self._raise_if_cancel_requested(controller)
+            current_url, current_depth, should_record_failure = queue.pop(0)
+            if self._should_exclude_web_url(current_url, keywords):
+                continue
+            try:
+                if current_url in preloaded_pages:
+                    html, extracted = preloaded_pages[current_url]
+                else:
+                    html = self._fetch_web_page(current_url)
+                    extracted = self._extract_web_page(html)
+                title = extracted.title or self._resolve_web_file_name(current_url)
+                content = extracted.content
+                fetched_at = time_module.time()
+                normalized_url = self._normalize_web_url(current_url)
+                normalized_paths.add(normalized_url)
+                candidate = IndexedWebPageCandidate(
+                    url=normalized_url,
+                    title=title,
+                    content=content,
+                    fetched_at=fetched_at,
+                    size=len(html.encode("utf-8")),
+                    existing_id=int(existing_files[normalized_url]["id"]) if normalized_url in existing_files else None,
+                )
+                self._upsert_web_page(candidate)
+                file_count += 1
+                if current_depth < index_depth:
+                    for raw_link in extracted.links:
+                        next_url = self._normalize_linked_web_url(
+                            raw_link,
+                            base_url=current_url,
+                            root_url=scope_url,
+                        )
+                        if next_url and next_url not in queued_urls:
+                            queued_urls.add(next_url)
+                            queue.append((next_url, current_depth + 1, True))
+            except Exception as error:
+                if isinstance(error, UnsupportedWebContentTypeError) and current_url != base_url:
+                    pass
+                elif should_record_failure:
+                    error_count += 1
+                    failed_paths.add(current_url)
+                    self._record_web_error(current_url, error)
+
+            if file_count % 100 == 0:
+                self.connection.commit()
+
+        self.connection.commit()
+        self._remove_deleted_files(normalized_paths, root_path=cleanup_url, index_depth=None)
+        self._clear_resolved_failed_files(root_path=cleanup_url, failed_paths=failed_paths, index_depth=None)
+        return {
+            "file_count": file_count,
+            "error_count": error_count,
+            "exclude_keywords": self._normalize_keyword_list(keywords),
+        }
+
+    def _fetch_web_page(self, url: str) -> str:
+        """
+        HTML ページを短いタイムアウトで取得する。
+        """
+        request = Request(url, headers={"User-Agent": "LocalFulltextSearch/1.0"})
+        try:
+            with urlopen(request, timeout=10) as response:
+                content_type = response.headers.get("Content-Type", "")
+                if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
+                    raise UnsupportedWebContentTypeError(f"Unsupported content type: {content_type or 'unknown'}")
+                charset = response.headers.get_content_charset() or "utf-8"
+                return response.read(2_000_000).decode(charset, errors="replace")
+        except HTTPError as error:
+            raise ValueError(f"HTTP {error.code}") from error
+        except URLError as error:
+            raise ValueError(str(error.reason)) from error
+
+    def _extract_web_page(self, html: str) -> ExtractedWebPage:
+        """
+        HTML 文字列から検索用本文とリンクを取り出す。
+        """
+        parser = WebPageParser()
+        parser.feed(html)
+        return parser.extract()
+
+    def _resolve_web_scope_url(self, base_url: str, extracted: ExtractedWebPage) -> str:
+        """
+        Web クロール範囲のルートを、構造化パンくず・HTMLパンくず・URL構造の順で決める。
+        """
+        structured_candidates = self._extract_breadcrumb_urls_from_json_ld(base_url, extracted.json_ld_blocks)
+        scope_url = self._select_breadcrumb_scope_url(base_url, structured_candidates)
+        if scope_url is not None:
+            return scope_url
+
+        html_candidates = [self._normalize_breadcrumb_candidate_url(base_url, link) for link in extracted.breadcrumb_links]
+        scope_url = self._select_breadcrumb_scope_url(base_url, [url for url in html_candidates if url is not None])
+        if scope_url is not None:
+            return scope_url
+
+        return self._resolve_url_parent_scope(base_url)
+
+    def _extract_breadcrumb_urls_from_json_ld(self, base_url: str, blocks: tuple[str, ...]) -> list[str]:
+        """
+        JSON-LD の BreadcrumbList から URL 候補を抽出する。
+        """
+        urls: list[str] = []
+        for block in blocks:
+            try:
+                parsed = json.loads(block)
+            except json.JSONDecodeError:
+                continue
+            for item in self._iter_json_ld_nodes(parsed):
+                if not isinstance(item, dict):
+                    continue
+                node_type = item.get("@type")
+                node_types = node_type if isinstance(node_type, list) else [node_type]
+                if "BreadcrumbList" not in node_types:
+                    continue
+                elements = item.get("itemListElement")
+                if not isinstance(elements, list):
+                    continue
+                for element in elements:
+                    url = self._extract_url_from_breadcrumb_element(element)
+                    normalized_url = self._normalize_breadcrumb_candidate_url(base_url, url) if url else None
+                    if normalized_url is not None:
+                        urls.append(normalized_url)
+        return urls
+
+    def _iter_json_ld_nodes(self, value):
+        """
+        JSON-LD の @graph や配列をたどってノードを列挙する。
+        """
+        if isinstance(value, list):
+            for item in value:
+                yield from self._iter_json_ld_nodes(item)
+            return
+        if not isinstance(value, dict):
+            return
+        yield value
+        graph = value.get("@graph")
+        if isinstance(graph, list):
+            for item in graph:
+                yield from self._iter_json_ld_nodes(item)
+
+    def _extract_url_from_breadcrumb_element(self, element) -> str | None:
+        """
+        BreadcrumbList の要素から URL 文字列を取り出す。
+        """
+        if isinstance(element, str):
+            return element
+        if not isinstance(element, dict):
+            return None
+        item = element.get("item")
+        if isinstance(item, str):
+            return item
+        if isinstance(item, dict):
+            for key in ("@id", "id", "url"):
+                value = item.get(key)
+                if isinstance(value, str):
+                    return value
+        for key in ("@id", "id", "url"):
+            value = element.get(key)
+            if isinstance(value, str):
+                return value
+        return None
+
+    def _normalize_breadcrumb_candidate_url(self, base_url: str, value: str | None) -> str | None:
+        """
+        パンくずから得た URL 候補を絶対 URL へ正規化する。
+        """
+        if not value:
+            return None
+        joined_url, _ = urldefrag(urljoin(base_url, value))
+        if not self._is_web_url(joined_url):
+            return None
+        return self._normalize_web_url(joined_url)
+
+    def _select_breadcrumb_scope_url(self, base_url: str, candidates: list[str]) -> str | None:
+        """
+        パンくず候補から、ベース URL を包含する最も深い親階層を選ぶ。
+        """
+        normalized_base = self._normalize_web_url(base_url)
+        ancestors = [
+            candidate
+            for candidate in candidates
+            if candidate != normalized_base and self._is_web_scope_ancestor(candidate, normalized_base)
+        ]
+        if not ancestors:
+            return None
+        return max(ancestors, key=lambda url: len(urlparse(url).path))
+
+    def _resolve_url_parent_scope(self, base_url: str) -> str:
+        """
+        パンくずがない場合、URL パスの親階層をクロール範囲にする。
+        """
+        parsed = urlparse(base_url)
+        if parsed.path.endswith("/"):
+            return self._normalize_web_url(base_url)
+        parent_path = parsed.path.rsplit("/", 1)[0] + "/"
+        if parent_path == "//":
+            parent_path = "/"
+        return self._normalize_web_url(urlunparse(parsed._replace(path=parent_path, params="", query="", fragment="")))
+
+    def _is_web_scope_ancestor(self, scope_url: str, candidate_url: str) -> bool:
+        """
+        scope_url が candidate_url と同一ホストで、パス階層上の祖先かどうかを返す。
+        """
+        scope = urlparse(scope_url)
+        candidate = urlparse(candidate_url)
+        if scope.scheme != candidate.scheme or scope.netloc != candidate.netloc:
+            return False
+        scope_path = scope.path or "/"
+        candidate_path = candidate.path or "/"
+        if scope_path == candidate_path:
+            return True
+        prefix = scope_path if scope_path.endswith("/") else f"{scope_path}/"
+        return candidate_path.startswith(prefix)
+
+    def _normalize_linked_web_url(self, raw_link: str, *, base_url: str, root_url: str) -> str | None:
+        """
+        ページ内リンクを絶対 URL にし、同一ホスト・同一階層だけ返す。
+        """
+        joined_url, _ = urldefrag(urljoin(base_url, raw_link))
+        if not self._is_web_url(joined_url):
+            return None
+        normalized_url = self._normalize_web_url(joined_url)
+        root = urlparse(root_url)
+        parsed = urlparse(normalized_url)
+        if parsed.scheme != root.scheme or parsed.netloc != root.netloc:
+            return None
+        root_path = root.path or "/"
+        if not parsed.path.startswith(root_path):
+            return None
+        return normalized_url
+
+    def _should_exclude_web_url(self, url: str, keywords: list[str]) -> bool:
+        """
+        URL 文字列に除外キーワードが含まれる場合はクロールしない。
+        """
+        lowered_url = url.lower()
+        return any(keyword.lower() in lowered_url for keyword in keywords)
+
+    def _resolve_web_file_name(self, url: str) -> str:
+        """
+        タイトルがないページの表示名を URL 末尾から作る。
+        """
+        parsed = urlparse(url)
+        return Path(parsed.path.rstrip("/") or parsed.netloc).name or parsed.netloc
+
+    def _upsert_web_page(self, candidate: IndexedWebPageCandidate) -> None:
+        """
+        Web ページを files と本文セグメントへ upsert する。
+        """
+        indexed_at = datetime.now(UTC).isoformat()
+        if candidate.existing_id is not None:
+            file_id = candidate.existing_id
+            self.connection.execute(
+                """
+                UPDATE files
+                SET full_path = ?, file_name = ?, file_ext = ?,
+                    created_at = ?, mtime = ?, size = ?, indexed_at = ?, last_error = NULL,
+                    source_type = 'web'
+                WHERE id = ?
+                """,
+                (
+                    candidate.url,
+                    candidate.title,
+                    ".html",
+                    candidate.fetched_at,
+                    candidate.fetched_at,
+                    candidate.size,
+                    indexed_at,
+                    file_id,
+                ),
+            )
+            self.connection.execute("DELETE FROM file_segments WHERE file_id = ?", (file_id,))
+        else:
+            cursor = self.connection.execute(
+                """
+                INSERT INTO files(
+                    full_path, normalized_path,
+                    file_name, file_ext, created_at, mtime, size, indexed_at, last_error, source_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'web')
+                """,
+                (
+                    candidate.url,
+                    candidate.url,
+                    candidate.title,
+                    ".html",
+                    candidate.fetched_at,
+                    candidate.fetched_at,
+                    candidate.size,
+                    indexed_at,
+                ),
+            )
+            file_id = int(cursor.lastrowid)
+
+        if candidate.content.strip():
+            self.connection.execute(
+                """
+                INSERT INTO file_segments(file_id, segment_type, segment_label, content)
+                VALUES (?, ?, ?, ?)
+                """,
+                (file_id, "body", candidate.url, candidate.content),
+            )
+            cjk_bigram_content = build_cjk_bigram_index_content(candidate.content)
+            if cjk_bigram_content:
+                self.connection.execute(
+                    """
+                    INSERT INTO file_segments(file_id, segment_type, segment_label, content)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (file_id, "cjk_bigram", candidate.url, cjk_bigram_content),
+                )
+
+    def _record_web_error(self, url: str, error: Exception) -> None:
+        """
+        Web ページ取得失敗を failed_files へ記録する。
+        """
+        self.connection.execute(
+            """
+            INSERT INTO failed_files(normalized_path, file_name, error_message, last_failed_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(normalized_path) DO UPDATE SET
+                file_name = excluded.file_name,
+                error_message = excluded.error_message,
+                last_failed_at = excluded.last_failed_at
+            """,
+            (
+                url,
+                self._resolve_web_file_name(url),
+                str(error),
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+
     def _resolve_extract_worker_count(self) -> int:
         """
         本文抽出スレッド数を CPU 数に応じて上限付きで決める。
@@ -1258,15 +1813,17 @@ class IndexService:
         """
         対象ルート配下の既存メタデータを一括取得し、差分判定を高速化する。
         LIKE の代わりに範囲クエリを使い B-tree インデックスを活用する。
+        Web ページ URL が root_path そのものとして登録される場合もあるため、完全一致も含める。
         """
         prefix_start, prefix_end = get_descendant_path_range(root_path)
         rows = self.connection.execute(
             """
             SELECT id, normalized_path, mtime, size, last_error
             FROM files
-            WHERE normalized_path >= ? AND normalized_path < ?
+            WHERE normalized_path = ?
+               OR (normalized_path >= ? AND normalized_path < ?)
             """,
-            (prefix_start, prefix_end),
+            (root_path, prefix_start, prefix_end),
         ).fetchall()
         return {str(row["normalized_path"]): dict(row) for row in rows}
 
@@ -1356,7 +1913,8 @@ class IndexService:
                 """
                 UPDATE files
                 SET full_path = ?, file_name = ?, file_ext = ?,
-                    created_at = ?, mtime = ?, size = ?, indexed_at = ?, last_error = NULL
+                    created_at = ?, mtime = ?, size = ?, indexed_at = ?, last_error = NULL,
+                    source_type = 'local'
                 WHERE id = ?
                 """,
                 (
@@ -1377,8 +1935,8 @@ class IndexService:
                 """
                 INSERT INTO files(
                     full_path, normalized_path,
-                    file_name, file_ext, created_at, mtime, size, indexed_at, last_error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    file_name, file_ext, created_at, mtime, size, indexed_at, last_error, source_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'local')
                 """,
                 (
                     candidate.normalized_path,
@@ -1528,8 +2086,13 @@ class IndexService:
         """
         prefix_start, prefix_end = get_descendant_path_range(root_path)
         rows = self.connection.execute(
-            "SELECT id, normalized_path, file_ext FROM files WHERE normalized_path >= ? AND normalized_path < ?",
-            (prefix_start, prefix_end),
+            """
+            SELECT id, normalized_path, file_ext
+            FROM files
+            WHERE normalized_path = ?
+               OR (normalized_path >= ? AND normalized_path < ?)
+            """,
+            (root_path, prefix_start, prefix_end),
         ).fetchall()
         deleted_ids = [
             int(row["id"])
@@ -1573,9 +2136,10 @@ class IndexService:
             """
             SELECT id
             FROM files
-            WHERE normalized_path >= ? AND normalized_path < ?
+            WHERE normalized_path = ?
+               OR (normalized_path >= ? AND normalized_path < ?)
             """,
-            (prefix_start, prefix_end),
+            (root_path, prefix_start, prefix_end),
         ).fetchall()
         file_ids = [int(row["id"]) for row in rows]
         if file_ids:
@@ -1589,9 +2153,10 @@ class IndexService:
         self.connection.execute(
             """
             DELETE FROM failed_files
-            WHERE normalized_path >= ? AND normalized_path < ?
+            WHERE normalized_path = ?
+               OR (normalized_path >= ? AND normalized_path < ?)
             """,
-            (prefix_start, prefix_end),
+            (root_path, prefix_start, prefix_end),
         )
 
     def _mark_overlapping_targets_stale(self, folder_path: str) -> None:
@@ -1667,9 +2232,10 @@ class IndexService:
             """
             SELECT normalized_path
             FROM failed_files
-            WHERE normalized_path >= ? AND normalized_path < ?
+            WHERE normalized_path = ?
+               OR (normalized_path >= ? AND normalized_path < ?)
             """,
-            (prefix_start, prefix_end),
+            (root_path, prefix_start, prefix_end),
         ).fetchall()
         stale_paths = [
             str(row["normalized_path"])

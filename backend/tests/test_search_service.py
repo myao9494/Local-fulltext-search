@@ -36,6 +36,93 @@ def test_search_handles_special_characters_without_fts_errors(tmp_path: Path) ->
     assert [item.file_name for item in result.items] == ["symbols.md"]
 
 
+def test_search_defaults_to_local_source_and_web_is_opt_in(tmp_path: Path) -> None:
+    """
+    Web ページのインデックスは、source_type=web を明示した検索だけに出る。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+    created_at = datetime(2026, 4, 10, tzinfo=UTC)
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="local.md",
+        full_path="/workspace/docs/local.md",
+        created_at=created_at,
+        mtime=created_at,
+        body="alpha local",
+        click_count=0,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="Web Page",
+        full_path="http://example.test/docs/page.html",
+        created_at=created_at,
+        mtime=created_at,
+        body="alpha web",
+        click_count=0,
+        source_type="web",
+    )
+
+    local_result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            search_all_enabled=True,
+            index_depth=5,
+        )
+    )
+    web_result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="http://example.test/docs/",
+            search_all_enabled=False,
+            source_type="web",
+            index_depth=5,
+            skip_refresh=True,
+        )
+    )
+
+    assert [item.file_name for item in local_result.items] == ["local.md"]
+    assert [item.file_name for item in web_result.items] == ["Web Page"]
+
+
+def test_search_web_source_includes_exact_page_url(tmp_path: Path) -> None:
+    """
+    Web 検索はベース URL がページそのものの場合も、そのページ自身を候補に含める。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+    created_at = datetime(2026, 4, 10, tzinfo=UTC)
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="Readme",
+        full_path="https://example.test/en/latest/readme.html",
+        created_at=created_at,
+        mtime=created_at,
+        body="alpha exact page",
+        click_count=0,
+        source_type="web",
+    )
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="https://example.test/en/latest/readme.html",
+            source_type="web",
+            search_all_enabled=False,
+            skip_refresh=True,
+            index_depth=3,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.full_path for item in result.items] == ["https://example.test/en/latest/readme.html"]
+
+
 def test_search_matches_japanese_substring_inside_longer_token(tmp_path: Path) -> None:
     """
     日本語の連続文字列は bi-gram 補助インデックスで部分一致検索できる。
@@ -2093,6 +2180,7 @@ def _insert_indexed_markdown(
     body: str,
     click_count: int,
     obsidian_click_count: int = 0,
+    source_type: str = "local",
 ) -> int:
     """
     検索テスト用に、本文付き Markdown ファイルを直接投入する。
@@ -2102,8 +2190,8 @@ def _insert_indexed_markdown(
         """
         INSERT INTO files(
             full_path, normalized_path, file_name, file_ext,
-            created_at, mtime, size, indexed_at, last_error, click_count, obsidian_click_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+            created_at, mtime, size, indexed_at, last_error, click_count, obsidian_click_count, source_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
         """,
         (
             full_path,
@@ -2116,6 +2204,7 @@ def _insert_indexed_markdown(
             indexed_at,
             click_count,
             obsidian_click_count,
+            source_type,
         ),
     )
     file_id = int(cursor.lastrowid)

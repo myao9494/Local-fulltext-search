@@ -854,7 +854,17 @@ h1, h2, h3 {
   white-space: nowrap;
 }
 
-.search-all-button.active {
+.source-toggle {
+  display: inline-flex;
+  gap: 4px;
+}
+
+button.source-toggle-button {
+  margin-left: 0;
+}
+
+.search-all-button.active,
+.source-toggle-button.active {
   background: linear-gradient(135deg, rgba(59, 130, 246, 0.24), rgba(14, 165, 233, 0.18));
   border-color: rgba(96, 165, 250, 0.55);
   color: #eff6ff;

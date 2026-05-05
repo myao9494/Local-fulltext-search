@@ -1,6 +1,7 @@
 export type SearchResult = {
   file_id: number;
   result_kind: "file" | "folder";
+  source_type: "local" | "web";
   target_path: string;
   file_name: string;
   full_path: string;
@@ -43,6 +44,7 @@ export type FailedFileListResponse = {
 
 export type IndexedTarget = {
   full_path: string;
+  source_type: "local" | "web";
   last_indexed_at: string | null;
   indexed_file_count: number;
 };
@@ -53,6 +55,7 @@ export type IndexedTargetListResponse = {
 
 export type SearchTargetFolder = {
   full_path: string;
+  source_type: "local" | "web";
   is_enabled: boolean;
   last_indexed_at: string | null;
   indexed_file_count: number;
@@ -64,6 +67,7 @@ export type SearchTargetListResponse = {
 
 export type SearchTargetCoverage = {
   normalized_path: string;
+  source_type: "local" | "web";
   is_covered: boolean;
   covering_path: string | null;
 };

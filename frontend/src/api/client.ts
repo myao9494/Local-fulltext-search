@@ -139,10 +139,10 @@ export async function setSearchTargetEnabled(payload: {
   });
 }
 
-export async function addSearchTarget(folderPath: string): Promise<SearchTargetListResponse> {
+export async function addSearchTarget(folderPath: string, indexDepth?: number): Promise<SearchTargetListResponse> {
   return request<SearchTargetListResponse>("/api/index/search-targets", {
     method: "POST",
-    body: JSON.stringify({ folder_path: folderPath }),
+    body: JSON.stringify({ folder_path: folderPath, index_depth: indexDepth ?? 3 }),
   });
 }
 
@@ -186,6 +186,7 @@ export async function fetchSearchPage(params: {
   full_path: string;
   search_all_enabled?: boolean;
   skip_refresh?: boolean;
+  source_type?: "local" | "web";
   index_depth: number;
   refresh_window_minutes: number;
   regex_enabled?: boolean;
@@ -217,6 +218,7 @@ export async function search(params: {
   full_path: string;
   search_all_enabled?: boolean;
   skip_refresh?: boolean;
+  source_type?: "local" | "web";
   index_depth: number;
   refresh_window_minutes: number;
   regex_enabled?: boolean;

@@ -95,12 +95,14 @@ const DEFAULT_SYNONYM_GROUPS = "";
 const DEFAULT_SEARCH_FILTER_TEXT = "";
 
 type PageView = "search" | "indexed-targets" | "search-targets" | "scheduler" | "launcher";
+type SearchSource = "local" | "web";
 type SearchTarget = "all" | "body" | "filename" | "folder" | "filename_and_folder";
 type SearchExecutionParams = {
   q: string;
   full_path: string;
   search_all_enabled?: boolean;
   skip_refresh?: boolean;
+  source_type?: SearchSource;
   index_depth: number;
   refresh_window_minutes: number;
   regex_enabled?: boolean;
@@ -307,6 +309,7 @@ function App() {
   const [fullPath, setFullPath] = useState(() => launchParams.fullPath);
   const [indexDepth, setIndexDepth] = useState(() => launchParams.indexDepth);
   const [isSearchAllEnabled, setIsSearchAllEnabled] = useState(() => launchParams.searchAll);
+  const [searchSource, setSearchSource] = useState<SearchSource>("local");
   const [isRegexEnabled, setIsRegexEnabled] = useState(() => localStorage.getItem("regex_enabled") === "true");
   const [refreshWindowMinutes, setRefreshWindowMinutes] = useState(() => localStorage.getItem("refresh_window_minutes") ?? "60");
   const [savedExcludeKeywords, setSavedExcludeKeywords] = useState(DEFAULT_EXCLUDE_KEYWORDS);
@@ -653,6 +656,7 @@ function App() {
     createdFrom,
     createdTo,
     searchTarget,
+    searchSource,
   ]);
 
   useEffect(() => {
@@ -719,6 +723,7 @@ function App() {
     return [
       query,
       fullPath.trim(),
+      searchSource,
       String(isSearchAllEnabled),
       indexDepth,
       refreshWindowMinutes,
@@ -855,6 +860,7 @@ function App() {
       q: query,
       full_path: resolvedSearchPath,
       search_all_enabled: isSearchAllEnabled,
+      source_type: searchSource,
       index_depth: parsedDepth,
       refresh_window_minutes: parsedWindow,
       regex_enabled: isRegexEnabled,
@@ -963,6 +969,12 @@ function App() {
 
   function handleSearchTargetChange(value: SearchTarget): void {
     setSearchTarget(value);
+  }
+
+  function handleSearchSourceChange(value: SearchSource): void {
+    setSearchSource(value);
+    setErrorMessage("");
+    setNoticeMessage("");
   }
 
   /**
@@ -1508,11 +1520,16 @@ function App() {
         setNoticeMessage(`このフォルダはすでに検索対象です（親フォルダ: ${coverage.covering_path}）。`);
         return;
       }
-      const response = await addSearchTarget(targetPath);
+      const parsedDepth = Number(indexDepth);
+      const response = await addSearchTarget(targetPath, Number.isNaN(parsedDepth) ? 3 : parsedDepth);
       setSearchTargets(response.items);
       setIsCurrentPathCovered(true);
       setIsSearchAllEnabled(false);
-      setNoticeMessage("指定したフォルダを検索対象に追加しました。全データベース検索を解除し、このフォルダを対象に検索します。");
+      setNoticeMessage(
+        searchSource === "web"
+          ? "指定したWebページを検索対象に追加し、配下ページをインデックスしました。"
+          : "指定したフォルダを検索対象に追加しました。全データベース検索を解除し、このフォルダを対象に検索します。",
+      );
     } catch (error) {
       setNoticeMessage("");
       setErrorMessage(error instanceof Error ? error.message : "検索対象フォルダの追加に失敗しました。");
@@ -1653,6 +1670,7 @@ function App() {
             fullPath={fullPath}
             indexDepth={indexDepth}
             searchFilterText={searchFilterText}
+            searchSource={searchSource}
             searchTarget={searchTarget}
             dateField={dateField}
             sortBy={sortBy}
@@ -1670,6 +1688,7 @@ function App() {
             onFullPathChange={handleFullPathChange}
             onIndexDepthChange={setIndexDepth}
             onSearchFilterTextChange={setSearchFilterText}
+            onSearchSourceChange={handleSearchSourceChange}
             onSearchTargetChange={handleSearchTargetChange}
             onDateFieldChange={setDateField}
             onSortByChange={setSortBy}
