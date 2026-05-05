@@ -1,13 +1,16 @@
 """
 インデックスAPI エンドポイント。
 実行状況と失敗ファイル一覧を提供し、UI から確認できるようにする。
+file_manager 連携用に、本文検索を行わない Everything 互換のファイル/フォルダ検索も提供する。
 必要に応じて DB を空の初期状態へ戻す。
 """
+
+from typing import Literal
 
 from fastapi import APIRouter, Depends
 from fastapi import Query
 
-from app.api.deps import get_index_service, get_scheduler_service
+from app.api.deps import get_index_service, get_scheduler_service, get_search_service
 from app.models.indexing import (
     AppSettingsUpdateRequest,
     DeleteIndexedTargetsRequest,
@@ -17,15 +20,91 @@ from app.models.indexing import (
     SearchTargetAddRequest,
     SearchTargetUpdateRequest,
 )
+from app.models.search import SearchQueryParams
 from app.services.index_service import IndexService
 from app.services.scheduler_service import SchedulerService
+from app.services.search_service import SearchService
 
 router = APIRouter(prefix="/api/index", tags=["index"])
 
 
+def _map_everything_sort(sort: str) -> tuple[Literal["created", "modified", "click_count"], Literal["asc", "desc"]]:
+    """
+    Everything 互換の sort 指定を、本アプリの検索サービスが扱える並び順へ変換する。
+    """
+    if sort == "date_modified":
+        return "modified", "desc"
+    return "click_count", "desc"
+
+
+def _to_unix_timestamp(value) -> float:
+    """
+    datetime を file_index_service 互換の Unix timestamp 秒へ変換する。
+    """
+    return float(value.timestamp())
+
+
+@router.get("")
+def search_everything_compatible(
+    search: str = Query(..., description="検索クエリ"),
+    count: int = Query(default=100, ge=1, le=1000, description="取得件数"),
+    offset: int = Query(default=0, ge=0, description="オフセット"),
+    sort: str = Query(default="name", description="ソート順"),
+    ascending: int = Query(default=1, description="昇順(1)/降順(0)"),
+    path: str | None = Query(default=None, description="検索対象フォルダ"),
+    file_type: str = Query(default="all", description="ファイルタイプ（all/file/directory）"),
+    service: SearchService = Depends(get_search_service),
+) -> dict[str, object]:
+    """
+    file_index_service 互換でファイル名・フォルダ名だけを検索する。
+    本文検索や検索時の自動再インデックスは行わない。
+    """
+    sort_by, default_sort_order = _map_everything_sort(sort)
+    sort_order: Literal["asc", "desc"] = "asc" if ascending == 1 and sort == "date_modified" else default_sort_order
+    type_filter = None if file_type == "all" else file_type
+    response = service.search(
+        SearchQueryParams(
+            q=search,
+            full_path=path or "",
+            search_all_enabled=not bool(path),
+            skip_refresh=True,
+            source_type="local",
+            index_depth=0,
+            search_target="filename_and_folder",
+            types=type_filter,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=count,
+            offset=offset,
+            include_snippets=False,
+        )
+    )
+
+    return {
+        "totalResults": response.total,
+        "results": [
+            {
+                "name": item.file_name,
+                "path": item.full_path,
+                "type": "directory" if item.result_kind == "folder" else "file",
+                "size": 0,
+                "date_modified": _to_unix_timestamp(item.mtime),
+            }
+            for item in response.items
+        ],
+    }
+
+
 @router.get("/status")
 def get_status(service: IndexService = Depends(get_index_service)) -> dict[str, object]:
-    return service.get_status().model_dump()
+    payload = service.get_status().model_dump()
+    row = service.connection.execute("SELECT COUNT(*) FROM files WHERE source_type = 'local'").fetchone()
+    total_indexed = int(row[0]) if row is not None else 0
+    payload["ready"] = not payload["is_running"]
+    payload["total_indexed"] = total_indexed
+    payload["version"] = "local-fulltext-search"
+    payload["paths"] = []
+    return payload
 
 
 @router.get("/settings")

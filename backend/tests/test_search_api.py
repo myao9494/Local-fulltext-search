@@ -2,6 +2,9 @@
 検索 API のルート関数が既存インデックス検索・並び替え条件・クリック記録を受け渡せることを検証する。
 """
 
+from datetime import datetime, UTC
+
+from app.api.index import search_everything_compatible
 from app.api.search import record_search_click, search_existing_index, search_with_body
 from app.models.search import IndexedSearchRequest, SearchClickRequest, SearchRequest
 
@@ -15,6 +18,7 @@ class StubSearchService:
         self.last_search_params = None
         self.last_indexed_search_params = None
         self.last_clicked_file_id = None
+        self.connection = None
 
     def search(self, params: SearchRequest) -> object:
         self.last_search_params = params
@@ -39,6 +43,30 @@ class StubSearchService:
         return 7
 
 
+class StubEverythingSearchService(StubSearchService):
+    """
+    Everything 互換APIが本文検索を避けた検索条件でサービスへ渡すことを確認する。
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def search(self, params):
+        self.last_search_params = params
+
+        class Item:
+            file_name = "alpha.md"
+            full_path = "/tmp/docs/alpha.md"
+            result_kind = "file"
+            mtime = datetime(2026, 5, 5, 12, 0, tzinfo=UTC)
+
+        class Response:
+            total = 1
+            items = [Item()]
+
+        return Response()
+
+
 def test_search_with_body_passes_sort_options_to_service() -> None:
     """
     POST /api/search は並び替え指定をそのまま SearchRequest でサービスへ渡す。
@@ -60,6 +88,34 @@ def test_search_with_body_passes_sort_options_to_service() -> None:
     assert service.last_search_params is not None
     assert service.last_search_params.sort_by == "click_count"
     assert service.last_search_params.sort_order == "desc"
+
+
+def test_everything_compatible_search_uses_filename_and_folder_only() -> None:
+    """
+    GET /api/index 互換処理は本文検索をせず、既存インデックスだけを使う。
+    """
+    service = StubEverythingSearchService()
+
+    payload = search_everything_compatible(
+        search="alpha",
+        count=20,
+        offset=0,
+        sort="date_modified",
+        ascending=0,
+        path="/tmp/docs",
+        file_type="file",
+        service=service,
+    )
+
+    assert payload["totalResults"] == 1
+    assert payload["results"][0]["path"] == "/tmp/docs/alpha.md"
+    assert service.last_search_params.search_target == "filename_and_folder"
+    assert service.last_search_params.skip_refresh is True
+    assert service.last_search_params.include_snippets is False
+    assert service.last_search_params.full_path == "/tmp/docs"
+    assert service.last_search_params.types == "file"
+
+
 
 
 def test_search_with_body_passes_search_all_flag_to_service() -> None:
