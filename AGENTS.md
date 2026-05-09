@@ -79,4 +79,9 @@
 - **キーワードジャンプ**: 検索結果をクリックすると、URLの末尾に URL Text Fragments (`#:~:text=...`) を付与して開き、目的の箇所へ自動ハイライトジャンプする。
 - **詳細は `docs/web_page_search_spec.md` 参照。**
 
+## 同義語管理
+- **管理形式**: 1行1グループのカンマ区切りテキスト形式。
+- **API**: `/api/index/synonyms` で構造化された同義語リストを取得可能。
+- **詳細は `docs/synonym_management.md` 参照。**
+
 

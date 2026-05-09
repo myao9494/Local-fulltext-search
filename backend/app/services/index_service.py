@@ -54,6 +54,7 @@ from app.models.indexing import (
     SearchTargetCoverageResponse,
     SearchTargetItem,
     SearchTargetListResponse,
+    SynonymListResponse,
 )
 from app.services.cjk_bigram import build_cjk_bigram_index_content
 from app.services.path_service import (
@@ -513,6 +514,14 @@ class IndexService:
             custom_filename_extensions=custom_filename_extensions,
         )
 
+    def get_synonyms(self) -> SynonymListResponse:
+        """
+        構造化された同義語リストを返す。
+        """
+        synonym_text = self._read_persisted_synonym_groups()
+        groups = self._parse_synonym_groups(synonym_text)
+        return SynonymListResponse(groups=groups)
+
     def update_app_settings(
         self,
         *,
@@ -573,6 +582,11 @@ class IndexService:
                 custom_filename_extensions=normalized_custom_filename_extensions,
             )
         )
+        if exclude_keywords is not None:
+            self._sync_local_target_exclude_keywords(
+                old_global_keywords=current.exclude_keywords,
+                new_global_keywords=normalized_exclude_keywords,
+            )
         self._write_persisted_exclude_keywords(normalized_exclude_keywords)
         self._write_persisted_web_exclude_keywords(normalized_web_exclude_keywords)
         self._write_persisted_hidden_indexed_targets(normalized_hidden_indexed_targets)
@@ -591,6 +605,44 @@ class IndexService:
             custom_content_extensions=normalized_custom_content_extensions,
             custom_filename_extensions=normalized_custom_filename_extensions,
         )
+
+    def _sync_local_target_exclude_keywords(self, *, old_global_keywords: str, new_global_keywords: str) -> None:
+        """
+        グローバル除外キーワードの削除を、既存の local ターゲット保存値へ反映する。
+        ターゲット固有の追加除外や自動除外パスは維持する。
+        """
+        old_keywords = self._parse_exclude_keywords(old_global_keywords)
+        new_keywords = self._parse_exclude_keywords(new_global_keywords)
+        old_keys = {self._normalize_keyword_identity(keyword) for keyword in old_keywords}
+        new_keys = {self._normalize_keyword_identity(keyword) for keyword in new_keywords}
+        removed_keys = old_keys - new_keys
+        if not removed_keys and not new_keywords:
+            return
+
+        rows = self.connection.execute(
+            """
+            SELECT id, exclude_keywords
+            FROM targets
+            WHERE source_type = 'local'
+            """
+        ).fetchall()
+        for row in rows:
+            target_keywords = self._parse_exclude_keywords(str(row["exclude_keywords"] or ""))
+            retained = [
+                keyword for keyword in target_keywords if self._normalize_keyword_identity(keyword) not in removed_keys
+            ]
+            merged = self._normalize_keyword_list([*retained, *new_keywords])
+            if merged == str(row["exclude_keywords"] or ""):
+                continue
+            self.connection.execute(
+                """
+                UPDATE targets
+                SET exclude_keywords = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (merged, datetime.now(UTC).isoformat(), int(row["id"])),
+            )
+        self.connection.commit()
 
     def _read_persisted_exclude_keywords(self) -> str:
         """
@@ -2437,14 +2489,19 @@ class IndexService:
         keywords: list[str] = []
         for line in (value or "").splitlines():
             keyword = line.strip()
-            normalized_keyword = (
-                keyword if self._normalize_excluded_path_prefix(keyword) is not None else keyword.lower()
-            )
+            normalized_keyword = self._normalize_keyword_identity(keyword)
             if not keyword or normalized_keyword in seen:
                 continue
             seen.add(normalized_keyword)
             keywords.append(keyword)
         return keywords
+
+    def _normalize_keyword_identity(self, keyword: str) -> str:
+        """
+        除外キーワードの重複判定・差分判定に使うキーを返す。
+        パス形式は大文字小文字を維持し、名前キーワードは小文字で同一視する。
+        """
+        return keyword if self._normalize_excluded_path_prefix(keyword) is not None else keyword.lower()
 
     def _parse_extension_entries(self, value: str | None) -> list[str]:
         seen: set[str] = set()

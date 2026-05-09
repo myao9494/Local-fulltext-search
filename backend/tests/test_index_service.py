@@ -1348,6 +1348,30 @@ def test_app_settings_can_store_exclude_keywords(tmp_path: Path, monkeypatch) ->
     assert exclude_keywords_path.read_text(encoding="utf-8") == "dist\nbuild\n.dist"
 
 
+def test_app_settings_removes_deleted_global_exclude_keywords_from_targets(tmp_path: Path, monkeypatch) -> None:
+    """
+    グローバル除外キーワードから削除した語は、既存ターゲットに保存済みの除外条件からも取り除く。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "exclude_keywords_name", "exclude_keywords.txt")
+
+    service.update_app_settings(exclude_keywords="app\nbackup")
+    (tmp_path / "docs").mkdir()
+    target = service._ensure_target(
+        full_path=str(tmp_path / "docs"),
+        exclude_keywords="app\nbackup\n/auto/excluded",
+        index_depth=1,
+        selected_extensions=".md",
+    )
+
+    service.update_app_settings(exclude_keywords="/Users/mine/000_work/app\nbackup")
+
+    row = connection.execute("SELECT exclude_keywords FROM targets WHERE id = ?", (target["id"],)).fetchone()
+    assert row["exclude_keywords"] == "backup\n/auto/excluded\n/Users/mine/000_work/app"
+
+
 def test_app_settings_can_store_hidden_indexed_targets(tmp_path: Path, monkeypatch) -> None:
     """
     インデックス済みフォルダ一覧で隠したいキーワードは専用テキストファイルへ正規化して保持される。

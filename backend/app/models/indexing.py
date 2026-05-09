@@ -220,3 +220,11 @@ class SchedulerUpdateRequest(BaseModel):
 
     paths: list[str]
     start_at: datetime
+
+
+class SynonymListResponse(BaseModel):
+    """
+    構造化された同義語リストを返す。
+    """
+
+    groups: list[list[str]]

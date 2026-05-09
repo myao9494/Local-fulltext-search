@@ -19,6 +19,7 @@ from app.models.indexing import (
     SchedulerUpdateRequest,
     SearchTargetAddRequest,
     SearchTargetUpdateRequest,
+    SynonymListResponse,
 )
 from app.models.search import SearchQueryParams
 from app.services.index_service import IndexService
@@ -113,6 +114,14 @@ def get_app_settings(service: IndexService = Depends(get_index_service)) -> dict
     端末ごとの localStorage ではなく、アプリ全体で共有する設定を返す。
     """
     return service.get_app_settings().model_dump()
+
+
+@router.get("/synonyms", response_model=SynonymListResponse)
+def get_synonyms(service: IndexService = Depends(get_index_service)) -> SynonymListResponse:
+    """
+    構造化された同義語リストを返す。
+    """
+    return service.get_synonyms()
 
 
 @router.put("/settings")
