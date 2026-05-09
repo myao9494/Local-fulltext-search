@@ -391,7 +391,12 @@ class LauncherApp:
                 anchor_index = max(self.selected_index - VISIBLE_RESULT_COUNT + 1, 0)
             else:
                 anchor_index = self.selected_index
-            scroll_to(offset=max(anchor_index * RESULT_TILE_SCROLL_STEP, 0), duration=120)
+            offset = max(anchor_index * RESULT_TILE_SCROLL_STEP, 0)
+            result = scroll_to(offset=offset, duration=120)
+            if inspect.isawaitable(result):
+                async def _await_scroll() -> None:
+                    await result
+                self.page.run_task(_await_scroll)
             self.page.update()
 
     def _open_selected(self) -> None:

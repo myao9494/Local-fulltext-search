@@ -965,9 +965,9 @@ def test_exclude_keyword_reindex_preserves_excluded_existing_indexes(tmp_path: P
     archive = target / "archive"
     archive.mkdir(parents=True)
     active_file = target / "active.md"
-    archive_file = archive / "old.md"
+    archive_file = archive / "archived.md"
     active_file.write_text("active memo", encoding="utf-8")
-    archive_file.write_text("old memo", encoding="utf-8")
+    archive_file.write_text("archived memo", encoding="utf-8")
 
     service.ensure_fresh_target(full_path=str(target), refresh_window_minutes=0, index_depth=2)
     assert connection.execute("SELECT COUNT(*) AS count FROM files").fetchone()["count"] == 2
@@ -981,7 +981,7 @@ def test_exclude_keyword_reindex_preserves_excluded_existing_indexes(tmp_path: P
     )
 
     indexed_files = connection.execute("SELECT file_name FROM files ORDER BY file_name").fetchall()
-    assert [row["file_name"] for row in indexed_files] == ["old.md"]
+    assert [row["file_name"] for row in indexed_files] == ["archived.md"]
 
 
 def test_child_search_target_reindex_preserves_parent_scope_existing_indexes(tmp_path: Path) -> None:

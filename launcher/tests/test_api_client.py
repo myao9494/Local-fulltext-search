@@ -29,37 +29,44 @@ class StubResponse:
         return json.dumps(self.payload).encode("utf-8")
 
 
-def test_search_posts_launcher_defaults() -> None:
+def _stub_search_response() -> StubResponse:
     """
-    ランチャー検索は全 DB の既存インデックスを優先し、軽い検索条件で POST する。
+    検索 API テスト共通のスタブレスポンスを返す。
     """
+    return StubResponse(
+        {
+            "total": 1,
+            "items": [
+                {
+                    "file_id": 9,
+                    "result_kind": "file",
+                    "target_path": "/tmp/docs/a.md",
+                    "file_name": "a.md",
+                    "full_path": "/tmp/docs/a.md",
+                    "file_ext": ".md",
+                    "created_at": "2026-01-01T00:00:00",
+                    "mtime": "2026-01-02T00:00:00",
+                    "click_count": 3,
+                    "snippet": "<mark>alpha</mark>",
+                }
+            ],
+        }
+    )
+
+
+def test_search_posts_mac_defaults(monkeypatch) -> None:
+    """
+    macOS ではインデックス更新を許可する /api/search エンドポイントを使用する。
+    """
+    monkeypatch.setattr("platform.system", lambda: "Darwin")
     captured: dict[str, object] = {}
 
     def fake_urlopen(request: Request, timeout: float) -> StubResponse:
         captured["url"] = request.full_url
         captured["timeout"] = timeout
         captured["method"] = request.get_method()
-        captured["headers"] = dict(request.header_items())
         captured["body"] = json.loads((request.data or b"{}").decode("utf-8"))
-        return StubResponse(
-            {
-                "total": 1,
-                "items": [
-                    {
-                        "file_id": 9,
-                        "result_kind": "file",
-                        "target_path": "/tmp/docs/a.md",
-                        "file_name": "a.md",
-                        "full_path": "/tmp/docs/a.md",
-                        "file_ext": ".md",
-                        "created_at": "2026-01-01T00:00:00",
-                        "mtime": "2026-01-02T00:00:00",
-                        "click_count": 3,
-                        "snippet": "<mark>alpha</mark>",
-                    }
-                ],
-            }
-        )
+        return _stub_search_response()
 
     client = LauncherApiClient(base_url="http://127.0.0.1:8000", urlopen=fake_urlopen)
 
@@ -71,8 +78,8 @@ def test_search_posts_launcher_defaults() -> None:
     assert captured["body"] == {
         "q": "alpha",
         "full_path": "",
-        "search_all_enabled": True,
-        "skip_refresh": True,
+        "search_all_enabled": False,
+        "skip_refresh": False,
         "index_depth": 5,
         "refresh_window_minutes": 60,
         "search_target": "all",
@@ -81,6 +88,37 @@ def test_search_posts_launcher_defaults() -> None:
         "limit": 8,
         "offset": 0,
         "include_snippets": True,
+    }
+    assert response.total == 1
+    assert response.items[0].file_name == "a.md"
+
+
+def test_search_posts_windows_defaults(monkeypatch) -> None:
+    """
+    Windows（非 Mac）では既存インデックスのみの /api/search/indexed を使用する。
+    """
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request: Request, timeout: float) -> StubResponse:
+        captured["url"] = request.full_url
+        captured["timeout"] = timeout
+        captured["method"] = request.get_method()
+        captured["body"] = json.loads((request.data or b"{}").decode("utf-8"))
+        return _stub_search_response()
+
+    client = LauncherApiClient(base_url="http://127.0.0.1:8000", urlopen=fake_urlopen)
+
+    response = client.search("alpha")
+
+    assert captured["url"] == "http://127.0.0.1:8000/api/search/indexed"
+    assert captured["method"] == "POST"
+    assert captured["timeout"] == 5.0
+    assert captured["body"] == {
+        "q": "alpha",
+        "folder_path": "",
+        "limit": 8,
+        "offset": 0,
     }
     assert response.total == 1
     assert response.items[0].file_name == "a.md"

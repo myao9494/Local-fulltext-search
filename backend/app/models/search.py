@@ -114,7 +114,8 @@ class IndexedSearchRequest(BaseModel):
     @classmethod
     def validate_folder_path_is_absolute(cls, value: str) -> str:
         """
-        対象フォルダは絶対パスまたは UNC パスだけを受け付ける。
+        対象フォルダは絶対パスまたは UNC パスを受け付ける。
+        空文字はランチャーの既存インデックス全体検索として許可する。
         """
         return _validate_absolute_path_or_unc(value, field_name="folder_path")
 

@@ -45,10 +45,12 @@ def test_search_defaults_to_local_source_and_web_is_opt_in(tmp_path: Path) -> No
     service.index_service.ensure_fresh_target = lambda **_: None
     created_at = datetime(2026, 4, 10, tzinfo=UTC)
 
+    local_docs = tmp_path / "docs"
+    local_docs.mkdir()
     _insert_indexed_markdown(
         connection=connection,
         file_name="local.md",
-        full_path="/workspace/docs/local.md",
+        full_path=str(local_docs / "local.md"),
         created_at=created_at,
         mtime=created_at,
         body="alpha local",
@@ -502,7 +504,7 @@ def test_sync_obsidian_sidebar_access_counts_persists_to_database(tmp_path: Path
 
     stored_count = connection.execute(
         "SELECT obsidian_click_count FROM files WHERE normalized_path = ?",
-        (str(note_path),),
+        (note_path.as_posix(),),
     ).fetchone()[0]
     assert stored_count == 7
 
@@ -1078,11 +1080,14 @@ def test_search_filters_results_by_created_date_range(tmp_path: Path) -> None:
     service = SearchService(connection=connection)
     service.index_service.ensure_fresh_target = lambda **_: None
 
+    docs_dir = tmp_path / "docs"
     indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
+    old_path = (docs_dir / "old.md").as_posix()
+    new_path = (docs_dir / "new.md").as_posix()
     rows = [
         (
-            "/docs/old.md",
-            "/docs/old.md",
+            old_path,
+            old_path,
             "old.md",
             ".md",
             datetime(2026, 4, 10, 9, 0).astimezone().timestamp(),
@@ -1091,8 +1096,8 @@ def test_search_filters_results_by_created_date_range(tmp_path: Path) -> None:
             indexed_at,
         ),
         (
-            "/docs/new.md",
-            "/docs/new.md",
+            new_path,
+            new_path,
             "new.md",
             ".md",
             datetime(2026, 4, 15, 12, 0).astimezone().timestamp(),
@@ -1116,8 +1121,8 @@ def test_search_filters_results_by_created_date_range(tmp_path: Path) -> None:
         VALUES (?, 'body', ?, ?)
         """,
         [
-            (1, "/docs/old.md", "alpha old memo"),
-            (2, "/docs/new.md", "alpha new memo"),
+            (1, old_path, "alpha old memo"),
+            (2, new_path, "alpha new memo"),
         ],
     )
     connection.commit()
@@ -1146,11 +1151,14 @@ def test_search_filters_results_by_modified_date_range(tmp_path: Path) -> None:
     service = SearchService(connection=connection)
     service.index_service.ensure_fresh_target = lambda **_: None
 
+    docs_dir = tmp_path / "docs"
     indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
+    old_path = (docs_dir / "old.md").as_posix()
+    new_path = (docs_dir / "new.md").as_posix()
     rows = [
         (
-            "/docs/old.md",
-            "/docs/old.md",
+            old_path,
+            old_path,
             "old.md",
             ".md",
             datetime(2026, 4, 1, 9, 0).astimezone().timestamp(),
@@ -1159,8 +1167,8 @@ def test_search_filters_results_by_modified_date_range(tmp_path: Path) -> None:
             indexed_at,
         ),
         (
-            "/docs/new.md",
-            "/docs/new.md",
+            new_path,
+            new_path,
             "new.md",
             ".md",
             datetime(2026, 4, 1, 9, 0).astimezone().timestamp(),
@@ -1184,8 +1192,8 @@ def test_search_filters_results_by_modified_date_range(tmp_path: Path) -> None:
         VALUES (?, 'body', ?, ?)
         """,
         [
-            (1, "/docs/old.md", "alpha old memo"),
-            (2, "/docs/new.md", "alpha new memo"),
+            (1, old_path, "alpha old memo"),
+            (2, new_path, "alpha new memo"),
         ],
     )
     connection.commit()
@@ -1339,8 +1347,12 @@ def test_search_root_target_respects_depth_filter(tmp_path: Path) -> None:
     service = SearchService(connection=connection)
     service.index_service.ensure_fresh_target = lambda **_: None
 
+    root_dir = tmp_path / "root"
+    root_dir.mkdir()
     indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
     timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
+    root_file = (root_dir / "match-root.md").as_posix()
+    nested_file = (root_dir / "sub" / "match-nested.md").as_posix()
     connection.execute(
         """
         INSERT INTO files(
@@ -1348,7 +1360,7 @@ def test_search_root_target_respects_depth_filter(tmp_path: Path) -> None:
             file_name, file_ext, created_at, mtime, size, indexed_at, last_error
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
-        ("/match-root.md", "/match-root.md", "match-root.md", ".md", timestamp, timestamp, 12, indexed_at),
+        (root_file, root_file, "match-root.md", ".md", timestamp, timestamp, 12, indexed_at),
     )
     connection.execute(
         """
@@ -1357,21 +1369,21 @@ def test_search_root_target_respects_depth_filter(tmp_path: Path) -> None:
             file_name, file_ext, created_at, mtime, size, indexed_at, last_error
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
         """,
-        ("/tmp/match-nested.md", "/tmp/match-nested.md", "match-nested.md", ".md", timestamp, timestamp, 12, indexed_at),
+        (nested_file, nested_file, "match-nested.md", ".md", timestamp, timestamp, 12, indexed_at),
     )
     connection.commit()
 
     result = service.search(
         SearchQueryParams(
             q="match",
-            full_path="/",
+            full_path=str(root_dir),
             index_depth=0,
             refresh_window_minutes=60,
         )
     )
 
     assert result.total == 1
-    assert [item.full_path for item in result.items] == ["/match-root.md"]
+    assert [item.full_path for item in result.items] == [root_file]
 
 
 def test_search_does_not_exclude_results_by_ancestor_directory_name(tmp_path: Path) -> None:
@@ -1408,11 +1420,15 @@ def test_search_without_full_path_matches_across_entire_database(tmp_path: Path)
     service = SearchService(connection=connection)
     service.index_service.ensure_fresh_target = lambda **_: None
 
+    docs_dir = tmp_path / "docs"
+    archive_dir = tmp_path / "archive"
     indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
     timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
+    docs_path = (docs_dir / "alpha.md").as_posix()
+    archive_path = (archive_dir / "alpha-notes.md").as_posix()
     rows = [
-        ("/docs/alpha.md", "/docs/alpha.md", "alpha.md", ".md", timestamp, timestamp, 12, indexed_at),
-        ("/archive/alpha-notes.md", "/archive/alpha-notes.md", "alpha-notes.md", ".md", timestamp, timestamp, 12, indexed_at),
+        (docs_path, docs_path, "alpha.md", ".md", timestamp, timestamp, 12, indexed_at),
+        (archive_path, archive_path, "alpha-notes.md", ".md", timestamp, timestamp, 12, indexed_at),
     ]
     connection.executemany(
         """
@@ -1429,8 +1445,8 @@ def test_search_without_full_path_matches_across_entire_database(tmp_path: Path)
         VALUES (?, 'body', ?, ?)
         """,
         [
-            (1, "/docs/alpha.md", "alpha project memo"),
-            (2, "/archive/alpha-notes.md", "alpha archive memo"),
+            (1, docs_path, "alpha project memo"),
+            (2, archive_path, "alpha archive memo"),
         ],
     )
     connection.commit()
@@ -1459,10 +1475,12 @@ def test_search_existing_index_uses_existing_db_without_reindex_and_without_dept
     ensure_calls: list[dict[str, object]] = []
     service.index_service.ensure_fresh_target = lambda **kwargs: ensure_calls.append(kwargs)
 
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
     _insert_indexed_markdown(
         connection=connection,
         file_name="root.md",
-        full_path="/workspace/docs/root.md",
+        full_path=str(docs_dir / "root.md"),
         created_at=datetime(2026, 4, 10, tzinfo=UTC),
         mtime=datetime(2026, 4, 10, tzinfo=UTC),
         body="alpha root memo",
@@ -1471,7 +1489,7 @@ def test_search_existing_index_uses_existing_db_without_reindex_and_without_dept
     _insert_indexed_markdown(
         connection=connection,
         file_name="deep.md",
-        full_path="/workspace/docs/a/b/c/d/e/deep.md",
+        full_path=str(docs_dir / "a" / "b" / "c" / "d" / "e" / "deep.md"),
         created_at=datetime(2026, 4, 11, tzinfo=UTC),
         mtime=datetime(2026, 4, 11, tzinfo=UTC),
         body="alpha deep memo",
@@ -1483,15 +1501,62 @@ def test_search_existing_index_uses_existing_db_without_reindex_and_without_dept
     result = service.search_existing_index(
         IndexedSearchRequest(
             q="alpha",
-            folder_path="/workspace/docs",
+            folder_path=str(docs_dir),
         )
     )
 
     assert result.total == 2
     assert sorted(item.file_name for item in result.items) == ["deep.md", "root.md"]
-    assert all(item.target_path == "/workspace/docs" for item in result.items)
+    assert all(item.target_path == docs_dir.as_posix() for item in result.items)
     assert result.used_existing_index is False
     assert result.background_refresh_scheduled is False
+    assert ensure_calls == []
+
+
+def test_search_existing_index_accepts_empty_folder_path_for_launcher_global_search(tmp_path: Path) -> None:
+    """
+    ランチャー用の既存インデックス検索は、folder_path 空文字で DB 全体を検索する。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    ensure_calls: list[dict[str, object]] = []
+    service.index_service.ensure_fresh_target = lambda **kwargs: ensure_calls.append(kwargs)
+
+    docs_dir = tmp_path / "docs"
+    other_dir = tmp_path / "other"
+    docs_dir.mkdir()
+    other_dir.mkdir()
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="alpha.md",
+        full_path=str(docs_dir / "alpha.md"),
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="alpha launcher memo",
+        click_count=0,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="other.md",
+        full_path=str(other_dir / "other.md"),
+        created_at=datetime(2026, 4, 11, tzinfo=UTC),
+        mtime=datetime(2026, 4, 11, tzinfo=UTC),
+        body="alpha launcher memo",
+        click_count=0,
+    )
+
+    from app.models.search import IndexedSearchRequest
+
+    result = service.search_existing_index(
+        IndexedSearchRequest(
+            q="alpha",
+            folder_path="",
+        )
+    )
+
+    assert result.total == 2
+    assert sorted(item.file_name for item in result.items) == ["alpha.md", "other.md"]
+    assert all(item.target_path == "" for item in result.items)
     assert ensure_calls == []
 
 
@@ -1502,6 +1567,8 @@ def test_search_without_full_path_limits_scope_to_enabled_search_targets(tmp_pat
     connection = _create_connection(tmp_path)
     service = SearchService(connection=connection)
 
+    target_a = (tmp_path / "target-a").as_posix()
+    target_b = (tmp_path / "target-b").as_posix()
     connection.execute(
         """
         INSERT INTO targets(
@@ -1509,7 +1576,7 @@ def test_search_without_full_path_limits_scope_to_enabled_search_targets(tmp_pat
             is_search_target_enabled, indexed_file_count, index_version, created_at, updated_at
         ) VALUES (?, NULL, '', 5, '.md', 1, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """,
-        ("/workspace/target-a",),
+        (target_a,),
     )
     connection.execute(
         """
@@ -1518,14 +1585,14 @@ def test_search_without_full_path_limits_scope_to_enabled_search_targets(tmp_pat
             is_search_target_enabled, indexed_file_count, index_version, created_at, updated_at
         ) VALUES (?, NULL, '', 5, '.md', 0, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """,
-        ("/workspace/target-b",),
+        (target_b,),
     )
     connection.commit()
 
     _insert_indexed_markdown(
         connection=connection,
         file_name="inside-enabled.md",
-        full_path="/workspace/target-a/inside-enabled.md",
+        full_path=str(tmp_path / "target-a" / "inside-enabled.md"),
         created_at=datetime(2026, 4, 10, tzinfo=UTC),
         mtime=datetime(2026, 4, 10, tzinfo=UTC),
         body="alpha enabled",
@@ -1534,7 +1601,7 @@ def test_search_without_full_path_limits_scope_to_enabled_search_targets(tmp_pat
     _insert_indexed_markdown(
         connection=connection,
         file_name="inside-disabled.md",
-        full_path="/workspace/target-b/inside-disabled.md",
+        full_path=str(tmp_path / "target-b" / "inside-disabled.md"),
         created_at=datetime(2026, 4, 11, tzinfo=UTC),
         mtime=datetime(2026, 4, 11, tzinfo=UTC),
         body="alpha disabled",
@@ -1543,7 +1610,7 @@ def test_search_without_full_path_limits_scope_to_enabled_search_targets(tmp_pat
     _insert_indexed_markdown(
         connection=connection,
         file_name="outside.md",
-        full_path="/workspace/outside/outside.md",
+        full_path=str(tmp_path / "outside" / "outside.md"),
         created_at=datetime(2026, 4, 12, tzinfo=UTC),
         mtime=datetime(2026, 4, 12, tzinfo=UTC),
         body="alpha outside",
@@ -1651,6 +1718,8 @@ def test_search_without_full_path_uses_registered_targets_as_scope_when_all_targ
     connection = _create_connection(tmp_path)
     service = SearchService(connection=connection)
 
+    target_a = (tmp_path / "target-a").as_posix()
+    target_b = (tmp_path / "target-b").as_posix()
     connection.execute(
         """
         INSERT INTO targets(
@@ -1658,7 +1727,7 @@ def test_search_without_full_path_uses_registered_targets_as_scope_when_all_targ
             is_search_target_enabled, indexed_file_count, index_version, created_at, updated_at
         ) VALUES (?, NULL, '', 5, '.md', 0, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """,
-        ("/workspace/target-a",),
+        (target_a,),
     )
     connection.execute(
         """
@@ -1667,14 +1736,14 @@ def test_search_without_full_path_uses_registered_targets_as_scope_when_all_targ
             is_search_target_enabled, indexed_file_count, index_version, created_at, updated_at
         ) VALUES (?, NULL, '', 5, '.md', 0, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         """,
-        ("/workspace/target-b",),
+        (target_b,),
     )
     connection.commit()
 
     _insert_indexed_markdown(
         connection=connection,
         file_name="inside-target-a.md",
-        full_path="/workspace/target-a/inside-target-a.md",
+        full_path=str(tmp_path / "target-a" / "inside-target-a.md"),
         created_at=datetime(2026, 4, 10, tzinfo=UTC),
         mtime=datetime(2026, 4, 10, tzinfo=UTC),
         body="alpha a",
@@ -1683,7 +1752,7 @@ def test_search_without_full_path_uses_registered_targets_as_scope_when_all_targ
     _insert_indexed_markdown(
         connection=connection,
         file_name="inside-target-b.md",
-        full_path="/workspace/target-b/inside-target-b.md",
+        full_path=str(tmp_path / "target-b" / "inside-target-b.md"),
         created_at=datetime(2026, 4, 11, tzinfo=UTC),
         mtime=datetime(2026, 4, 11, tzinfo=UTC),
         body="alpha b",
@@ -1692,7 +1761,7 @@ def test_search_without_full_path_uses_registered_targets_as_scope_when_all_targ
     _insert_indexed_markdown(
         connection=connection,
         file_name="outside.md",
-        full_path="/workspace/outside/outside.md",
+        full_path=str(tmp_path / "outside" / "outside.md"),
         created_at=datetime(2026, 4, 12, tzinfo=UTC),
         mtime=datetime(2026, 4, 12, tzinfo=UTC),
         body="alpha outside",
@@ -1754,7 +1823,7 @@ def test_search_with_existing_stale_index_uses_current_results_and_schedules_bac
     assert synchronous_calls == []
     assert scheduled_calls == [
         {
-            "normalized_target_path": str(target),
+            "normalized_target_path": target.as_posix(),
             "effective_exclude_keywords": "",
             "index_depth": 1,
             "index_types": None,
@@ -1799,14 +1868,14 @@ def test_search_under_registered_parent_does_not_create_child_search_target(tmp_
     assert result.total == 1
     assert scheduled_calls == [
         {
-            "normalized_target_path": str(parent),
+            "normalized_target_path": parent.as_posix(),
             "effective_exclude_keywords": "",
             "index_depth": 5,
             "index_types": None,
         }
     ]
     target_paths = connection.execute("SELECT full_path FROM targets ORDER BY full_path").fetchall()
-    assert [str(row["full_path"]) for row in target_paths] == [str(parent)]
+    assert [str(row["full_path"]) for row in target_paths] == [parent.as_posix()]
 
 
 def test_search_with_unindexed_folder_keeps_synchronous_refresh(tmp_path: Path) -> None:
@@ -1845,7 +1914,7 @@ def test_search_with_unindexed_folder_keeps_synchronous_refresh(tmp_path: Path) 
     assert schedule_calls == []
     assert ensure_calls == [
         {
-            "full_path": str(target),
+            "full_path": target.as_posix(),
             "refresh_window_minutes": 60,
             "exclude_keywords": "",
             "index_depth": 1,
@@ -1926,12 +1995,16 @@ def test_search_all_enabled_with_full_path_limits_results_to_that_path(tmp_path:
     ensure_calls: list[dict[str, object]] = []
     service.index_service.ensure_fresh_target = lambda **kwargs: ensure_calls.append(kwargs)
 
+    docs_dir = tmp_path / "docs"
+    archive_dir = tmp_path / "archive"
     indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
     timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
+    docs_path = (docs_dir / "alpha.md").as_posix()
+    archive_path = (archive_dir / "alpha-notes.md").as_posix()
     rows = [
         (
-            "/workspace/docs/alpha.md",
-            "/workspace/docs/alpha.md",
+            docs_path,
+            docs_path,
             "alpha.md",
             ".md",
             timestamp,
@@ -1940,8 +2013,8 @@ def test_search_all_enabled_with_full_path_limits_results_to_that_path(tmp_path:
             indexed_at,
         ),
         (
-            "/archive/alpha-notes.md",
-            "/archive/alpha-notes.md",
+            archive_path,
+            archive_path,
             "alpha-notes.md",
             ".md",
             timestamp,
@@ -1965,8 +2038,8 @@ def test_search_all_enabled_with_full_path_limits_results_to_that_path(tmp_path:
         VALUES (?, 'body', ?, ?)
         """,
         [
-            (1, "/workspace/docs/alpha.md", "alpha project memo"),
-            (2, "/archive/alpha-notes.md", "alpha archive memo"),
+            (1, docs_path, "alpha project memo"),
+            (2, archive_path, "alpha archive memo"),
         ],
     )
     connection.commit()
@@ -1974,7 +2047,7 @@ def test_search_all_enabled_with_full_path_limits_results_to_that_path(tmp_path:
     result = service.search(
         SearchQueryParams(
             q="alpha",
-            full_path="/workspace/docs",
+            full_path=str(docs_dir),
             search_all_enabled=True,
             index_depth=5,
             refresh_window_minutes=60,
@@ -1983,7 +2056,7 @@ def test_search_all_enabled_with_full_path_limits_results_to_that_path(tmp_path:
 
     assert result.total == 1
     assert [item.file_name for item in result.items] == ["alpha.md"]
-    assert all(item.target_path == "/workspace/docs" for item in result.items)
+    assert all(item.target_path == docs_dir.as_posix() for item in result.items)
     assert ensure_calls == []
 
 
@@ -1995,11 +2068,15 @@ def test_search_without_full_path_applies_exclude_keywords_to_entire_database(tm
     service = SearchService(connection=connection)
     service.index_service.ensure_fresh_target = lambda **_: None
 
+    docs_dir = tmp_path / "docs"
+    archive_dir = tmp_path / "archive"
     indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
     timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
+    docs_path = (docs_dir / "alpha.md").as_posix()
+    archive_path = (archive_dir / "alpha-notes.md").as_posix()
     rows = [
-        ("/docs/alpha.md", "/docs/alpha.md", "alpha.md", ".md", timestamp, timestamp, 12, indexed_at),
-        ("/archive/alpha-notes.md", "/archive/alpha-notes.md", "alpha-notes.md", ".md", timestamp, timestamp, 12, indexed_at),
+        (docs_path, docs_path, "alpha.md", ".md", timestamp, timestamp, 12, indexed_at),
+        (archive_path, archive_path, "alpha-notes.md", ".md", timestamp, timestamp, 12, indexed_at),
     ]
     connection.executemany(
         """
@@ -2016,8 +2093,8 @@ def test_search_without_full_path_applies_exclude_keywords_to_entire_database(tm
         VALUES (?, 'body', ?, ?)
         """,
         [
-            (1, "/docs/alpha.md", "alpha project memo"),
-            (2, "/archive/alpha-notes.md", "alpha archive memo"),
+            (1, docs_path, "alpha project memo"),
+            (2, archive_path, "alpha archive memo"),
         ],
     )
     connection.commit()
@@ -2045,12 +2122,15 @@ def test_search_without_full_path_excludes_relative_nested_directory_path(tmp_pa
     service = SearchService(connection=connection)
     service.index_service.ensure_fresh_target = lambda **_: None
 
+    workspace = tmp_path / "workspace"
     indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
     timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
+    secret_path = (workspace / "Agent_Skills" / ".roo" / "secret.md").as_posix()
+    keep_path = (workspace / "Agent_SkillsX" / ".roo" / "keep.md").as_posix()
     rows = [
         (
-            "/workspace/Agent_Skills/.roo/secret.md",
-            "/workspace/Agent_Skills/.roo/secret.md",
+            secret_path,
+            secret_path,
             "secret.md",
             ".md",
             timestamp,
@@ -2059,8 +2139,8 @@ def test_search_without_full_path_excludes_relative_nested_directory_path(tmp_pa
             indexed_at,
         ),
         (
-            "/workspace/Agent_SkillsX/.roo/keep.md",
-            "/workspace/Agent_SkillsX/.roo/keep.md",
+            keep_path,
+            keep_path,
             "keep.md",
             ".md",
             timestamp,
@@ -2084,8 +2164,8 @@ def test_search_without_full_path_excludes_relative_nested_directory_path(tmp_pa
         VALUES (?, 'body', ?, ?)
         """,
         [
-            (1, "/workspace/Agent_Skills/.roo/secret.md", "agent secret"),
-            (2, "/workspace/Agent_SkillsX/.roo/keep.md", "agent keep"),
+            (1, secret_path, "agent secret"),
+            (2, keep_path, "agent keep"),
         ],
     )
     connection.commit()
@@ -2102,9 +2182,9 @@ def test_search_without_full_path_excludes_relative_nested_directory_path(tmp_pa
     )
 
     assert result.total == 2
-    assert "/workspace/Agent_Skills/.roo/secret.md" not in [item.full_path for item in result.items]
-    assert "/workspace/Agent_SkillsX/.roo/keep.md" in [item.full_path for item in result.items]
-    assert "/workspace/Agent_SkillsX/.roo" in [item.full_path for item in result.items]
+    assert secret_path not in [item.full_path for item in result.items]
+    assert keep_path in [item.full_path for item in result.items]
+    assert (workspace / "Agent_SkillsX" / ".roo").as_posix() in [item.full_path for item in result.items]
 
 
 def test_search_without_full_path_excludes_dot_prefixed_directory_keyword(tmp_path: Path) -> None:
@@ -2115,11 +2195,14 @@ def test_search_without_full_path_excludes_dot_prefixed_directory_keyword(tmp_pa
     service = SearchService(connection=connection)
     service.index_service.ensure_fresh_target = lambda **_: None
 
+    workspace = tmp_path / "workspace"
     indexed_at = datetime(2026, 4, 13, tzinfo=UTC).isoformat()
     timestamp = datetime(2026, 4, 13, tzinfo=UTC).timestamp()
+    docs_path = (workspace / "docs" / "alpha.md").as_posix()
+    gemini_path = (workspace / ".gemini" / "secret.md").as_posix()
     rows = [
-        ("/workspace/docs/alpha.md", "/workspace/docs/alpha.md", "alpha.md", ".md", timestamp, timestamp, 12, indexed_at),
-        ("/workspace/.gemini/secret.md", "/workspace/.gemini/secret.md", "secret.md", ".md", timestamp, timestamp, 12, indexed_at),
+        (docs_path, docs_path, "alpha.md", ".md", timestamp, timestamp, 12, indexed_at),
+        (gemini_path, gemini_path, "secret.md", ".md", timestamp, timestamp, 12, indexed_at),
     ]
     connection.executemany(
         """
@@ -2136,8 +2219,8 @@ def test_search_without_full_path_excludes_dot_prefixed_directory_keyword(tmp_pa
         VALUES (?, 'body', ?, ?)
         """,
         [
-            (1, "/workspace/docs/alpha.md", "alpha project memo"),
-            (2, "/workspace/.gemini/secret.md", "alpha secret memo"),
+            (1, docs_path, "alpha project memo"),
+            (2, gemini_path, "alpha secret memo"),
         ],
     )
     connection.commit()
@@ -2154,7 +2237,7 @@ def test_search_without_full_path_excludes_dot_prefixed_directory_keyword(tmp_pa
     )
 
     assert result.total == 1
-    assert [item.full_path for item in result.items] == ["/workspace/docs/alpha.md"]
+    assert [item.full_path for item in result.items] == [docs_path]
 
 
 def _create_connection(tmp_path: Path) -> Connection:
@@ -2184,8 +2267,12 @@ def _insert_indexed_markdown(
 ) -> int:
     """
     検索テスト用に、本文付き Markdown ファイルを直接投入する。
+    normalized_path は Windows でもスラッシュ形式に統一する。
     """
+    from pathlib import PureWindowsPath
     indexed_at = datetime(2026, 4, 15, tzinfo=UTC).isoformat()
+    # Windows のバックスラッシュパスを POSIX 形式に正規化
+    normalized = PureWindowsPath(full_path).as_posix() if not full_path.startswith("http") else full_path
     cursor = connection.execute(
         """
         INSERT INTO files(
@@ -2195,7 +2282,7 @@ def _insert_indexed_markdown(
         """,
         (
             full_path,
-            full_path,
+            normalized,
             file_name,
             ".md",
             created_at.timestamp(),
@@ -2217,3 +2304,4 @@ def _insert_indexed_markdown(
     )
     connection.commit()
     return file_id
+

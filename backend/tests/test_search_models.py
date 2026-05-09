@@ -178,3 +178,15 @@ def test_indexed_search_request_rejects_relative_folder_path() -> None:
             q="alpha",
             folder_path="docs",
         )
+
+
+def test_indexed_search_request_accepts_empty_folder_path_for_global_index_search() -> None:
+    """
+    ランチャーの既存 DB 全体検索用に、folder_path の空文字を受け付ける。
+    """
+    params = IndexedSearchRequest(
+        q="alpha",
+        folder_path="",
+    )
+
+    assert params.folder_path == ""

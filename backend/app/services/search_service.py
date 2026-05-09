@@ -308,7 +308,7 @@ class SearchService:
         既存 DB だけを使って検索する。
         対象フォルダ配下を深さ無制限で絞り込むが、インデックス更新は行わない。
         """
-        normalized_target_path = normalize_path_str(params.folder_path)
+        normalized_target_path = normalize_path_str(params.folder_path) if params.folder_path else ""
         app_settings = self.index_service.get_app_settings()
         excluded_keywords = self.index_service._parse_exclude_keywords(app_settings.exclude_keywords)
         search_params = SearchQueryParams(

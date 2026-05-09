@@ -199,6 +199,26 @@ def test_search_existing_index_passes_folder_path_to_service() -> None:
     assert service.last_indexed_search_params.folder_path == "/tmp/docs"
 
 
+def test_search_existing_index_passes_empty_folder_path_to_service() -> None:
+    """
+    POST /api/search/indexed は folder_path 空文字も全体検索用としてサービスへ渡す。
+    """
+    service = StubSearchService()
+
+    payload = search_existing_index(
+        IndexedSearchRequest(
+            q="alpha",
+            folder_path="",
+        ),
+        service,
+    )
+
+    assert payload.model_dump()["total"] == 0
+    assert service.last_indexed_search_params is not None
+    assert service.last_indexed_search_params.q == "alpha"
+    assert service.last_indexed_search_params.folder_path == ""
+
+
 def test_record_search_click_returns_updated_count() -> None:
     """
     POST /api/search/click は更新後のアクセス数を返す。
