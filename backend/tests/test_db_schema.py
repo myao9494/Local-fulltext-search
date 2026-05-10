@@ -29,3 +29,18 @@ def test_initialize_schema_creates_file_segments_lookup_index(tmp_path: Path) ->
         assert [row[0] for row in rows] == ["idx_file_segments_file_id_segment_type"]
     finally:
         connection.close()
+
+
+def test_initialize_schema_creates_scheduler_daily_runs_table(tmp_path: Path) -> None:
+    """
+    Windows 定期スケジュールの同一枠二重起動を防ぐ実行記録テーブルを作成する。
+    """
+    connection = sqlite3.connect(tmp_path / "search.db")
+    try:
+        initialize_schema(connection)
+
+        columns = connection.execute("PRAGMA table_info(scheduler_daily_runs);").fetchall()
+
+        assert [row[1] for row in columns] == ["id", "run_key", "scheduled_time", "started_at"]
+    finally:
+        connection.close()

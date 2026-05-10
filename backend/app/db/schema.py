@@ -139,6 +139,14 @@ SCHEMA_STATEMENTS: list[str] = [
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS scheduler_daily_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_key TEXT NOT NULL UNIQUE,
+        scheduled_time TEXT NOT NULL,
+        started_at TEXT NOT NULL
+    );
+    """,
+    """
     CREATE TRIGGER IF NOT EXISTS file_segments_ai AFTER INSERT ON file_segments BEGIN
         INSERT INTO file_segments_fts(rowid, content, segment_label)
         VALUES (new.id, new.content, new.segment_label);
@@ -287,6 +295,7 @@ def _needs_schema_reset(connection: Connection) -> bool:
         "last_error",
     }
     expected_scheduler_logs_columns = {"id", "logged_at", "level", "message", "folder_path"}
+    expected_scheduler_daily_runs_columns = {"id", "run_key", "scheduled_time", "started_at"}
     if legacy_folder_columns:
         return True
     index_run_columns = _get_columns(connection, "index_runs")
@@ -294,6 +303,7 @@ def _needs_schema_reset(connection: Connection) -> bool:
     scheduler_paths_columns = _get_columns(connection, "scheduler_paths")
     scheduler_runtime_columns = _get_columns(connection, "scheduler_runtime")
     scheduler_logs_columns = _get_columns(connection, "scheduler_logs")
+    scheduler_daily_runs_columns = _get_columns(connection, "scheduler_daily_runs")
     legacy_target_columns = expected_target_columns - {"source_type"}
     legacy_file_columns = expected_file_columns - {"click_count", "obsidian_click_count", "source_type"}
     legacy_file_columns_with_clicks = expected_file_columns - {"source_type"}
@@ -310,6 +320,7 @@ def _needs_schema_reset(connection: Connection) -> bool:
         or (scheduler_paths_columns and scheduler_paths_columns != expected_scheduler_paths_columns)
         or (scheduler_runtime_columns and scheduler_runtime_columns != expected_scheduler_runtime_columns)
         or (scheduler_logs_columns and scheduler_logs_columns != expected_scheduler_logs_columns)
+        or (scheduler_daily_runs_columns and scheduler_daily_runs_columns != expected_scheduler_daily_runs_columns)
     )
 
 
@@ -328,6 +339,7 @@ def _drop_managed_schema_objects(connection: Connection) -> None:
     connection.execute("DROP TABLE IF EXISTS scheduler_paths;")
     connection.execute("DROP TABLE IF EXISTS scheduler_runtime;")
     connection.execute("DROP TABLE IF EXISTS scheduler_settings;")
+    connection.execute("DROP TABLE IF EXISTS scheduler_daily_runs;")
     connection.execute("DROP TABLE IF EXISTS targets;")
     connection.execute("DROP TABLE IF EXISTS folders;")
     connection.execute("DROP TABLE IF EXISTS index_runs;")

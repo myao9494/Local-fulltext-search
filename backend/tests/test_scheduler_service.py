@@ -110,6 +110,115 @@ def test_run_scheduled_indexing_indexes_each_folder_and_writes_completion_logs(t
     assert settings_row["is_enabled"] == 0
 
 
+def test_windows_daily_schedule_launches_enabled_search_targets_at_fixed_time(tmp_path: Path, monkeypatch) -> None:
+    """
+    Windows では固定時刻に有効な検索対象フォルダを全階層インデックス対象として子プロセス起動する。
+    """
+    connection = _create_connection(tmp_path)
+    first = tmp_path / "docs-a"
+    second = tmp_path / "docs-b"
+    first.mkdir()
+    second.mkdir()
+    service = SchedulerService(connection=connection)
+    service.schedule_indexing(paths=[str(first)], start_at=datetime.now(UTC) + timedelta(days=1))
+    connection.execute(
+        """
+        INSERT INTO targets(
+            full_path, exclude_keywords, index_depth, selected_extensions,
+            is_search_target_enabled, indexed_file_count, source_type, created_at, updated_at
+        )
+        VALUES (?, '', 3, '', 1, 0, 'local', ?, ?),
+               (?, '', 3, '', 0, 0, 'local', ?, ?),
+               ('https://example.com', '', 3, '', 1, 0, 'web', ?, ?)
+        """,
+        (
+            first.as_posix(),
+            datetime.now(UTC).isoformat(),
+            datetime.now(UTC).isoformat(),
+            second.as_posix(),
+            datetime.now(UTC).isoformat(),
+            datetime.now(UTC).isoformat(),
+            datetime.now(UTC).isoformat(),
+            datetime.now(UTC).isoformat(),
+        ),
+    )
+    connection.commit()
+    monkeypatch.setattr("app.services.scheduler_service.platform.system", lambda: "Windows")
+    captured: dict[str, object] = {}
+
+    class StubProcess:
+        pid = 24680
+
+    def fake_popen(command: list[str], cwd: str) -> StubProcess:
+        captured["command"] = command
+        captured["cwd"] = cwd
+        return StubProcess()
+
+    started = service.try_start_due_windows_daily_schedule(
+        now=datetime(2026, 5, 10, 10, 0),
+        process_factory=fake_popen,
+    )
+    second_start = service.try_start_due_windows_daily_schedule(
+        now=datetime(2026, 5, 10, 10, 0),
+        process_factory=fake_popen,
+    )
+
+    path_rows = connection.execute("SELECT folder_path FROM scheduler_paths ORDER BY sort_order").fetchall()
+    runtime_row = connection.execute("SELECT status, process_id FROM scheduler_runtime WHERE id = 1").fetchone()
+
+    assert started is True
+    assert second_start is False
+    assert [row["folder_path"] for row in path_rows] == [first.as_posix()]
+    assert runtime_row["status"] == "launching"
+    assert runtime_row["process_id"] == 24680
+    assert captured["command"][2] == "app.services.scheduler_worker"
+
+
+def test_windows_daily_schedule_does_not_run_on_macos(tmp_path: Path, monkeypatch) -> None:
+    """
+    macOS では Windows 固定時刻スケジュールを起動しない。
+    """
+    connection = _create_connection(tmp_path)
+    monkeypatch.setattr("app.services.scheduler_service.platform.system", lambda: "Darwin")
+
+    assert (
+        SchedulerService(connection=connection).try_start_due_windows_daily_schedule(
+            now=datetime(2026, 5, 10, 10, 0),
+            process_factory=lambda command, cwd: type("Proc", (), {"pid": 1})(),
+        )
+        is False
+    )
+
+
+def test_recover_interrupted_windows_run_clears_running_state(tmp_path: Path) -> None:
+    """
+    再起動後に残った実行中状態は再開せず、次の起動で一から取り直せる状態へ戻す。
+    """
+    connection = _create_connection(tmp_path)
+    connection.execute("UPDATE index_runs SET is_running = 1, cancel_requested = 1 WHERE id = 1")
+    connection.execute(
+        """
+        UPDATE scheduler_runtime
+        SET status = 'running', current_path = '/tmp/docs', process_id = 123, run_token = 'old'
+        WHERE id = 1
+        """
+    )
+    connection.commit()
+
+    recovered = SchedulerService(connection=connection).recover_interrupted_windows_run()
+
+    index_row = connection.execute("SELECT is_running, cancel_requested FROM index_runs WHERE id = 1").fetchone()
+    runtime_row = connection.execute("SELECT status, current_path, process_id, run_token FROM scheduler_runtime WHERE id = 1").fetchone()
+
+    assert recovered is True
+    assert index_row["is_running"] == 0
+    assert index_row["cancel_requested"] == 0
+    assert runtime_row["status"] == "interrupted"
+    assert runtime_row["current_path"] is None
+    assert runtime_row["process_id"] is None
+    assert runtime_row["run_token"] is None
+
+
 def _create_connection(tmp_path: Path) -> sqlite3.Connection:
     """
     テストごとの一時 SQLite 接続を作成する。

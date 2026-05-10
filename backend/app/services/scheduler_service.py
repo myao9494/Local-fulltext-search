@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 import os
+import platform
 import subprocess
 import sys
 import threading
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from pathlib import Path
 from sqlite3 import Connection
 from typing import Callable
@@ -25,6 +26,8 @@ from app.services.path_service import AbsolutePathRequiredError, normalize_path
 
 
 ProcessFactory = Callable[..., subprocess.Popen[bytes] | subprocess.Popen[str]]
+WINDOWS_DAILY_SCHEDULE_TIMES = (time(10, 0), time(12, 15), time(16, 0))
+WINDOWS_DAILY_INDEX_DEPTH = 128
 
 
 class SchedulerService:
@@ -164,11 +167,18 @@ class SchedulerService:
         self.connection.commit()
 
         backend_dir = Path(__file__).resolve().parents[2]
-        factory = process_factory or subprocess.Popen
-        process = factory(
-            [sys.executable, "-m", "app.services.scheduler_worker", run_token],
-            cwd=str(backend_dir),
-        )
+        if process_factory is None and platform.system() == "Windows":
+            process = subprocess.Popen(
+                [sys.executable, "-m", "app.services.scheduler_worker", run_token],
+                cwd=str(backend_dir),
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        else:
+            factory = process_factory or subprocess.Popen
+            process = factory(
+                [sys.executable, "-m", "app.services.scheduler_worker", run_token],
+                cwd=str(backend_dir),
+            )
         self.connection.execute(
             """
             UPDATE scheduler_runtime
@@ -179,6 +189,120 @@ class SchedulerService:
         )
         self.connection.commit()
         return True
+
+    def recover_interrupted_windows_run(self) -> bool:
+        """
+        Windows の前回スケジュール実行が起動中・実行中で止まっていたら履歴を閉じる。
+        """
+        row = self.connection.execute(
+            """
+            SELECT status
+            FROM scheduler_runtime
+            WHERE id = 1
+            """
+        ).fetchone()
+        if row is None or str(row["status"]) not in {"launching", "running"}:
+            return False
+
+        now = datetime.now(UTC).isoformat()
+        self.connection.execute(
+            """
+            UPDATE index_runs
+            SET is_running = 0,
+                cancel_requested = 0,
+                last_finished_at = ?,
+                last_error = NULL
+            WHERE id = 1
+            """,
+            (now,),
+        )
+        self.connection.execute(
+            """
+            UPDATE scheduler_runtime
+            SET status = 'interrupted',
+                current_path = NULL,
+                process_id = NULL,
+                run_token = NULL,
+                last_finished_at = ?,
+                last_error = NULL
+            WHERE id = 1
+            """,
+            (now,),
+        )
+        self.connection.commit()
+        self.append_log(level="warning", message="前回のWindows定期インデックスが中断されたため、履歴を解除しました。")
+        return True
+
+    def try_start_due_windows_daily_schedule(
+        self,
+        *,
+        now: datetime | None = None,
+        process_factory: ProcessFactory | None = None,
+    ) -> bool:
+        """
+        Windows 専用の固定時刻スケジュールで、検索対象フォルダ全体の再インデックスを開始する。
+        """
+        if platform.system() != "Windows":
+            return False
+
+        current = now or datetime.now().astimezone()
+        scheduled_time = self._matched_windows_schedule_time(current)
+        if scheduled_time is None:
+            return False
+
+        status_row = self.connection.execute("SELECT status FROM scheduler_runtime WHERE id = 1").fetchone()
+        if status_row is not None and str(status_row["status"]) in {"launching", "running"}:
+            return False
+
+        run_key = f"{current.date().isoformat()}T{scheduled_time.strftime('%H:%M')}"
+        inserted = self.connection.execute(
+            """
+            INSERT OR IGNORE INTO scheduler_daily_runs(run_key, scheduled_time, started_at)
+            VALUES (?, ?, ?)
+            """,
+            (run_key, scheduled_time.strftime("%H:%M"), datetime.now(UTC).isoformat()),
+        )
+        if int(inserted.rowcount or 0) == 0:
+            return False
+
+        folder_paths = self._list_enabled_local_search_targets()
+        if not folder_paths:
+            self.connection.commit()
+            self.append_log(level="warning", message="Windows定期インデックス対象の検索対象フォルダがありません。")
+            return False
+
+        self.connection.execute("DELETE FROM scheduler_paths WHERE scheduler_id = 1")
+        for index, folder_path in enumerate(folder_paths):
+            self.connection.execute(
+                """
+                INSERT INTO scheduler_paths(scheduler_id, folder_path, sort_order)
+                VALUES (1, ?, ?)
+                """,
+                (folder_path, index),
+            )
+        self.connection.execute("DELETE FROM scheduler_logs")
+        self.connection.execute(
+            """
+            UPDATE scheduler_settings
+            SET start_at = ?, is_enabled = 1, updated_at = ?
+            WHERE id = 1
+            """,
+            (datetime.now(UTC).isoformat(), datetime.now(UTC).isoformat()),
+        )
+        self.connection.execute(
+            """
+            UPDATE scheduler_runtime
+            SET status = 'scheduled',
+                current_path = NULL,
+                process_id = NULL,
+                run_token = NULL,
+                last_error = NULL
+            WHERE id = 1
+            """
+        )
+        self.connection.commit()
+        self.append_log(level="info", message=f"Windows定期インデックスを開始します。実行枠: {run_key}")
+        return self.try_start_due_schedule(process_factory=process_factory)
 
     def append_log(self, *, level: str, message: str, folder_path: str | None = None) -> None:
         """
@@ -297,7 +421,7 @@ class SchedulerService:
                     full_path=folder_path,
                     refresh_window_minutes=0,
                     exclude_keywords=app_settings.exclude_keywords,
-                    index_depth=128,
+                    index_depth=WINDOWS_DAILY_INDEX_DEPTH,
                     types=app_settings.index_selected_extensions.replace("\n", " "),
                 )
                 self.append_log(level="info", message="フォルダのインデックスが完了しました。", folder_path=folder_path)
@@ -334,6 +458,31 @@ class SchedulerService:
             normalized_paths.append(normalized)
         return normalized_paths
 
+    def _list_enabled_local_search_targets(self) -> list[str]:
+        """
+        Windows 定期実行の対象となる有効なローカル検索対象フォルダを返す。
+        """
+        rows = self.connection.execute(
+            """
+            SELECT full_path
+            FROM targets
+            WHERE source_type = 'local'
+              AND is_search_target_enabled = 1
+            ORDER BY full_path ASC
+            """
+        ).fetchall()
+        return [str(row["full_path"]) for row in rows]
+
+    def _matched_windows_schedule_time(self, current: datetime) -> time | None:
+        """
+        現在時刻が Windows 定期実行枠の分に一致するか判定する。
+        """
+        current_time = current.time().replace(second=0, microsecond=0)
+        for scheduled_time in WINDOWS_DAILY_SCHEDULE_TIMES:
+            if current_time == scheduled_time:
+                return scheduled_time
+        return None
+
 
 class SchedulerMonitor:
     """
@@ -348,6 +497,12 @@ class SchedulerMonitor:
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        if platform.system() == "Windows":
+            connection = get_connection()
+            try:
+                SchedulerService(connection=connection).recover_interrupted_windows_run()
+            finally:
+                connection.close()
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run_loop, name="scheduler-monitor", daemon=True)
         self._thread.start()
@@ -361,7 +516,9 @@ class SchedulerMonitor:
         while not self._stop_event.is_set():
             connection = get_connection()
             try:
-                SchedulerService(connection=connection).try_start_due_schedule()
+                service = SchedulerService(connection=connection)
+                if not service.try_start_due_windows_daily_schedule():
+                    service.try_start_due_schedule()
             finally:
                 connection.close()
             self._stop_event.wait(self.poll_interval_seconds)
