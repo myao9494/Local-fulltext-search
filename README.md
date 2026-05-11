@@ -177,6 +177,7 @@ BACKEND_HOST=0.0.0.0 BACKEND_PORT=8079 ./start_dev.sh
 - `pip install -r backend/requirements.txt` が 1 回実行できること
 - `frontend/dist/` が clone / pull した内容に含まれていること
 - デスクトップランチャー依存も `backend/requirements.txt` に含まれていること
+- Windows の完全オフライン環境でランチャーを使う場合は、Flet View を `launcher/vendor/flet-view/` に同梱していること
 
 配布先で不要なもの:
 
@@ -202,6 +203,27 @@ python run.py
 ```
 
 Windows でパスや起動ディレクトリの差異を避けたい場合は、リポジトリ直下の `start_windows.bat` をダブルクリックします。既定ポート `8079` が使用中なら、その待ち受けプロセスを停止してから `backend/run.py` を起動します。
+
+### Windows ランチャーを完全オフラインで使う場合
+
+Flet は Windows のデスクトップ表示に Flet View という実行ファイル一式を使います。通常は初回起動時にインターネットから取得しますが、会社の完全オフライン環境では失敗するため、配布前にリポジトリへ同梱してください。
+
+配置先:
+
+- 展開済みで置く場合: `launcher/vendor/flet-view/windows/flet.exe`
+- zip で置く場合: `launcher/vendor/flet-view/flet-view-windows.zip`
+
+このリポジトリでは Flet を `0.84.0` に固定しています。Windows 用アーカイブは Flet の GitHub Releases から `v0.84.0` の `flet-windows.zip` を取得し、ファイル名を `flet-view-windows.zip` にして `launcher/vendor/flet-view/` へ置いてください。
+
+推奨手順:
+
+1. インターネット接続できる端末で、このリポジトリと同じ Python / Flet バージョンを用意する
+2. `python -m pip install -r backend/requirements.txt` を実行する
+3. ランチャーを一度起動し、Flet が取得した Flet View のアーカイブまたは展開済みフォルダを保存する
+4. 保存したファイルを `launcher/vendor/flet-view/` に配置する
+5. 会社PCへリポジトリごとコピーし、`start_windows.bat` で起動する
+
+`start_windows.bat` は `LAUNCHER_REQUIRE_OFFLINE_FLET_VIEW=1` を設定します。Flet View が未配置の場合は、外部ダウンロードへ進む前に配置先を示すエラーで停止します。zip 配置の場合は初回起動時に `launcher/.offline_cache/flet-view/windows/` へ自動展開し、以後はそこを使います。
 
 `python run.py` の既定値:
 

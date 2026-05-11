@@ -5,6 +5,7 @@
 import platform
 
 from launcher_app.config import LauncherConfig
+from launcher_app.offline_flet import prepare_flet_view
 
 
 def main() -> None:
@@ -17,6 +18,7 @@ def main() -> None:
 
         run_native_mac_app(config)
     else:
+        prepare_flet_view()
         from launcher_app.ui.app import run_app
 
         run_app(config)

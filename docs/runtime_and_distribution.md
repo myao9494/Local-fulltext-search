@@ -56,6 +56,7 @@ Node.js / npm は、フロントエンドを再ビルドするときだけ必要
 - Python
 - `frontend/dist/` がリポジトリに含まれていること
 - デスクトップランチャーを使う場合は `launcher/requirements.txt` の依存も入っていること
+- Windows の完全オフライン環境でデスクトップランチャーを使う場合は `launcher/vendor/flet-view/` に Flet View を同梱していること
 
 動作:
 
@@ -85,6 +86,27 @@ cd backend
 既定のアクセス先:
 
 - `http://127.0.0.1:8079/`
+
+## Windows ランチャーの完全オフライン起動
+
+Windows の Flet ランチャーは、画面表示用に Flet View という実行ファイル一式を必要とします。Flet は通常、このファイルを初回起動時にネットワークから取得します。完全オフライン環境では取得できないため、配布前に次のどちらかをリポジトリへ入れてください。
+
+- 展開済みディレクトリ: `launcher/vendor/flet-view/windows/flet.exe`
+- zip アーカイブ: `launcher/vendor/flet-view/flet-view-windows.zip`
+
+このリポジトリでは Flet を `0.84.0` に固定しています。Windows 用アーカイブは Flet の GitHub Releases から `v0.84.0` の `flet-windows.zip` を取得し、`flet-view-windows.zip` にリネームして `launcher/vendor/flet-view/` へ置きます。
+
+`start_windows.bat` から起動する場合は `LAUNCHER_REQUIRE_OFFLINE_FLET_VIEW=1` が設定されます。Flet View が未配置なら、外部ダウンロードへ進む前に配置先を示して停止します。zip アーカイブを置いた場合は、初回起動時に `launcher/.offline_cache/flet-view/windows/` へ自動展開して `FLET_VIEW_PATH` を設定します。
+
+オンライン準備端末で行うこと:
+
+```powershell
+cd backend
+python -m pip install -r requirements.txt
+python run.py
+```
+
+ランチャーが一度起動したら、Flet が取得した Flet View のアーカイブまたは展開済みフォルダを `launcher/vendor/flet-view/` に置いてから、会社PCへリポジトリごと配布します。配置ルールの詳細は `launcher/vendor/flet-view/README.md` を参照してください。
 
 外部アプリから特定フォルダと検索語を渡して開く場合:
 
@@ -147,5 +169,6 @@ $env:SEARCH_APP_PORT="8079"
 - `frontend/node_modules/`
 - `backend/data/`
 - `data/`
+- `launcher/.offline_cache/`
 - `.run/`
 - `*.log`

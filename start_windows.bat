@@ -9,6 +9,7 @@ set "BACKEND_DIR=%APP_ROOT%backend"
 set "SEARCH_APP_HOST=127.0.0.1"
 if "%SEARCH_APP_PORT%"=="" set "SEARCH_APP_PORT=8079"
 set "SEARCH_APP_LAUNCHER_AUTOSTART=1"
+set "LAUNCHER_REQUIRE_OFFLINE_FLET_VIEW=1"
 
 echo [Local Fulltext Search] Checking port %SEARCH_APP_PORT%...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$port = [int]$env:SEARCH_APP_PORT; $listeners = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue; $processIds = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique); foreach ($processId in $processIds) { if ($processId -and $processId -ne $PID) { $proc = Get-Process -Id $processId -ErrorAction SilentlyContinue; if ($proc) { Write-Host ('[Local Fulltext Search] Stop PID {0}: {1}' -f $processId, $proc.ProcessName); Stop-Process -Id $processId -Force; } } }"
