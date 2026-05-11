@@ -79,6 +79,16 @@ class IndexedFileCandidate:
     existing_id: int | None
 
 
+def _is_existing_directory(path: Path) -> bool:
+    """
+    権限不足や未接続 UNC パスを存在しないディレクトリとして扱う。
+    """
+    try:
+        return path.exists() and path.is_dir()
+    except OSError:
+        return False
+
+
 @dataclass(frozen=True)
 class IndexedWebPageCandidate:
     """
@@ -1139,7 +1149,7 @@ class IndexService:
         normalized_identifier, source_type = self._normalize_target_identifier_or_raise(full_path)
         if source_type == "local":
             normalized_path = normalize_path(normalized_identifier)
-            if not normalized_path.exists() or not normalized_path.is_dir():
+            if not _is_existing_directory(normalized_path):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Folder path must be an existing directory.")
             stored_path = normalized_path.as_posix()
         else:
