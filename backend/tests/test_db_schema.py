@@ -31,6 +31,39 @@ def test_initialize_schema_creates_file_segments_lookup_index(tmp_path: Path) ->
         connection.close()
 
 
+def test_initialize_schema_creates_search_filter_indexes(tmp_path: Path) -> None:
+    """
+    source_type とパス条件での絞り込みを支える補助インデックスを作成する。
+    """
+    connection = sqlite3.connect(tmp_path / "search.db")
+    try:
+        initialize_schema(connection)
+
+        file_indexes = connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'index'
+              AND tbl_name = 'files'
+            ORDER BY name
+            """
+        ).fetchall()
+        target_indexes = connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'index'
+              AND tbl_name = 'targets'
+            ORDER BY name
+            """
+        ).fetchall()
+
+        assert "idx_files_source_type_normalized_path" in [row[0] for row in file_indexes]
+        assert "idx_targets_enabled_source_type_full_path" in [row[0] for row in target_indexes]
+    finally:
+        connection.close()
+
+
 def test_initialize_schema_creates_scheduler_daily_runs_table(tmp_path: Path) -> None:
     """
     Windows 定期スケジュールの同一枠二重起動を防ぐ実行記録テーブルを作成する。

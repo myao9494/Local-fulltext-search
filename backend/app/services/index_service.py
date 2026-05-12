@@ -1285,6 +1285,7 @@ class IndexService:
             len(existing_files),
         )
         batch_size = 100
+        sorted_allowed_extensions = tuple(sorted(allowed_extensions, key=len, reverse=True))
         max_workers = self._resolve_extract_worker_count()
         max_pending = max_workers * 4
         pending: dict[Future[str], IndexedFileCandidate] = {}
@@ -1300,6 +1301,7 @@ class IndexService:
                 excluded_path_prefixes=excluded_path_prefixes,
                 auto_excluded_paths=auto_excluded_paths,
                 allowed_extensions=allowed_extensions,
+                sorted_allowed_extensions=sorted_allowed_extensions,
                 max_depth=index_depth,
             ):
                 self._raise_if_cancel_requested(controller)
@@ -1430,6 +1432,7 @@ class IndexService:
                 root_path=cleanup_root_path,
                 index_depth=cleanup_index_depth,
                 allowed_extensions=allowed_extensions,
+                preloaded_existing_files=existing_files,
                 keyword_set=keyword_set,
                 non_ascii_keywords=non_ascii_keywords,
                 excluded_path_prefixes=(*excluded_path_prefixes, *tuple(sorted(auto_excluded_paths))),
@@ -1938,7 +1941,7 @@ class IndexService:
         prefix_start, prefix_end = get_descendant_path_range(root_path)
         rows = self.connection.execute(
             """
-            SELECT id, normalized_path, mtime, size, last_error
+            SELECT id, normalized_path, mtime, size, last_error, file_ext
             FROM files
             WHERE normalized_path = ?
                OR (normalized_path >= ? AND normalized_path < ?)
@@ -1966,6 +1969,7 @@ class IndexService:
         excluded_path_prefixes: tuple[str, ...],
         auto_excluded_paths: set[str],
         allowed_extensions: frozenset[str],
+        sorted_allowed_extensions: tuple[str, ...],
         max_depth: int,
         current_depth: int = 0,
     ):
@@ -2000,6 +2004,7 @@ class IndexService:
                                 excluded_path_prefixes=excluded_path_prefixes,
                                 auto_excluded_paths=auto_excluded_paths,
                                 allowed_extensions=allowed_extensions,
+                                sorted_allowed_extensions=sorted_allowed_extensions,
                                 max_depth=max_depth,
                                 current_depth=current_depth + 1,
                             )
@@ -2007,7 +2012,7 @@ class IndexService:
 
                     if entry.is_file(follow_symlinks=False):
                         resolved_extension = next(
-                            (extension for extension in sorted(allowed_extensions, key=len, reverse=True) if entry.name.lower().endswith(extension)),
+                            (extension for extension in sorted_allowed_extensions if entry.name.lower().endswith(extension)),
                             None,
                         )
                         if resolved_extension in allowed_extensions:
@@ -2196,6 +2201,7 @@ class IndexService:
         root_path: str,
         index_depth: int | None = None,
         allowed_extensions: frozenset[str] | None = None,
+        preloaded_existing_files: dict[str, dict[str, object]] | None = None,
         keyword_set: frozenset[str] | None = None,
         non_ascii_keywords: list[str] | None = None,
         excluded_path_prefixes: tuple[str, ...] | None = None,
@@ -2204,16 +2210,19 @@ class IndexService:
         DB 上に存在するが今回の走査責任範囲に含まれなくなったレコードをバッチ削除する。
         file_segments を先に明示的に DELETE して FTS5 トリガーを発火させてから files を削除する。
         """
-        prefix_start, prefix_end = get_descendant_path_range(root_path)
-        rows = self.connection.execute(
-            """
-            SELECT id, normalized_path, file_ext
-            FROM files
-            WHERE normalized_path = ?
-               OR (normalized_path >= ? AND normalized_path < ?)
-            """,
-            (root_path, prefix_start, prefix_end),
-        ).fetchall()
+        if preloaded_existing_files is None:
+            prefix_start, prefix_end = get_descendant_path_range(root_path)
+            rows = self.connection.execute(
+                """
+                SELECT id, normalized_path, file_ext
+                FROM files
+                WHERE normalized_path = ?
+                   OR (normalized_path >= ? AND normalized_path < ?)
+                """,
+                (root_path, prefix_start, prefix_end),
+            ).fetchall()
+        else:
+            rows = tuple(preloaded_existing_files.values())
         deleted_ids = [
             int(row["id"])
             for row in rows

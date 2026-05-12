@@ -59,6 +59,14 @@ SCHEMA_STATEMENTS: list[str] = [
     ON file_segments(file_id, segment_type);
     """,
     """
+    CREATE INDEX IF NOT EXISTS idx_files_source_type_normalized_path
+    ON files(source_type, normalized_path);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_targets_enabled_source_type_full_path
+    ON targets(is_search_target_enabled, source_type, full_path);
+    """,
+    """
     CREATE TABLE IF NOT EXISTS index_runs (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         is_running INTEGER NOT NULL DEFAULT 0,
