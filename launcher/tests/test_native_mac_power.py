@@ -252,9 +252,9 @@ def test_poll_hotkey_state_reads_current_modifier_flags_and_reenables_tap(monkey
     assert handled_flags == [123]
 
 
-def test_handle_modifier_flags_activates_on_command_shift(monkeypatch) -> None:
+def test_handle_modifier_flags_activates_on_command_option(monkeypatch) -> None:
     """
-    macOS ネイティブ版は Command + Shift が揃った瞬間だけ表示を切り替える。
+    macOS ネイティブ版は Command + Option が揃った瞬間だけ表示を切り替える。
     """
     appkit = SimpleNamespace(
         NSEventModifierFlagCommand=1,
@@ -267,9 +267,9 @@ def test_handle_modifier_flags_activates_on_command_shift(monkeypatch) -> None:
     delegate = SimpleNamespace(hotkey_activated=False, toggle_panel=lambda: None)
     delegate._handle_modifier_flags = native_mac.LauncherDelegate._handle_modifier_flags.__get__(delegate)
 
+    delegate._handle_modifier_flags(appkit.NSEventModifierFlagCommand | appkit.NSEventModifierFlagShift)
     delegate._handle_modifier_flags(appkit.NSEventModifierFlagCommand | appkit.NSEventModifierFlagOption)
-    delegate._handle_modifier_flags(appkit.NSEventModifierFlagCommand | appkit.NSEventModifierFlagShift)
-    delegate._handle_modifier_flags(appkit.NSEventModifierFlagCommand | appkit.NSEventModifierFlagShift)
+    delegate._handle_modifier_flags(appkit.NSEventModifierFlagCommand | appkit.NSEventModifierFlagOption)
     delegate._handle_modifier_flags(appkit.NSEventModifierFlagCommand)
 
     assert calls == [delegate.toggle_panel]

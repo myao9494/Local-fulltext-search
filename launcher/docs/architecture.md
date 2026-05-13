@@ -14,7 +14,7 @@
 ```mermaid
 graph LR
     subgraph "OS (Windows/Mac)"
-        HK[Global Hotkey: Cmd+Shift / Ctrl+Shift]
+        HK[Global Hotkey: Cmd+Option / Ctrl+Windows]
         Mouse[Mouse Cursor Position]
     end
 
@@ -52,7 +52,7 @@ graph LR
 macOS では Flet の最小化・復帰が Spaces と相性が悪いため、PyObjC / Cocoa の `NSPanel` を使います。
 
 - `NSWindowCollectionBehaviorCanJoinAllSpaces` でアクティブな仮想デスクトップに表示する。
-- `NSEvent` の modifier flags 監視で `Command + Shift` を検出する。
+- `NSEvent` の modifier flags 監視で `Command + Option` を検出する。
 - `NSWorkspaceWillSleepNotification` / `NSWorkspaceDidWakeNotification` でスリープ前後を検知し、復帰時に `NSEvent` monitor を再登録する。
 - ボーダーレスでも入力できるよう `canBecomeKeyWindow()` / `canBecomeMainWindow()` を `True` にした `LauncherPanel` を使う。
 

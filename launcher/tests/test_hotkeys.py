@@ -7,23 +7,23 @@ from launcher_app.services.hotkeys import ModifierChordState, hotkey_spec_for_pl
 
 def test_hotkey_spec_for_macos() -> None:
     """
-    macOS では Command + Shift を表示名として返す。
+    macOS では Command + Option を表示名として返す。
     """
-    assert hotkey_spec_for_platform("Darwin") == "Command + Shift"
-    assert modifier_names_for_platform("Darwin") == frozenset({"cmd", "shift"})
+    assert hotkey_spec_for_platform("Darwin") == "Command + Option"
+    assert modifier_names_for_platform("Darwin") == frozenset({"cmd", "alt"})
 
 
 def test_hotkey_spec_for_windows() -> None:
     """
-    Windows では Ctrl + Shift を表示名として返す。
+    Windows では Ctrl + Windows を表示名として返す。
     """
-    assert hotkey_spec_for_platform("Windows") == "Ctrl + Shift"
-    assert modifier_names_for_platform("Windows") == frozenset({"ctrl", "shift"})
+    assert hotkey_spec_for_platform("Windows") == "Ctrl + Windows"
+    assert modifier_names_for_platform("Windows") == frozenset({"ctrl", "cmd"})
 
 
 def test_hotkey_spec_for_linux() -> None:
     """
-    Linux など macOS 以外では Ctrl + Shift を表示名として返す。
+    Linux では Ctrl + Shift を表示名として返す。
     """
     assert hotkey_spec_for_platform("Linux") == "Ctrl + Shift"
     assert modifier_names_for_platform("Linux") == frozenset({"ctrl", "shift"})
