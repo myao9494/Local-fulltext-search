@@ -8,7 +8,8 @@ from urllib.request import Request
 
 import pytest
 
-from launcher_app.api.client import LauncherApiClient, LauncherApiError
+from launcher_app.api import client as client_module
+from launcher_app.api.client import LauncherApiClient, LauncherApiError, default_urlopen
 
 
 class StubResponse:
@@ -153,7 +154,7 @@ def test_record_click_posts_file_id() -> None:
 
 def test_api_error_extracts_detail() -> None:
     """
-    API エラーは FastAPI の detail をユーザー向けメッセージとして保持する。
+    API エラーは HTTP ステータスと FastAPI の detail をユーザー向けメッセージとして保持する。
     """
     def fake_urlopen(request: Request, timeout: float) -> StubResponse:
         raise HTTPError(
@@ -166,8 +167,48 @@ def test_api_error_extracts_detail() -> None:
 
     client = LauncherApiClient(base_url="http://127.0.0.1:8000", urlopen=fake_urlopen)
 
-    with pytest.raises(LauncherApiError, match="backend is unavailable"):
+    with pytest.raises(LauncherApiError, match="HTTP 500 Server Error: backend is unavailable"):
         client.search("alpha")
+
+
+def test_api_error_includes_plain_forbidden_body() -> None:
+    """
+    社内プロキシ等が返す素の Forbidden も HTTP ステータス付きで表示する。
+    """
+    def fake_urlopen(request: Request, timeout: float) -> StubResponse:
+        raise HTTPError(
+            request.full_url,
+            403,
+            "Forbidden",
+            {},
+            StubPlainErrorBody("Forbidden"),
+        )
+
+    client = LauncherApiClient(base_url="http://127.0.0.1:8000", urlopen=fake_urlopen)
+
+    with pytest.raises(LauncherApiError, match="HTTP 403 Forbidden: Forbidden"):
+        client.search("alpha")
+
+
+def test_default_urlopen_uses_proxyless_opener(monkeypatch) -> None:
+    """
+    ランチャーの既定 HTTP 実行は環境変数プロキシではなくプロキシ無効の opener を使う。
+    """
+    calls: dict[str, object] = {}
+
+    class StubOpener:
+        def open(self, request: Request, timeout: float) -> StubResponse:
+            calls["url"] = request.full_url
+            calls["timeout"] = timeout
+            return StubResponse({"total": 0, "items": []})
+
+    monkeypatch.setattr(client_module, "_proxyless_opener", StubOpener())
+    request = Request("http://127.0.0.1:8079/api/search/indexed", data=b"{}", method="POST")
+
+    response = default_urlopen(request, timeout=1.5)
+
+    assert calls == {"url": "http://127.0.0.1:8079/api/search/indexed", "timeout": 1.5}
+    assert isinstance(response, StubResponse)
 
 
 class StubErrorBody:
@@ -185,4 +226,19 @@ class StubErrorBody:
         """
         HTTPError の一時ファイルクローザーから呼ばれる close を受ける。
         """
+        return None
+
+
+class StubPlainErrorBody:
+    """
+    HTTPError.fp としてプレーンテキスト本文を返すスタブ。
+    """
+
+    def __init__(self, payload: str) -> None:
+        self.payload = payload
+
+    def read(self) -> bytes:
+        return self.payload.encode("utf-8")
+
+    def close(self) -> None:
         return None

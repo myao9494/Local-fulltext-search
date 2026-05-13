@@ -100,6 +100,10 @@ python run.py
 - `SEARCH_APP_LAUNCHER_AUTOSTART`: バックエンド起動時にランチャーも起動するか。`backend/run.py` と `start_dev.sh` では既定で `1`。
 - `SEARCH_APP_LAUNCHER_LOG_NAME`: ランチャーログファイル名。既定値は `launcher.log`。
 
+通信・ログ:
+- ランチャーから `LAUNCHER_API_BASE_URL` へのローカル HTTP 通信では、会社環境の `HTTP_PROXY` / `HTTPS_PROXY` による誤転送を避けるためプロキシを使用しない。
+- 起動設定、API リクエスト先、HTTP エラー、検索失敗の詳細は `backend/launcher.log` に出力する。バックエンド側に届いた API は `backend/backend.log` にも出力される。
+
 関連する Web オープン先:
 - ファイル: `http://127.0.0.1:8079/api/fullpath?path=<encoded full_path>`
 - フォルダ: `http://127.0.0.1:8079/?path=<encoded folder_path>`

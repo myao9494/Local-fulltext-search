@@ -4,15 +4,25 @@
 
 from collections.abc import Callable
 import json
+import logging
 import platform
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
-from urllib.request import Request, urlopen as default_urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from launcher_app.models import SearchResponse, SearchResultItem
 
 UrlOpen = Callable[..., Any]
+logger = logging.getLogger(__name__)
+_proxyless_opener = build_opener(ProxyHandler({}))
+
+
+def default_urlopen(request: Request, *, timeout: float) -> Any:
+    """
+    ランチャーのローカル API 通信では社内プロキシ環境変数を無視して直結する。
+    """
+    return _proxyless_opener.open(request, timeout=timeout)
 
 
 class LauncherApiError(RuntimeError):
@@ -95,20 +105,30 @@ class LauncherApiClient:
         JSON POST を実行し、エラー時は detail を抽出して例外へ変換する。
         """
         body = json.dumps(payload).encode("utf-8")
+        url = urljoin(self.base_url, path.lstrip("/"))
         request = Request(
-            urljoin(self.base_url, path.lstrip("/")),
+            url,
             data=body,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        logger.info("Launcher API request: method=POST url=%s timeout=%.1fs payload_keys=%s", url, self.timeout, sorted(payload.keys()))
         try:
             with self._open(request) as response:
-                return json.loads(response.read().decode("utf-8"))
+                status = getattr(response, "status", None) or getattr(response, "code", None)
+                raw_body = response.read().decode("utf-8")
+                logger.info("Launcher API response: url=%s status=%s bytes=%d", url, status or "unknown", len(raw_body))
+                return json.loads(raw_body)
         except HTTPError as error:
-            raise LauncherApiError(_read_error_message(error)) from error
+            message = _read_error_message(error)
+            logger.warning("Launcher API HTTP error: url=%s status=%s reason=%s message=%s", url, error.code, error.reason, message)
+            raise LauncherApiError(message) from error
         except URLError as error:
-            raise LauncherApiError(str(error.reason)) from error
+            message = f"APIに接続できません: {error.reason}"
+            logger.warning("Launcher API connection error: url=%s reason=%s", url, error.reason)
+            raise LauncherApiError(message) from error
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
+            logger.exception("Launcher API unexpected error: url=%s", url)
             raise LauncherApiError(str(error)) from error
 
     def _open(self, request: Request) -> Any:
@@ -141,14 +161,21 @@ def _read_error_message(error: HTTPError) -> str:
     """
     FastAPI の detail 形式を優先してユーザー向け文言を取り出す。
     """
+    status_prefix = f"HTTP {error.code} {error.reason}".strip()
     try:
-        payload = json.loads(error.read().decode("utf-8"))
+        raw_body = error.read().decode("utf-8", errors="replace")
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        return error.reason or f"HTTP {error.code}"
+        return status_prefix
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError:
+        body = raw_body.strip()
+        return f"{status_prefix}: {body}" if body else status_prefix
     detail = payload.get("detail") if isinstance(payload, dict) else None
     if isinstance(detail, str) and detail:
-        return detail
+        return f"{status_prefix}: {detail}"
     if isinstance(detail, list) and detail:
         messages = [str(item.get("msg", "")) for item in detail if isinstance(item, dict)]
-        return " ".join(message for message in messages if message) or f"HTTP {error.code}"
-    return error.reason or f"HTTP {error.code}"
+        detail_message = " ".join(message for message in messages if message)
+        return f"{status_prefix}: {detail_message}" if detail_message else status_prefix
+    return status_prefix

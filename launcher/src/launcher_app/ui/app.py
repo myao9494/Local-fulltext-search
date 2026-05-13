@@ -248,6 +248,7 @@ class LauncherApp:
         try:
             response = self.client.search(query, limit=self.config.search_limit)
         except Exception as error:
+            logger.exception("Launcher search failed: query=%r api_base_url=%s", query, self.config.api_base_url)
             if sequence != self.search_sequence:
                 return
             message = str(error)
