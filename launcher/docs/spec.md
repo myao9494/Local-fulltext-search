@@ -4,7 +4,7 @@
 本アプリケーションは、ローカル全文検索システムのバックエンドを利用し、デスクトップ上でいつでも呼び出し可能な高速検索インターフェース（ランチャー）を提供します。MacのSpotlightやRaycastのような操作感を目指します。
 
 ## 2. コア機能
-- **グローバルホットキー**: `Option + Command` (Mac) または `Ctrl + Alt` (Windows) で即座に表示/非表示を切り替え。
+- **グローバルホットキー**: `Command + Shift` (Mac) または `Ctrl + Shift` (Windows) で即座に表示/非表示を切り替え。
 - **SpotlightスタイルUI**: 画面中央にフローティング表示される、枠のないスタイリッシュな検索バー。
 - **リアルタイム検索**: 入力と同時にバックエンドへ問い合わせを行い、結果を動的に表示。
 - **アクション**:
@@ -25,7 +25,7 @@
 ## 4. 技術スタック
 - **GUIフレームワーク**: macOS では PyObjC / Cocoa `NSPanel`。その他 OS では Flet 版をフォールバックとして利用する。
 - **バックエンド連携**: 既存の FastAPI サーバーに HTTP で接続。ランチャーの初期実装では `/api/search`, `/api/search/click`, `/api/files/open-location` を利用する。
-- **グローバルキー監視**: macOS では `CGEventTap` の HID レベル監視を優先して modifier flags を監視し、作成できない場合は session レベルへフォールバックする。補助的に Cocoa `NSEvent` の monitor と `CGEventSourceFlagsState` の watchdog polling も使い、`Option + Command` を検出する。その他 OS では `pynput` を利用する。
+- **グローバルキー監視**: macOS では `CGEventTap` の HID レベル監視を優先して modifier flags を監視し、作成できない場合は session レベルへフォールバックする。補助的に Cocoa `NSEvent` の monitor と `CGEventSourceFlagsState` の watchdog polling も使い、`Command + Shift` を検出する。その他 OS では `pynput` を利用する。
 - **スリープ復帰対応**: macOS では `NSWorkspaceWillSleepNotification` / `NSWorkspaceDidWakeNotification` を監視し、復帰時に `CGEventTap` と `NSEvent` monitor を再登録してホットキーを復旧する。
 - **仮想デスクトップ復帰**: パネル表示直前に Space 関連の `NSWindowCollectionBehavior`、window level、非アクティブ時の非表示設定を張り直し、長時間放置による App Nap を抑止する。
 - **常駐形態**: バックエンドサーバー配下の子プロセスとして起動し、Web フロントの「ランチャー」ページから状態確認・起動・停止・再起動・ログ確認を行う。システムトレイ常駐は未実装。

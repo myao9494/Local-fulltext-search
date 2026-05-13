@@ -252,6 +252,30 @@ def test_poll_hotkey_state_reads_current_modifier_flags_and_reenables_tap(monkey
     assert handled_flags == [123]
 
 
+def test_handle_modifier_flags_activates_on_command_shift(monkeypatch) -> None:
+    """
+    macOS ネイティブ版は Command + Shift が揃った瞬間だけ表示を切り替える。
+    """
+    appkit = SimpleNamespace(
+        NSEventModifierFlagCommand=1,
+        NSEventModifierFlagOption=2,
+        NSEventModifierFlagShift=4,
+    )
+    calls = []
+    monkeypatch.setattr(native_mac, "AppKit", appkit)
+    monkeypatch.setattr(native_mac, "AppHelper", SimpleNamespace(callAfter=lambda func: calls.append(func)))
+    delegate = SimpleNamespace(hotkey_activated=False, toggle_panel=lambda: None)
+    delegate._handle_modifier_flags = native_mac.LauncherDelegate._handle_modifier_flags.__get__(delegate)
+
+    delegate._handle_modifier_flags(appkit.NSEventModifierFlagCommand | appkit.NSEventModifierFlagOption)
+    delegate._handle_modifier_flags(appkit.NSEventModifierFlagCommand | appkit.NSEventModifierFlagShift)
+    delegate._handle_modifier_flags(appkit.NSEventModifierFlagCommand | appkit.NSEventModifierFlagShift)
+    delegate._handle_modifier_flags(appkit.NSEventModifierFlagCommand)
+
+    assert calls == [delegate.toggle_panel]
+    assert delegate.hotkey_activated is False
+
+
 def test_stop_hotkey_watchdog_invalidates_timer() -> None:
     """
     hotkey 停止時は watchdog timer も停止する。

@@ -231,7 +231,7 @@ class LauncherDelegate(AppKit.NSObject):
     @objc.python_method
     def _start_hotkey_monitor(self) -> None:
         """
-        セッション全体の入力イベント監視で Option + Command を検出する。
+        セッション全体の入力イベント監視で Command + Shift を検出する。
         既に登録済みの場合は二重登録しない。
         """
         if self.hotkey_monitors or self.hotkey_event_tap is not None:
@@ -318,7 +318,7 @@ class LauncherDelegate(AppKit.NSObject):
 
     def pollHotkeyState_(self, timer: Any) -> None:
         """
-        前面アプリがイベントを握る場合でも現在の Option + Command 状態を読む。
+        前面アプリがイベントを握る場合でも現在の Command + Shift 状態を読む。
         """
         if Quartz is None:
             return
@@ -396,16 +396,16 @@ class LauncherDelegate(AppKit.NSObject):
     @objc.python_method
     def _handle_modifier_event(self, event: Any) -> None:
         """
-        Option + Command が揃った瞬間にだけ表示状態を切り替える。
+        Command + Shift が揃った瞬間にだけ表示状態を切り替える。
         """
         self._handle_modifier_flags(event.modifierFlags())
 
     @objc.python_method
     def _handle_modifier_flags(self, flags: int) -> None:
         """
-        修飾キーの bit flag から Option + Command の押下状態を判定する。
+        修飾キーの bit flag から Command + Shift の押下状態を判定する。
         """
-        required = AppKit.NSEventModifierFlagCommand | AppKit.NSEventModifierFlagOption
+        required = AppKit.NSEventModifierFlagCommand | AppKit.NSEventModifierFlagShift
         active = (flags & required) == required
         if active and not self.hotkey_activated:
             self.hotkey_activated = True

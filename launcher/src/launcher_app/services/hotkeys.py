@@ -12,21 +12,21 @@ def hotkey_spec_for_platform(system_name: str | None = None) -> str:
     OS ごとの仕様に合う表示用ホットキー名を返す。
     """
     name = system_name or platform.system()
-    if name == "Windows":
-        return "Ctrl + Alt"
-    return "Option + Command"
+    if name == "Darwin":
+        return "Command + Shift"
+    return "Ctrl + Shift"
 
 
 def modifier_names_for_platform(system_name: str | None = None) -> frozenset[str]:
     """
     ランチャー表示トグルに使う修飾キー名を OS ごとに返す。
 
-    Windows は業務端末で Win キーを OS ショートカットに奪われやすいため Ctrl + Alt にする。
+    macOS は Command + Shift、その他 OS は Ctrl + Shift を使う。
     """
     name = system_name or platform.system()
-    if name == "Windows":
-        return frozenset({"ctrl", "alt"})
-    return frozenset({"cmd", "alt"})
+    if name == "Darwin":
+        return frozenset({"cmd", "shift"})
+    return frozenset({"ctrl", "shift"})
 
 
 class ModifierChordState:
