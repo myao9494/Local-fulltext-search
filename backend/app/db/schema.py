@@ -30,6 +30,7 @@ SCHEMA_STATEMENTS: list[str] = [
         mtime REAL NOT NULL,
         click_count INTEGER NOT NULL DEFAULT 0,
         obsidian_click_count INTEGER NOT NULL DEFAULT 0,
+        obsidian_rank_score REAL NOT NULL DEFAULT 0.0,
         size INTEGER NOT NULL,
         indexed_at TEXT NOT NULL,
         last_error TEXT,
@@ -228,6 +229,8 @@ def _apply_non_destructive_migrations(connection: Connection) -> None:
         connection.execute("ALTER TABLE files ADD COLUMN click_count INTEGER NOT NULL DEFAULT 0;")
     if "obsidian_click_count" not in file_columns:
         connection.execute("ALTER TABLE files ADD COLUMN obsidian_click_count INTEGER NOT NULL DEFAULT 0;")
+    if "obsidian_rank_score" not in file_columns:
+        connection.execute("ALTER TABLE files ADD COLUMN obsidian_rank_score REAL NOT NULL DEFAULT 0.0;")
     if "source_type" not in file_columns:
         connection.execute("ALTER TABLE files ADD COLUMN source_type TEXT NOT NULL DEFAULT 'local';")
     _rebuild_files_name_fts(connection)
@@ -274,6 +277,7 @@ def _needs_schema_reset(connection: Connection) -> bool:
         "mtime",
         "click_count",
         "obsidian_click_count",
+        "obsidian_rank_score",
         "size",
         "indexed_at",
         "last_error",
@@ -313,14 +317,16 @@ def _needs_schema_reset(connection: Connection) -> bool:
     scheduler_logs_columns = _get_columns(connection, "scheduler_logs")
     scheduler_daily_runs_columns = _get_columns(connection, "scheduler_daily_runs")
     legacy_target_columns = expected_target_columns - {"source_type"}
-    legacy_file_columns = expected_file_columns - {"click_count", "obsidian_click_count", "source_type"}
-    legacy_file_columns_with_clicks = expected_file_columns - {"source_type"}
+    legacy_file_columns = expected_file_columns - {"click_count", "obsidian_click_count", "obsidian_rank_score", "source_type"}
+    legacy_file_columns_with_clicks = expected_file_columns - {"obsidian_rank_score", "source_type"}
+    legacy_file_columns_without_rank = expected_file_columns - {"obsidian_rank_score"}
     return (
         (target_columns != expected_target_columns and target_columns != legacy_target_columns)
         or (
             file_columns != expected_file_columns
             and file_columns != legacy_file_columns
             and file_columns != legacy_file_columns_with_clicks
+            and file_columns != legacy_file_columns_without_rank
         )
         or index_run_columns != expected_index_run_columns
         or failed_file_columns != expected_failed_file_columns

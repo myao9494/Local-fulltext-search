@@ -11,6 +11,7 @@ from sqlite3 import Connection
 from app.db.schema import initialize_schema
 from app.models.indexing import AppSettingsResponse
 from app.models.search import SearchQueryParams
+from app.services import search_service as search_service_module
 from app.services.search_service import SearchService
 
 
@@ -507,6 +508,86 @@ def test_sync_obsidian_sidebar_access_counts_persists_to_database(tmp_path: Path
         (note_path.as_posix(),),
     ).fetchone()[0]
     assert stored_count == 7
+
+
+def test_sync_obsidian_sidebar_file_metrics_persists_rank_score(tmp_path: Path, monkeypatch) -> None:
+    """
+    sidebar-explorer の fileMetrics は重み付き重要度として DB に保存され、同一一致内の順位へ使える。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+
+    vault_root = tmp_path / "obsidian-vault"
+    notes_dir = vault_root / "notes"
+    notes_dir.mkdir(parents=True)
+    stats_path = vault_root / ".obsidian" / "plugins" / "obsidian-sidebar-explorer" / "data.json"
+    stats_path.parent.mkdir(parents=True)
+    now_ms = int(datetime(2026, 5, 15, tzinfo=UTC).timestamp() * 1000)
+    stats_path.write_text(
+        json.dumps(
+            {
+                "accessCounts": {"notes/reference.md": 2, "notes/scratch.md": 30},
+                "fileMetrics": {
+                    "notes/reference.md": {
+                        "accessCount": 2,
+                        "backlinkCount": 20,
+                        "lastOpenedAt": now_ms,
+                        "modifiedAt": now_ms,
+                        "outgoingLinkCount": 8,
+                        "attachmentCount": 3,
+                        "headingCount": 12,
+                        "tagCount": 5,
+                    },
+                    "notes/scratch.md": {
+                        "accessCount": 30,
+                        "backlinkCount": 0,
+                        "lastOpenedAt": 0,
+                        "modifiedAt": 0,
+                        "outgoingLinkCount": 0,
+                        "attachmentCount": 0,
+                        "headingCount": 1,
+                        "tagCount": 0,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    service.index_service.update_app_settings(obsidian_sidebar_explorer_data_path=str(stats_path))
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="scratch.md",
+        full_path=str(notes_dir / "scratch.md"),
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="alpha",
+        click_count=0,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="reference.md",
+        full_path=str(notes_dir / "reference.md"),
+        created_at=datetime(2026, 4, 9, tzinfo=UTC),
+        mtime=datetime(2026, 4, 9, tzinfo=UTC),
+        body="alpha",
+        click_count=0,
+    )
+
+    monkeypatch.setattr(search_service_module.time_module, "time", lambda: datetime(2026, 5, 15, tzinfo=UTC).timestamp())
+    service._sync_obsidian_access_counts()
+
+    rows = connection.execute(
+        """
+        SELECT file_name, obsidian_click_count, obsidian_rank_score
+        FROM files
+        ORDER BY obsidian_rank_score DESC
+        """
+    ).fetchall()
+    assert [row["file_name"] for row in rows] == ["reference.md", "scratch.md"]
+    assert [row["obsidian_click_count"] for row in rows] == [2, 30]
+    assert rows[0]["obsidian_rank_score"] > rows[1]["obsidian_rank_score"]
 
 
 def test_search_sorts_by_combined_obsidian_access_count_desc(tmp_path: Path, monkeypatch) -> None:
@@ -2263,6 +2344,7 @@ def _insert_indexed_markdown(
     body: str,
     click_count: int,
     obsidian_click_count: int = 0,
+    obsidian_rank_score: float = 0.0,
     source_type: str = "local",
 ) -> int:
     """
@@ -2277,8 +2359,9 @@ def _insert_indexed_markdown(
         """
         INSERT INTO files(
             full_path, normalized_path, file_name, file_ext,
-            created_at, mtime, size, indexed_at, last_error, click_count, obsidian_click_count, source_type
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+            created_at, mtime, size, indexed_at, last_error,
+            click_count, obsidian_click_count, obsidian_rank_score, source_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
         """,
         (
             full_path,
@@ -2291,6 +2374,7 @@ def _insert_indexed_markdown(
             indexed_at,
             click_count,
             obsidian_click_count,
+            obsidian_rank_score,
             source_type,
         ),
     )
@@ -2304,4 +2388,3 @@ def _insert_indexed_markdown(
     )
     connection.commit()
     return file_id
-

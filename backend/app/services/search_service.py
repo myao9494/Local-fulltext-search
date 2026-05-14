@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from html import escape
 import json
 import logging
+import math
 from pathlib import Path
 import re
 from sqlite3 import Connection
@@ -12,6 +13,7 @@ from urllib.parse import urlparse, urlunparse
 from fastapi import HTTPException, status
 
 from app.db.connection import get_connection
+from app.db.schema import initialize_schema
 from app.extractors.text_extractor import normalize_extension_filter
 from app.models.search import IndexedSearchRequest, SearchQueryParams, SearchResponse, SearchResultItem
 from app.services.cjk_bigram import build_cjk_bigram_match_query
@@ -24,6 +26,7 @@ _BACKGROUND_REFRESH_LAST_SCHEDULED_AT: dict[tuple[str, str, int, str], float] = 
 _OBSIDIAN_SYNC_LOCK = threading.Lock()
 _OBSIDIAN_SYNC_RUNNING = False
 BACKGROUND_REFRESH_RETRY_COOLDOWN_SECONDS = 30.0
+OBSIDIAN_RANK_SCORE_SCALE = 1000.0
 
 logger = logging.getLogger(__name__)
 
@@ -597,6 +600,7 @@ class SearchService:
                         scoped_files.mtime,
                         scoped_files.click_count,
                         scoped_files.obsidian_click_count,
+                        scoped_files.obsidian_rank_score,
                         scoped_files.source_type,
                         filtered.snippet,
                         filtered.segment_type,
@@ -672,6 +676,7 @@ class SearchService:
                             scoped_files.mtime,
                             scoped_files.click_count,
                             scoped_files.obsidian_click_count,
+                            scoped_files.obsidian_rank_score,
                             scoped_files.source_type,
                             filtered.snippet,
                             filtered.segment_type,
@@ -693,6 +698,7 @@ class SearchService:
                         paged_matches.mtime,
                         paged_matches.click_count,
                         paged_matches.obsidian_click_count,
+                        paged_matches.obsidian_rank_score,
                         paged_matches.source_type,
                         paged_matches.snippet,
                         paged_matches.segment_type,
@@ -700,7 +706,10 @@ class SearchService:
                         total_count.total
                     FROM total_count
                     LEFT JOIN paged_matches ON 1 = 1
-                    ORDER BY paged_matches.match_rank, paged_matches.score, paged_matches.mtime DESC
+                    ORDER BY paged_matches.match_rank,
+                             paged_matches.score,
+                             paged_matches.obsidian_rank_score DESC,
+                             paged_matches.mtime DESC
                     """,
                     tuple(paged_query_values),
                 ).fetchall()
@@ -815,6 +824,7 @@ class SearchService:
                 scoped_files.mtime,
                 scoped_files.click_count,
                 scoped_files.obsidian_click_count,
+                scoped_files.obsidian_rank_score,
                 scoped_files.source_type,
                 file_segments.content
             FROM scoped_files
@@ -937,7 +947,7 @@ class SearchService:
 
     def _schedule_obsidian_access_sync(self) -> None:
         """
-        Obsidian のアクセス数同期は検索完了後に非同期で行い、次回検索の順位へ反映する。
+        Obsidian の利用状況同期は検索完了後に非同期で行い、次回検索の順位へ反映する。
         """
         global _OBSIDIAN_SYNC_RUNNING
         with _OBSIDIAN_SYNC_LOCK:
@@ -949,6 +959,7 @@ class SearchService:
             connection: Connection | None = None
             try:
                 connection = get_connection()
+                initialize_schema(connection)
                 SearchService(connection=connection)._sync_obsidian_access_counts()
             finally:
                 if connection is not None:
@@ -961,7 +972,7 @@ class SearchService:
 
     def _sync_obsidian_access_counts(self) -> None:
         """
-        sidebar-explorer の accessCounts を files.obsidian_click_count へ同期する。
+        sidebar-explorer の data.json からアクセス数と重要度スコアを files へ同期する。
         """
         configured_path = self.index_service.get_app_settings().obsidian_sidebar_explorer_data_path
         if not configured_path:
@@ -978,8 +989,11 @@ class SearchService:
             # 読み取り失敗時は静かに終了する
             return
 
+        raw_metrics = payload.get("fileMetrics") or payload.get("files") or payload.get("metrics")
         raw_access_counts = payload.get("accessCounts")
-        if not isinstance(raw_access_counts, dict):
+        if raw_metrics is not None and not isinstance(raw_metrics, dict):
+            raw_metrics = None
+        if raw_metrics is None and not isinstance(raw_access_counts, dict):
             return
 
         # .obsidian ディレクトリの親を Vault ルートとして特定する。
@@ -999,30 +1013,84 @@ class SearchService:
         self.connection.execute(
             """
             UPDATE files
-            SET obsidian_click_count = 0
+            SET obsidian_click_count = 0,
+                obsidian_rank_score = 0.0
             WHERE normalized_path >= ? AND normalized_path < ?
             """,
             (prefix_start, prefix_end),
         )
 
-        updates: list[tuple[int, str]] = []
-        for relative_path, raw_count in raw_access_counts.items():
+        updates: list[tuple[int, float, str]] = []
+        raw_items = raw_metrics if isinstance(raw_metrics, dict) else raw_access_counts
+        for relative_path, raw_value in raw_items.items():
             if not isinstance(relative_path, str):
                 continue
-            try:
-                access_count = int(raw_count)
-            except (TypeError, ValueError):
-                continue
+            metrics = raw_value if isinstance(raw_value, dict) else {"accessCount": raw_value}
+            access_count = self._coerce_non_negative_int(
+                metrics.get("accessCount", raw_access_counts.get(relative_path) if isinstance(raw_access_counts, dict) else 0)
+            )
+            rank_score = self._calculate_obsidian_rank_score(metrics)
             normalized_full_path = normalize_path_str(Path(vault_root) / Path(relative_path))
-            updates.append((max(access_count, 0), normalized_full_path))
+            updates.append((access_count, rank_score, normalized_full_path))
 
         if updates:
             self.connection.executemany(
-                "UPDATE files SET obsidian_click_count = ? WHERE normalized_path = ?",
+                "UPDATE files SET obsidian_click_count = ?, obsidian_rank_score = ? WHERE normalized_path = ?",
                 updates,
             )
         self.connection.commit()
-        logger.info("Synced %d Obsidian access counts from %s", len(updates), vault_root)
+        logger.info("Synced %d Obsidian ranking metrics from %s", len(updates), vault_root)
+
+    def _calculate_obsidian_rank_score(self, metrics: dict[str, object]) -> float:
+        """
+        Obsidian ノートの重要度を、検索語一致を壊さない補助スコアへ正規化する。
+        """
+        now_ms = time_module.time() * 1000
+        access_score = self._log_score(metrics.get("accessCount"))
+        backlink_score = self._log_score(metrics.get("backlinkCount"))
+        last_opened_score = self._recency_score(metrics.get("lastOpenedAt"), now_ms, half_life_days=21)
+        modified_score = self._recency_score(metrics.get("modifiedAt"), now_ms, half_life_days=45)
+        outgoing_score = self._log_score(metrics.get("outgoingLinkCount"))
+        attachment_score = self._log_score(metrics.get("attachmentCount"))
+        heading_score = self._log_score(metrics.get("headingCount"))
+        tag_score = self._log_score(metrics.get("tagCount"))
+
+        return round(
+            OBSIDIAN_RANK_SCORE_SCALE
+            * (
+                0.28 * backlink_score
+                + 0.22 * access_score
+                + 0.16 * last_opened_score
+                + 0.1 * modified_score
+                + 0.08 * outgoing_score
+                + 0.06 * tag_score
+                + 0.05 * heading_score
+                + 0.05 * attachment_score
+            ),
+            6,
+        )
+
+    def _log_score(self, value: object) -> float:
+        return min(1.0, math.log1p(self._coerce_non_negative_int(value)) / math.log1p(50))
+
+    def _recency_score(self, value: object, now_ms: float, *, half_life_days: int) -> float:
+        timestamp = self._coerce_non_negative_float(value)
+        if timestamp <= 0 or timestamp > now_ms:
+            return 0.0
+        age_days = (now_ms - timestamp) / (1000 * 60 * 60 * 24)
+        return 0.5 ** (age_days / half_life_days)
+
+    def _coerce_non_negative_int(self, value: object) -> int:
+        try:
+            return max(int(value), 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _coerce_non_negative_float(self, value: object) -> float:
+        try:
+            return max(float(value), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
 
     def _resolve_snippet(
         self,
@@ -1437,6 +1505,7 @@ class SearchService:
                     files.mtime,
                     files.click_count,
                     files.obsidian_click_count,
+                    files.obsidian_rank_score,
                     files.source_type
                 FROM files
                 WHERE {where_clause}
@@ -1451,7 +1520,7 @@ class SearchService:
         """
         direction = "ASC" if sort_order == "asc" else "DESC"
         sort_column = self._resolve_sort_column(sort_by, table_alias=table_alias)
-        return f"filtered.match_rank, filtered.score, {sort_column} {direction}, {table_alias}.id DESC"
+        return f"filtered.match_rank, filtered.score, {table_alias}.obsidian_rank_score DESC, {sort_column} {direction}, {table_alias}.id DESC"
 
     def _build_combined_order_by_clause(self, *, sort_by: str, sort_order: str, table_alias: str) -> str:
         """
@@ -1459,7 +1528,7 @@ class SearchService:
         """
         direction = "ASC" if sort_order == "asc" else "DESC"
         sort_column = self._resolve_sort_column(sort_by, table_alias=table_alias)
-        return f"{table_alias}.match_rank, {table_alias}.score, {sort_column} {direction}, {table_alias}.file_id DESC"
+        return f"{table_alias}.match_rank, {table_alias}.score, {table_alias}.obsidian_rank_score DESC, {sort_column} {direction}, {table_alias}.file_id DESC"
 
     def _build_regex_order_by_clause(self, *, sort_by: str, sort_order: str, table_alias: str = "files") -> str:
         """
@@ -1467,7 +1536,7 @@ class SearchService:
         """
         direction = "ASC" if sort_order == "asc" else "DESC"
         sort_column = self._resolve_sort_column(sort_by, table_alias=table_alias)
-        return f"{sort_column} {direction}, {table_alias}.id DESC"
+        return f"{table_alias}.obsidian_rank_score DESC, {sort_column} {direction}, {table_alias}.id DESC"
 
     def _resolve_sort_column(self, sort_by: str, *, table_alias: str = "files") -> str:
         """
