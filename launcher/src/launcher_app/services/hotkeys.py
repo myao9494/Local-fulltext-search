@@ -3,7 +3,9 @@
 """
 
 from collections.abc import Callable
+import ctypes
 import platform
+import time
 from typing import Any
 
 
@@ -38,10 +40,19 @@ class ModifierChordState:
     修飾キーだけのショートカットを安定して検出するため、押下状態と発火済み状態を管理する。
     """
 
-    def __init__(self, required_modifiers: frozenset[str]) -> None:
+    def __init__(
+        self,
+        required_modifiers: frozenset[str],
+        *,
+        now: Callable[[], float] = time.monotonic,
+        max_chord_seconds: float = 1.0,
+    ) -> None:
         self.required_modifiers = required_modifiers
         self.pressed_modifiers: set[str] = set()
+        self.pressed_at: dict[str, float] = {}
         self.activated = False
+        self.now = now
+        self.max_chord_seconds = max_chord_seconds
 
     def press(self, modifier_name: str | None) -> bool:
         """
@@ -49,9 +60,14 @@ class ModifierChordState:
         """
         if modifier_name is None:
             return False
+        current_time = self.now()
+        self._discard_stale_modifiers(current_time)
         self.pressed_modifiers.add(modifier_name)
+        self.pressed_at[modifier_name] = current_time
         if self.required_modifiers.issubset(self.pressed_modifiers) and not self.activated:
             self.activated = True
+            self.pressed_modifiers.clear()
+            self.pressed_at.clear()
             return True
         return False
 
@@ -62,7 +78,31 @@ class ModifierChordState:
         if modifier_name is None:
             return
         self.pressed_modifiers.discard(modifier_name)
+        self.pressed_at.pop(modifier_name, None)
         if not self.required_modifiers.issubset(self.pressed_modifiers):
+            self.activated = False
+
+    def reset(self) -> None:
+        """
+        OS 側の実キー状態と合わない場合に、推測した押下状態を破棄する。
+        """
+        self.pressed_modifiers.clear()
+        self.pressed_at.clear()
+        self.activated = False
+
+    def _discard_stale_modifiers(self, current_time: float) -> None:
+        """
+        release を取りこぼした古い修飾キー状態を組み合わせ判定から外す。
+        """
+        stale_modifiers = [
+            modifier
+            for modifier, pressed_time in self.pressed_at.items()
+            if current_time - pressed_time > self.max_chord_seconds
+        ]
+        for modifier in stale_modifiers:
+            self.pressed_modifiers.discard(modifier)
+            self.pressed_at.pop(modifier, None)
+        if stale_modifiers and not self.required_modifiers.issubset(self.pressed_modifiers):
             self.activated = False
 
 
@@ -77,10 +117,13 @@ class GlobalHotkeyController:
         *,
         hotkey: str | None = None,
         required_modifiers: frozenset[str] | None = None,
+        modifier_state_verifier: Callable[[frozenset[str]], bool] | None = None,
     ) -> None:
         self.on_activate = on_activate
         self.hotkey = hotkey or hotkey_spec_for_platform()
-        self.state = ModifierChordState(required_modifiers or modifier_names_for_platform())
+        self.required_modifiers = required_modifiers or modifier_names_for_platform()
+        self.state = ModifierChordState(self.required_modifiers)
+        self.modifier_state_verifier = modifier_state_verifier or _required_modifiers_are_physically_down
         self._listener: Any | None = None
 
     def start(self) -> bool:
@@ -111,6 +154,9 @@ class GlobalHotkeyController:
         pynput のキー押下イベントを修飾キー名へ正規化して発火判定する。
         """
         if self.state.press(_modifier_name(key)):
+            if not self.modifier_state_verifier(self.required_modifiers):
+                self.state.reset()
+                return
             self.on_activate()
 
     def _on_release(self, key: Any) -> None:
@@ -138,3 +184,29 @@ def _modifier_name(key: Any) -> str | None:
     if normalized in {"shift", "shift_l", "shift_r"}:
         return "shift"
     return None
+
+
+def _required_modifiers_are_physically_down(required_modifiers: frozenset[str]) -> bool:
+    """
+    Windows では発火直前に OS の実キー状態を確認し、Ctrl 単独の誤発火を防ぐ。
+    """
+    if platform.system() != "Windows":
+        return True
+    try:
+        return all(_windows_modifier_is_down(modifier) for modifier in required_modifiers)
+    except Exception:
+        return False
+
+
+def _windows_modifier_is_down(modifier_name: str) -> bool:
+    """
+    Win32 の GetAsyncKeyState で修飾キーが現在押されているか確認する。
+    """
+    key_codes = {
+        "ctrl": (0x11, 0xA2, 0xA3),
+        "cmd": (0x5B, 0x5C),
+        "alt": (0x12, 0xA4, 0xA5),
+        "shift": (0x10, 0xA0, 0xA1),
+    }.get(modifier_name, ())
+    user32 = ctypes.windll.user32
+    return any(user32.GetAsyncKeyState(key_code) & 0x8000 for key_code in key_codes)

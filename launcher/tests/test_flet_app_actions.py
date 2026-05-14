@@ -272,6 +272,79 @@ def test_move_selection_scrolls_to_selected_result() -> None:
     assert results_column.scroll_calls == [{"offset": 0, "duration": 120}]
 
 
+def test_keyboard_accepts_windows_flet_arrow_and_enter_names(monkeypatch: Any) -> None:
+    """
+    Windows の Flet で揺れるキー名でも矢印選択と Enter 起動を処理する。
+    """
+    opened_urls: list[str] = []
+    client = StubClient()
+    app = LauncherApp(StubPage(), client, LauncherConfig(web_base_url="http://localhost:8001"))  # type: ignore[arg-type]
+    app.status = StubStatus()
+    app.results_column = StubResultsColumn()
+    app.results = [make_item(full_path="/tmp/docs/a.md"), make_item(full_path="/tmp/docs/b.md")]
+    app._render_results = lambda: None  # type: ignore[method-assign]
+    monkeypatch.setattr("webbrowser.open", lambda url: opened_urls.append(url))
+
+    app._on_keyboard(type("Event", (), {"key": "ArrowDown"})())
+    app._on_keyboard(type("Event", (), {"key": "Numpad Enter"})())
+
+    assert app.selected_index == 1
+    assert opened_urls == ["http://localhost:8001/api/fullpath?path=%2Ftmp%2Fdocs%2Fb.md"]
+    assert client.clicked_file_ids == [42]
+
+
+def test_enter_open_is_deduplicated_when_submit_and_keyboard_both_fire(monkeypatch: Any) -> None:
+    """
+    TextField submit と page keyboard の両方が同じ Enter を拾っても URL は 1 回だけ開く。
+    """
+    now = 100.0
+    opened_urls: list[str] = []
+    client = StubClient()
+    app = LauncherApp(StubPage(), client, LauncherConfig(web_base_url="http://localhost:8001"))  # type: ignore[arg-type]
+    app.status = StubStatus()
+    app.results = [make_item(full_path="/tmp/docs/a.md")]
+    monkeypatch.setattr("webbrowser.open", lambda url: opened_urls.append(url))
+    monkeypatch.setattr("launcher_app.ui.app.time.monotonic", lambda: now)
+
+    app._open_selected()
+    app._on_keyboard(type("Event", (), {"key": "Enter"})())
+
+    assert opened_urls == ["http://localhost:8001/api/fullpath?path=%2Ftmp%2Fdocs%2Fa.md"]
+    assert client.clicked_file_ids == [42]
+
+
+def test_select_and_open_deduplicates_same_item_like_click(monkeypatch: Any) -> None:
+    """
+    Enter 由来の複数イベントが直接起動処理へ来ても、クリックと同じく 1 回だけ開く。
+    """
+    now = 100.0
+    opened_urls: list[str] = []
+    client = StubClient()
+    app = LauncherApp(StubPage(), client, LauncherConfig(web_base_url="http://localhost:8001"))  # type: ignore[arg-type]
+    monkeypatch.setattr("webbrowser.open", lambda url: opened_urls.append(url))
+    monkeypatch.setattr("launcher_app.ui.app.time.monotonic", lambda: now)
+
+    item = make_item(full_path="/tmp/docs/a.md")
+    app._select_and_open(item)
+    app._select_and_open(item)
+
+    assert opened_urls == ["http://localhost:8001/api/fullpath?path=%2Ftmp%2Fdocs%2Fa.md"]
+    assert client.clicked_file_ids == [42]
+
+
+def test_keyboard_accepts_windows_flet_escape_name() -> None:
+    """
+    Windows の Flet で Escape の表記が揺れてもランチャーを隠す。
+    """
+    page = StubPage()
+    app = LauncherApp(page, StubClient(), LauncherConfig())  # type: ignore[arg-type]
+
+    app._on_keyboard(type("Event", (), {"key": "Esc"})())
+
+    assert app.is_hidden is True
+    assert page.window.minimized is True
+
+
 def test_move_selection_scrolls_down_after_visible_window() -> None:
     """
     表示可能件数を超えて下へ移動したらリストを下方向へスクロールする。

@@ -58,6 +58,8 @@ class LauncherApp:
         self.is_hidden = False
         self.search_sequence = 0
         self._show_time: float = 0.0
+        self._last_open_request_time: float = 0.0
+        self._last_open_request_key = ""
 
     def build(self) -> None:
         """
@@ -347,7 +349,7 @@ class LauncherApp:
         """
         矢印・Enter・Escape のランチャー操作を処理する。
         """
-        key = getattr(event, "key", "")
+        key = _normalize_flet_key_name(getattr(event, "key", ""))
         if key == "Escape":
             self._hide_window()
         elif key == "Arrow Down":
@@ -413,7 +415,10 @@ class LauncherApp:
         指定結果を開いた後、ランチャーを自動で隠す。
         """
         try:
-            webbrowser.open(primary_web_url_for_item(item, self.config.web_base_url))
+            open_url = primary_web_url_for_item(item, self.config.web_base_url)
+            if self._is_duplicate_open_request(open_url):
+                return
+            webbrowser.open(open_url)
             if item.result_kind == "file":
                 self.client.record_click(item.file_id)
             self._hide_window()
@@ -441,6 +446,17 @@ class LauncherApp:
         except LauncherApiError as error:
             self.status.value = f"保存場所を開けませんでした: {error}"
         self.page.update()
+
+    def _is_duplicate_open_request(self, request_key: str) -> bool:
+        """
+        Enter の submit/key イベント重複で同じ結果を複数回開かないようにする。
+        """
+        current_time = time.monotonic()
+        if request_key == self._last_open_request_key and current_time - self._last_open_request_time < 1.0:
+            return True
+        self._last_open_request_key = request_key
+        self._last_open_request_time = current_time
+        return False
 
     def _copy_path(self, item: SearchResultItem) -> None:
         """
@@ -521,3 +537,20 @@ def _log_task_error(future: Any) -> None:
         future.result()
     except Exception:
         logger.exception("Flet window task failed.")
+
+
+def _normalize_flet_key_name(key: object) -> str:
+    """
+    Flet のバージョンや Windows の入力経路で揺れるキー名をランチャー内部表現へ揃える。
+    """
+    normalized = str(key or "").strip().lower().replace("_", " ").replace("-", " ")
+    normalized = " ".join(normalized.split())
+    if normalized in {"escape", "esc"}:
+        return "Escape"
+    if normalized in {"arrow down", "arrowdown", "down"}:
+        return "Arrow Down"
+    if normalized in {"arrow up", "arrowup", "up"}:
+        return "Arrow Up"
+    if normalized in {"enter", "return", "numpad enter", "numpadenter"}:
+        return "Enter"
+    return str(key or "")
