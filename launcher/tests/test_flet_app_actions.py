@@ -272,6 +272,27 @@ def test_move_selection_scrolls_to_selected_result() -> None:
     assert results_column.scroll_calls == [{"offset": 0, "duration": 120}]
 
 
+def test_move_selection_refocuses_query_for_enter_open() -> None:
+    """
+    Windows Flet で結果側へフォーカスが移っても、矢印移動後は Enter 起動できるよう検索欄へ戻す。
+    """
+    page = StubPage()
+    focus_calls: list[str] = []
+    app = LauncherApp(page, StubClient(), LauncherConfig())  # type: ignore[arg-type]
+    app.query = type("Query", (), {"focus": lambda self: focus_calls.append("focus")})()
+    app.status = StubStatus()
+    app.results_column = StubResultsColumn()
+    app.results = [make_item(full_path="/tmp/docs/a.md"), make_item(full_path="/tmp/docs/b.md")]
+    app._render_results = lambda: None  # type: ignore[method-assign]
+
+    app._move_selection(1)
+
+    assert focus_calls == []
+    assert len(page.tasks) == 1
+    page.tasks[0]()
+    assert focus_calls == ["focus"]
+
+
 def test_keyboard_accepts_windows_flet_arrow_and_enter_names(monkeypatch: Any) -> None:
     """
     Windows の Flet で揺れるキー名でも矢印選択と Enter 起動を処理する。

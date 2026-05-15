@@ -241,7 +241,7 @@ class LauncherApp:
         self.selected_index = 0
         self.status.value = ""
         self._render_results()
-        self._run_window_task(self.query.focus)
+        self._focus_query()
 
     def _search(self, query: str, sequence: int) -> None:
         """
@@ -383,6 +383,7 @@ class LauncherApp:
         self.selected_index = (self.selected_index + delta) % len(self.results)
         self._render_results()
         self._scroll_to_selected(delta)
+        self._focus_query()
 
     def _scroll_to_selected(self, delta: int = 0) -> None:
         """
@@ -505,6 +506,15 @@ class LauncherApp:
         """
         webbrowser.open("http://127.0.0.1:8079/")
         self._hide_window()
+
+    def _focus_query(self) -> None:
+        """
+        Windows の Flet で結果側へ移ったフォーカスを検索欄へ戻し、Enter 起動を安定させる。
+        """
+        query = getattr(self, "query", None)
+        focus = getattr(query, "focus", None)
+        if callable(focus):
+            self._run_window_task(focus)
 
     @staticmethod
     def _platform_name() -> str:
