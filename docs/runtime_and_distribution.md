@@ -18,7 +18,9 @@
 
 この運用で必要なのは基本的に Python のみです。  
 Node.js / npm は、フロントエンドを再ビルドするときだけ必要です。
-デスクトップランチャーも同時に使う場合は、Python 環境へ `launcher/requirements.txt` も入れます。
+`backend/requirements.txt` にはデスクトップランチャーの依存関係も含めています。
+
+`launcher/requirements.txt` は、ランチャーだけを単体で動かす環境を最小構成で用意したい場合に使います。
 
 ## 起動方法ごとの違い
 
@@ -55,7 +57,7 @@ Node.js / npm は、フロントエンドを再ビルドするときだけ必要
 
 - Python
 - `frontend/dist/` がリポジトリに含まれていること
-- デスクトップランチャーを使う場合は `launcher/requirements.txt` の依存も入っていること
+- デスクトップランチャーを使う場合は `backend/requirements.txt` の依存が入っていること
 - Windows の完全オフライン環境でデスクトップランチャーを使う場合は `launcher/vendor/flet-view/` に Flet View を同梱していること
 
 動作:
@@ -73,7 +75,6 @@ Node.js / npm は、フロントエンドを再ビルドするときだけ必要
 cd backend
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe -m pip install -r ..\launcher\requirements.txt
 ```
 
 ### 毎回の起動
@@ -86,6 +87,8 @@ cd backend
 既定のアクセス先:
 
 - `http://127.0.0.1:8079/`
+
+注意: 現行コードでは、Webフロントの検索結果リンクは `http://localhost:8001` を直接組み立て、ランチャーの `LAUNCHER_WEB_BASE_URL` 既定値も `http://localhost:8001` です。配布先で 8079 だけを使う場合は、ランチャー側は起動環境で `LAUNCHER_WEB_BASE_URL` を上書きし、フロントエンド側はリンク生成を合わせて再ビルドする必要があります。
 
 ## Windows ランチャーの完全オフライン起動
 
@@ -148,16 +151,17 @@ $env:SEARCH_APP_PORT="8079"
 
 - `search.db`
 - `exclude_keywords.txt`
+- `web_exclude_keywords.txt`
 - `hidden_indexed_targets.txt`
 - `synonym_groups.txt`
 - `obsidian_sidebar_explorer_data_path.txt`
-- `search_target_folders.txt`
 - `index_selected_extensions.txt`
 - `custom_content_extensions.txt`
 - `custom_filename_extensions.txt`
 - `launcher.log` は `backend/` 直下に保存する
 
 保存先ディレクトリは `SEARCH_APP_DATA_DIR` で、各ファイル名は `SEARCH_APP_*_NAME` 系の環境変数で上書きできる。
+検索対象フォルダはテキストファイルではなく SQLite の `targets` テーブルに保存する。
 
 ## Git 管理方針
 
