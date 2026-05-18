@@ -174,6 +174,50 @@ def test_search_can_include_gantt_tasks_with_local_results(tmp_path: Path, monke
     assert next(item for item in result.items if item.source_type == "gantt").gantt_link == "https://example.test/task"
 
 
+def test_search_gantt_ignores_hyperlink_for_matching_and_exclusion(tmp_path: Path, monkeypatch) -> None:
+    """
+    gantt の hyperlink は検索本文から除外し、リンク表示用の値としてだけ扱う。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+
+    class StubResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(
+                {
+                    "tasks": [
+                        {
+                            "id": 154,
+                            "text": "学校",
+                            "memo": "PTA総会",
+                            "hyperlink": "http://localhost:5001/view/house/school?filter=md,svg,csv,pdf",
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    monkeypatch.setattr(search_service_module, "urlopen", lambda request, timeout: StubResponse())
+
+    result = service.search(
+        SearchQueryParams(
+            q="学校 -md",
+            source_type="gantt",
+            full_path="",
+            search_all_enabled=True,
+            index_depth=0,
+        )
+    )
+
+    assert result.total == 1
+    assert result.items[0].gantt_link == "http://localhost:5001/view/house/school?filter=md,svg,csv,pdf"
+    assert "hyperlink" not in result.items[0].snippet
+
+
 def test_search_web_source_includes_exact_page_url(tmp_path: Path) -> None:
     """
     Web 検索はベース URL がページそのものの場合も、そのページ自身を候補に含める。

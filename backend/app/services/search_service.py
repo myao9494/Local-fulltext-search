@@ -29,6 +29,7 @@ _OBSIDIAN_SYNC_LOCK = threading.Lock()
 _OBSIDIAN_SYNC_RUNNING = False
 BACKGROUND_REFRESH_RETRY_COOLDOWN_SECONDS = 30.0
 OBSIDIAN_RANK_SCORE_SCALE = 1000.0
+GANTT_LINK_FIELD_NAMES = frozenset({"hyperlink", "link", "url", "href", "input_url", "external_url"})
 
 logger = logging.getLogger(__name__)
 
@@ -211,10 +212,13 @@ class SearchService:
     def _stringify_gantt_task(self, task: object) -> str:
         """
         gantt タスクの任意 JSON を検索しやすい平文へ変換する。
+        hyperlink などのリンク項目は検索・除外語判定に使わない。
         """
         if isinstance(task, dict):
             parts: list[str] = []
             for key, value in task.items():
+                if key.lower() in GANTT_LINK_FIELD_NAMES:
+                    continue
                 if isinstance(value, (dict, list)):
                     parts.append(self._stringify_gantt_task(value))
                 elif value is not None:
@@ -254,7 +258,7 @@ class SearchService:
         """
         if not isinstance(task, dict):
             return None
-        for key in ("link", "url", "href", "input_url", "external_url"):
+        for key in ("hyperlink", "link", "url", "href", "input_url", "external_url"):
             value = task.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
