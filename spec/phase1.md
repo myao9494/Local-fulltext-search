@@ -52,7 +52,8 @@
 - 検索時に対象フォルダのフルパスを指定する
 - 既存インデックス全体を対象に検索する場合は `full_path` を空にできる
 - 検索時に階層数を指定する
-- 事前のフォルダ登録 UI は持たない
+- 検索対象フォルダを登録・有効化・無効化できる
+- 検索対象フォルダが登録済みの場合、フォルダ未指定検索は有効な検索対象フォルダを対象にする
 - 必要ならフォルダ選択ダイアログでフルパス入力を補助する
 
 ### 差分更新
@@ -86,9 +87,12 @@
 - `q`
 - `full_path`
 - `search_all_enabled`
+- `skip_refresh`
+- `source_type`
 - `index_depth`
 - `refresh_window_minutes`
 - `regex_enabled`
+- `search_target`
 - `index_types`
 - `types`
 - `exclude_keywords`
@@ -99,6 +103,7 @@
 - `created_to`
 - `limit`
 - `offset`
+- `include_snippets`
 
 ### `POST /api/folders/pick`
 - サーバ側でネイティブのフォルダ選択ダイアログを開く
@@ -121,10 +126,13 @@
 
 ### `GET /api/index/settings` / `PUT /api/index/settings`
 - 除外キーワード
+- Web除外キーワード
 - 同義語リスト
 - インデックス対象拡張子
 - 本文抽出対象の追加拡張子
 - ファイル名のみ対象の追加拡張子
+- 非表示にしたインデックス済み対象
+- Obsidian sidebar-explorer の data.json パス
 
 ### `GET /api/index/failed-files`
 以下を返す:
@@ -135,7 +143,27 @@
 
 ### `GET /api/index/targets` / `DELETE /api/index/targets`
 - 実際にインデックス済みファイルを含むフォルダ一覧を返す
+- `source_type=web` ではインデックス済み Web ページを URL 単位で返す
 - 選択したフォルダ配下のインデックスと失敗履歴をまとめて削除できる
+
+### `GET /api/index/search-targets` / `PUT /api/index/search-targets` / `POST /api/index/search-targets` / `DELETE /api/index/search-targets`
+- 検索対象フォルダ一覧を返す
+- `folder_path` 単位で有効/無効を更新する
+- 新規の検索対象フォルダまたは Web URL を追加する
+- 検索対象フォルダ一覧から指定パスを削除する
+
+### `GET /api/index/search-targets/coverage`
+- 指定したパスが有効な検索対象フォルダ配下かどうかを返す
+
+### `POST /api/index/search-targets/reindex`
+- 指定した検索対象フォルダ群を順次再インデックスする
+
+### `GET /api/index/scheduler` / `POST /api/index/scheduler/start`
+- スケジューラー設定・実行状況・ログを取得する
+- 指定日時に対象フォルダを別プロセスで順次インデックスする
+
+### `GET /api/launcher/status` / `POST /api/launcher/start` / `POST /api/launcher/stop` / `POST /api/launcher/restart`
+- デスクトップランチャーの状態確認・起動・停止・再起動を行う
 
 ### `POST /api/index/cancel`
 - 実行中インデックスへ中止要求を送る
@@ -150,6 +178,7 @@
 
 ### トップ画面
 - 画面上部のタブで `検索` と `インデックス済みフォルダ` を切り替える
+- 画面上部のタブで `インデックス済みWebページ`、`検索対象フォルダ`、`スケジューラー`、`ランチャー` へ切り替える
 - 検索対象フォルダのフルパス入力
 - `全データベース` 切り替え
 - 階層数入力
@@ -181,6 +210,7 @@
 - 対象拡張子の選択
 - 追加拡張子の登録 / 削除
 - 除外キーワードの設定
+- Web除外キーワードの設定
 - 同義語リストの設定
 - 既定検索フォルダの設定
 - 失敗ファイル一覧
@@ -201,6 +231,10 @@
 - `exclude_keywords`
 - `index_depth`
 - `selected_extensions`
+- `is_search_target_enabled`
+- `indexed_file_count`
+- `index_version`
+- `source_type`
 - `last_indexed_at`
 - `created_at`
 - `updated_at`
@@ -214,9 +248,12 @@
 - `mtime`
 - `created_at`
 - `click_count`
+- `obsidian_click_count`
+- `obsidian_rank_score`
 - `size`
 - `indexed_at`
 - `last_error`
+- `source_type`
 
 ### file_segments
 - `id`
@@ -246,6 +283,9 @@
 - `error_message`
 - `last_failed_at`
 
+### scheduler_settings / scheduler_paths / scheduler_runtime / scheduler_logs / scheduler_daily_runs
+- スケジューラー設定、対象パス、実行状態、ログ、Windows 固定スケジュールの二重起動防止キーを保持する
+
 ## 完了条件
 
 1. 検索時に `フルパス + 階層数` を指定できる
@@ -261,8 +301,11 @@
 
 ## 備考
 
-この Phase 1 ドキュメントは現行コードに合わせて更新している。  
-以前のフォルダ登録中心の記述は、現在の実装では採用していない。
+この Phase 1 ドキュメントは現行コードに合わせて更新している。
+
+以前の「検索時入力だけでフォルダ登録 UI を持たない」記述は、現在の実装では採用していない。
+
+現在は検索対象フォルダを登録・有効化・無効化し、フォルダ未指定検索やスケジューラーから再利用する。
 
 現在の通常配布では、ビルド済みの `frontend/dist/` を FastAPI から同一オリジン配信する。  
 そのため、配布先の通常運用では Vite 開発サーバの起動は必須ではない。

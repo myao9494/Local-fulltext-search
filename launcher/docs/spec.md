@@ -8,9 +8,9 @@
 - **SpotlightスタイルUI**: 画面中央にフローティング表示される、枠のないスタイリッシュな検索バー。
 - **リアルタイム検索**: 入力と同時にバックエンドへ問い合わせを行い、結果を動的に表示。
 - **アクション**:
-    - 検索結果タイトル相当のクリック: Web アプリと同じ `http://127.0.0.1:8079/api/fullpath?path=...` または `http://127.0.0.1:8079/?path=...` を開く。
+    - 検索結果タイトル相当のクリック: `LAUNCHER_WEB_BASE_URL` を基準に、ファイルは `/api/fullpath?path=...`、フォルダは `/?path=...` を開く。
     - `Finderで開く`: Web アプリと同じ `/api/files/open-location` を使い、ファイルの場合は親フォルダ、フォルダの場合はそのフォルダを開く。
-    - `フォルダを開く`: Web アプリと同じ `http://127.0.0.1:8079/?path=...` を開く。
+    - `フォルダを開く`: `LAUNCHER_WEB_BASE_URL` を基準に `/?path=...` を開く。
 - **オートハイド**:
     - 実行完了（ファイル起動）時に自動的に非表示。
     - ウィンドウ外をクリック（フォーカス喪失）した際に自動的に非表示。
@@ -20,11 +20,11 @@
 - **視覚効果**: 
     - **Glassmorphism**: 背景に強いブラー (`backdrop-filter: blur(20px)`) をかけ、背後のウィンドウが透ける高級感を演出。
     - **カードデザイン**: WebアプリのUIを踏襲し、スニペット（本文の抜粋）やメタデータを含むリッチな結果表示。
-- **配置**: マウスカーソルが存在するディスプレイの中央に表示。
+- **配置**: macOS 版はマウスカーソルが存在するディスプレイの中央に表示。Flet 版は Flet の `window.center()` に従って中央表示する。
 
 ## 4. 技術スタック
 - **GUIフレームワーク**: macOS では PyObjC / Cocoa `NSPanel`。その他 OS では Flet 版をフォールバックとして利用する。
-- **バックエンド連携**: 既存の FastAPI サーバーに HTTP で接続。ランチャーの初期実装では `/api/search`, `/api/search/click`, `/api/files/open-location` を利用する。
+- **バックエンド連携**: 既存の FastAPI サーバーに HTTP で接続。macOS 検索は `/api/search`、その他 OS の高速検索は `/api/search/indexed` を使い、アクセス数更新に `/api/search/click`、保存場所表示に `/api/files/open-location` を利用する。
 - **グローバルキー監視**: macOS では `CGEventTap` の HID レベル監視を優先して modifier flags を監視し、作成できない場合は session レベルへフォールバックする。補助的に Cocoa `NSEvent` の monitor と `CGEventSourceFlagsState` の watchdog polling も使い、`Command + Option` を検出する。その他 OS では `pynput` を利用する。
 - **スリープ復帰対応**: macOS では `NSWorkspaceWillSleepNotification` / `NSWorkspaceDidWakeNotification` を監視し、復帰時に `CGEventTap` と `NSEvent` monitor を再登録してホットキーを復旧する。
 - **仮想デスクトップ復帰**: パネル表示直前に Space 関連の `NSWindowCollectionBehavior`、window level、非アクティブ時の非表示設定を張り直し、長時間放置による App Nap を抑止する。
@@ -53,7 +53,7 @@ launcher/
 - **検索のプラットフォーム別挙動**:
     - **macOS**: `/api/search` を使い、登録済みフォルダを検索時に順次更新する (`skip_refresh=false`, `search_all_enabled=false`)。
     - **その他 OS**: `/api/search/indexed` を使い、更新チェックをスキップして既存インデックスのみから高速に検索する。
-- 検索結果タイトル相当のクリックは Web アプリと同じ URL (`http://127.0.0.1:8079/api/fullpath?path=...` / `http://127.0.0.1:8079/?path=...`) を既定ブラウザで開く。
+- 検索結果タイトル相当のクリックは `LAUNCHER_WEB_BASE_URL` を基準に、ファイルでは `/api/fullpath?path=...`、フォルダでは `/?path=...` を既定ブラウザで開く。
 - ファイル結果を開いた場合は Web アプリと同じく `/api/search/click` でアクセス数を更新する。
 - `Finderで開く` は Web アプリと同じく `/api/files/open-location` を呼ぶ。
 - macOS では `NSWindowCollectionBehaviorCanJoinAllSpaces` により、アクティブな仮想デスクトップ上へ表示する。
@@ -94,7 +94,7 @@ python run.py
 
 環境変数:
 - `LAUNCHER_API_BASE_URL`: 接続先 API。既定値は `http://127.0.0.1:8079`。
-- `LAUNCHER_WEB_BASE_URL`: Web フロント URL。既定値は `http://127.0.0.1:8079`。
+- `LAUNCHER_WEB_BASE_URL`: 検索結果クリック時に開く Web フロント URL。既定値は `http://localhost:8001`。
 - `LAUNCHER_SEARCH_LIMIT`: ランチャーに表示する検索結果数。既定値は `8`。
 - `LAUNCHER_REQUEST_TIMEOUT`: API タイムアウト秒数。既定値は `5.0`。
 - `SEARCH_APP_LAUNCHER_AUTOSTART`: バックエンド起動時にランチャーも起動するか。`backend/run.py` と `start_dev.sh` では既定で `1`。
@@ -105,8 +105,8 @@ python run.py
 - 起動設定、API リクエスト先、HTTP エラー、検索失敗の詳細は `backend/launcher.log` に出力する。バックエンド側に届いた API は `backend/backend.log` にも出力される。
 
 関連する Web オープン先:
-- ファイル: `http://127.0.0.1:8079/api/fullpath?path=<encoded full_path>`
-- フォルダ: `http://127.0.0.1:8079/?path=<encoded folder_path>`
+- ファイル: `${LAUNCHER_WEB_BASE_URL}/api/fullpath?path=<encoded full_path>`
+- フォルダ: `${LAUNCHER_WEB_BASE_URL}/?path=<encoded folder_path>`
 
 ## 9. 今後の課題（プロトタイプ後に検討）
 - ネオン調のグロー効果などの装飾。

@@ -166,6 +166,8 @@ BACKEND_HOST=0.0.0.0 BACKEND_PORT=8079 ./start_dev.sh
 同一オリジン配信のため、フロントエンドはバックエンドと同じ URL から配布されます。  
 別端末で動かす場合は、その端末から到達できる `BACKEND_HOST` または実ホスト名 / IP でアクセスします。
 
+注意: 現行フロントエンドの検索結果リンクは、ファイル結果を `http://localhost:8001/api/fullpath?path=...`、フォルダ結果を `http://localhost:8001/?path=...` として組み立てます。ランチャーも未指定時の `LAUNCHER_WEB_BASE_URL` は `http://localhost:8001` です。
+
 ## 配布運用
 
 会社PCなどでフロントエンドのビルド環境を用意できない運用を想定し、`frontend/dist/` はリポジトリに含めて配布します。  
@@ -314,13 +316,15 @@ VITE_API_BASE_URL=http://mac-mini:8079 npm run build
 1. 検索語を入力する
 2. 検索対象フォルダのフルパスを入力する
 3. 階層数を入力する
-4. 必要ならハンバーガーメニューから `インデックス更新間隔(分)` を変更する
-5. 必要ならハンバーガーメニューから `対象拡張子` を選ぶ
-6. `Search` を実行する
+4. 必要なら `検索対象に追加` でフォルダまたは Web URL を登録する
+5. 必要ならハンバーガーメニューから `インデックス更新間隔(分)` を変更する
+6. 必要ならハンバーガーメニューから `対象拡張子` を選ぶ
+7. `Search` を実行する
 
 検索時の動作:
 
 - 指定した `フルパス + 階層数` の組み合わせに対応するインデックスがなければ作成する
+- 検索対象フォルダが登録済みなら、フォルダ未指定検索では有効な検索対象フォルダを順次対象にする
 - 既存インデックスがあり、前回更新から設定時間以内なら再走査しない
 - 設定時間を超えていれば差分更新してから検索する
 
@@ -372,7 +376,8 @@ DB について:
 - バックエンド起動時に `data` ディレクトリが自動作成される
 - スキーマはアプリ起動時に自動作成される
 - 既定の DB パスは、起動ディレクトリに依存せず常に `backend/data/search.db`
-- 同じ `backend/data/` 配下に `exclude_keywords.txt`, `hidden_indexed_targets.txt`, `synonym_groups.txt`, `obsidian_sidebar_explorer_data_path.txt`, `search_target_folders.txt`, `index_selected_extensions.txt`, `custom_content_extensions.txt`, `custom_filename_extensions.txt` も保存される
+- 同じ `backend/data/` 配下に `exclude_keywords.txt`, `web_exclude_keywords.txt`, `hidden_indexed_targets.txt`, `synonym_groups.txt`, `obsidian_sidebar_explorer_data_path.txt`, `index_selected_extensions.txt`, `custom_content_extensions.txt`, `custom_filename_extensions.txt` も保存される
+- 検索対象フォルダは `search_target_folders.txt` ではなく SQLite の `targets` テーブルに保存される
 - 保存先を変えたい場合は `SEARCH_APP_DATA_DIR` と `SEARCH_APP_DB_NAME` で上書きできる
 
 例:
@@ -404,6 +409,18 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 - `GET /api/index/failed-files`
 - `GET /api/index/targets`
 - `DELETE /api/index/targets`
+- `GET /api/index/search-targets`
+- `GET /api/index/search-targets/coverage`
+- `PUT /api/index/search-targets`
+- `POST /api/index/search-targets`
+- `DELETE /api/index/search-targets`
+- `POST /api/index/search-targets/reindex`
+- `GET /api/index/scheduler`
+- `POST /api/index/scheduler/start`
+- `GET /api/launcher/status`
+- `POST /api/launcher/start`
+- `POST /api/launcher/stop`
+- `POST /api/launcher/restart`
 - `POST /api/index/cancel`
 - `POST /api/index/reset`
 - `GET /api/search`
@@ -426,8 +443,14 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 - `search_all_enabled`
   - UI の「全データベース」状態を渡すためのフラグ
   - `full_path` も同時に渡した場合は、そのパス条件を保持したままオンデマンド再インデックスだけ抑止する
+- `skip_refresh`
+  - `true` の場合、検索前の再インデックスを抑止して既存 DB だけを検索する
+- `source_type`
+  - `local` または `web`。省略時は `local`
 - `refresh_window_minutes`
 - `regex_enabled`
+- `search_target`
+  - `all`, `body`, `filename`, `folder`, `filename_and_folder`
 - `index_types`
   - 検索前のオンデマンド再インデックス対象拡張子
 - `types`
@@ -440,6 +463,8 @@ SEARCH_APP_DATA_DIR=/path/to/app-data SEARCH_APP_DB_NAME=search.db python run.py
 - `created_to`
 - `limit`
 - `offset`
+- `include_snippets`
+  - `false` の場合、スニペット生成を省いて軽量に返す
 
 ### `POST /api/search`
 
