@@ -11,6 +11,12 @@
     - 検索結果タイトル相当のクリック: `LAUNCHER_WEB_BASE_URL` を基準に、ファイルは `/api/fullpath?path=...`、フォルダは `/?path=...` を開く。
     - `Finderで開く`: Web アプリと同じ `/api/files/open-location` を使い、ファイルの場合は親フォルダ、フォルダの場合はそのフォルダを開く。
     - `フォルダを開く`: `LAUNCHER_WEB_BASE_URL` を基準に `/?path=...` を開く。
+- **gantt メモ追加**:
+    - ランチャー表示中に `Tab` を押すと検索画面とメモ画面を切り替える。
+    - メモ画面では 1 行目を `text`、2 行目以降を `memo` として `LAUNCHER_GANTT_API_BASE_URL/tasks` へ POST する。
+    - `start_date` は当日 00:00:00、`end_date` は翌日 00:00:00、`progress` は `0.1`、`kind_task` は `1` とする。
+    - `Enter` で送信し、macOS は `Command+Enter`、全 OS 共通で `Shift+Enter` を改行として扱う。
+    - `parent` ID は Web アプリの設定ドロワーにある `gantt parent` で保存した共有設定を、送信直前に読み込んで使用する。
 - **オートハイド**:
     - 実行完了（ファイル起動）時に自動的に非表示。
     - ウィンドウ外をクリック（フォーカス喪失）した際に自動的に非表示。
@@ -95,6 +101,8 @@ python run.py
 環境変数:
 - `LAUNCHER_API_BASE_URL`: 接続先 API。既定値は `http://127.0.0.1:8079`。
 - `LAUNCHER_WEB_BASE_URL`: 検索結果クリック時に開く Web フロント URL。既定値は `http://localhost:8001`。
+- `LAUNCHER_GANTT_API_BASE_URL`: メモ画面からタスクを作成する gantt API。既定値は `http://localhost:8000/api`。
+- `LAUNCHER_GANTT_PARENT`: Web 共有設定の取得に失敗した場合だけ使う gantt parent ID のフォールバック。既定値は `0`。
 - `LAUNCHER_SEARCH_LIMIT`: ランチャーに表示する検索結果数。既定値は `8`。
 - `LAUNCHER_REQUEST_TIMEOUT`: API タイムアウト秒数。既定値は `5.0`。
 - `SEARCH_APP_LAUNCHER_AUTOSTART`: バックエンド起動時にランチャーも起動するか。`backend/run.py` と `start_dev.sh` では既定で `1`。

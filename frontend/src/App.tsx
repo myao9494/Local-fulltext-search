@@ -203,6 +203,18 @@ function normalizeSynonymGroups(value: string | null | undefined): string {
 }
 
 /**
+ * gantt parent ID は 0 以上の整数だけを保存対象にする。
+ */
+function normalizeGanttParent(value: string | number | null | undefined): number {
+  const rawValue = String(value ?? "").trim();
+  if (!/^\d+$/.test(rawValue)) {
+    return 0;
+  }
+  const parsed = Number.parseInt(rawValue, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+/**
  * 拡張子一覧は前後空白除去・ドット補完・重複排除を行う。
  */
 function normalizeCustomExtensions(extensions: readonly string[]): string[] {
@@ -324,6 +336,8 @@ function App() {
   const [synonymGroupsDraft, setSynonymGroupsDraft] = useState(DEFAULT_SYNONYM_GROUPS);
   const [savedObsidianSidebarExplorerDataPath, setSavedObsidianSidebarExplorerDataPath] = useState("");
   const [obsidianSidebarExplorerDataPathDraft, setObsidianSidebarExplorerDataPathDraft] = useState("");
+  const [savedGanttParent, setSavedGanttParent] = useState(0);
+  const [ganttParentDraft, setGanttParentDraft] = useState("0");
   const [savedCustomContentExtensions, setSavedCustomContentExtensions] = useState<string[]>([]);
   const [customContentExtensions, setCustomContentExtensions] = useState<string[]>([]);
   const [savedCustomFilenameExtensions, setSavedCustomFilenameExtensions] = useState<string[]>([]);
@@ -385,6 +399,7 @@ function App() {
   const [isSavingWebExcludeKeywords, setIsSavingWebExcludeKeywords] = useState(false);
   const [isSavingSynonymGroups, setIsSavingSynonymGroups] = useState(false);
   const [isSavingObsidianSidebarExplorerDataPath, setIsSavingObsidianSidebarExplorerDataPath] = useState(false);
+  const [isSavingGanttParent, setIsSavingGanttParent] = useState(false);
   const [isSavingIndexExtensions, setIsSavingIndexExtensions] = useState(false);
   const [isStartingScheduler, setIsStartingScheduler] = useState(false);
   const [isLauncherActionRunning, setIsLauncherActionRunning] = useState(false);
@@ -438,6 +453,8 @@ function App() {
   const normalizedObsidianSidebarExplorerDataPathDraft = obsidianSidebarExplorerDataPathDraft.trim();
   const hasUnsavedObsidianSidebarExplorerDataPath =
     normalizedObsidianSidebarExplorerDataPathDraft !== savedObsidianSidebarExplorerDataPath;
+  const normalizedGanttParentDraft = normalizeGanttParent(ganttParentDraft);
+  const hasUnsavedGanttParent = normalizedGanttParentDraft !== savedGanttParent || ganttParentDraft.trim() !== String(normalizedGanttParentDraft);
   const hasUnsavedIndexExtensions =
     selectedIndexExtensions.join(" ") !== savedIndexExtensions.join(" ") ||
     customContentExtensions.join(" ") !== savedCustomContentExtensions.join(" ") ||
@@ -524,6 +541,8 @@ function App() {
       setSynonymGroupsDraft(normalizedSynonymGroups);
       setSavedObsidianSidebarExplorerDataPath(appSettings.obsidian_sidebar_explorer_data_path.trim());
       setObsidianSidebarExplorerDataPathDraft(appSettings.obsidian_sidebar_explorer_data_path.trim());
+      setSavedGanttParent(normalizeGanttParent(appSettings.gantt_parent));
+      setGanttParentDraft(String(normalizeGanttParent(appSettings.gantt_parent)));
       setSavedCustomContentExtensions(loadedCustomContentExtensions);
       setCustomContentExtensions(loadedCustomContentExtensions);
       setSavedCustomFilenameExtensions(loadedCustomFilenameExtensions);
@@ -1265,6 +1284,27 @@ function App() {
       setErrorMessage(error instanceof Error ? error.message : "Obsidian パスの保存に失敗しました。");
     } finally {
       setIsSavingObsidianSidebarExplorerDataPath(false);
+    }
+  }
+
+  /**
+   * ランチャーの gantt メモ追加で使う parent ID を Web 側の共有設定として保存する。
+   */
+  async function handleSaveGanttParent(): Promise<void> {
+    const normalized = normalizeGanttParent(ganttParentDraft);
+    try {
+      setIsSavingGanttParent(true);
+      const savedSettings = await updateAppSettings({ gantt_parent: normalized });
+      const savedValue = normalizeGanttParent(savedSettings.gantt_parent);
+      setSavedGanttParent(savedValue);
+      setGanttParentDraft(String(savedValue));
+      setErrorMessage("");
+      setNoticeMessage("gantt parent を保存しました。ランチャーの次回メモ送信から反映されます。");
+    } catch (error) {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "gantt parent の保存に失敗しました。");
+    } finally {
+      setIsSavingGanttParent(false);
     }
   }
 
@@ -2567,6 +2607,33 @@ function App() {
               </div>
               <div className="form-help">
                 環境ごとに異なる Obsidian Vault の sidebar-explorer `data.json` を指定します。未設定なら既定パスを使います。
+              </div>
+
+              <label className="form-help" htmlFor="gantt-parent">
+                gantt parent
+              </label>
+              <input
+                id="gantt-parent"
+                value={ganttParentDraft}
+                onChange={(event) => setGanttParentDraft(event.target.value)}
+                type="number"
+                min={0}
+              />
+              <div className="settings-action-row">
+                <button
+                  className="secondary-button settings-save-button"
+                  onClick={() => void handleSaveGanttParent()}
+                  type="button"
+                  disabled={!hasUnsavedGanttParent || isSavingGanttParent}
+                >
+                  {isSavingGanttParent ? "保存中..." : "保存"}
+                </button>
+                <div className={`settings-save-status ${hasUnsavedGanttParent ? "dirty" : "saved"}`}>
+                  {hasUnsavedGanttParent ? "未保存の変更があります" : "保存済み"}
+                </div>
+              </div>
+              <div className="form-help">
+                ランチャーのメモ画面から gantt タスクを追加するときの親タスク ID です。
               </div>
 
               <div className="extension-panel">

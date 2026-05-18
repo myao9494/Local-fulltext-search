@@ -1388,6 +1388,24 @@ def test_app_settings_can_store_hidden_indexed_targets(tmp_path: Path, monkeypat
     assert hidden_keywords_path.read_text(encoding="utf-8") == "obsidian\nAgent_Skills"
 
 
+def test_app_settings_can_store_gantt_parent(tmp_path: Path, monkeypatch) -> None:
+    """
+    ランチャーの gantt メモ追加で使う parent ID は共有設定ファイルへ保存される。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    gantt_parent_path = tmp_path / "gantt_parent.txt"
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "gantt_parent_name", "gantt_parent.txt")
+
+    saved_settings = service.update_app_settings(gantt_parent=42)
+    reloaded = IndexService(connection=connection).get_app_settings()
+
+    assert saved_settings.gantt_parent == 42
+    assert reloaded.gantt_parent == 42
+    assert gantt_parent_path.read_text(encoding="utf-8") == "42"
+
+
 def test_app_settings_can_store_synonym_groups(tmp_path: Path, monkeypatch) -> None:
     """
     アプリ設定として保存した同義語リストは、CSV 風 1 行 1 グループのテキストへ正規化して保持される。

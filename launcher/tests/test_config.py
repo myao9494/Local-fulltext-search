@@ -15,6 +15,8 @@ def test_default_config_values() -> None:
 
     assert config.api_base_url == "http://127.0.0.1:8079"
     assert config.web_base_url == "http://localhost:8001"
+    assert config.gantt_api_base_url == "http://localhost:8000/api"
+    assert config.gantt_parent == 0
     assert config.search_limit == 8
     assert config.request_timeout == 5.0
 
@@ -39,6 +41,19 @@ def test_from_env_reads_web_base_url(monkeypatch) -> None:
     config = LauncherConfig.from_env()
 
     assert config.web_base_url == "http://myhost:3000"
+
+
+def test_from_env_reads_gantt_settings(monkeypatch) -> None:
+    """
+    gantt タスク作成先 API と既定 parent は環境変数で上書きできる。
+    """
+    monkeypatch.setenv("LAUNCHER_GANTT_API_BASE_URL", "http://localhost:9000/api")
+    monkeypatch.setenv("LAUNCHER_GANTT_PARENT", "15")
+
+    config = LauncherConfig.from_env()
+
+    assert config.gantt_api_base_url == "http://localhost:9000/api"
+    assert config.gantt_parent == 15
 
 
 def test_from_env_ignores_invalid_int(monkeypatch) -> None:

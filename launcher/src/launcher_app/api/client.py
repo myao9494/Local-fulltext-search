@@ -40,10 +40,12 @@ class LauncherApiClient:
         self,
         base_url: str = "http://127.0.0.1:8079",
         *,
+        gantt_api_base_url: str = "http://localhost:8000/api",
         timeout: float = 5.0,
         urlopen: UrlOpen = default_urlopen,
     ) -> None:
         self.base_url = base_url.rstrip("/") + "/"
+        self.gantt_api_base_url = gantt_api_base_url.rstrip("/") + "/"
         self.timeout = timeout
         self._urlopen = urlopen
 
@@ -126,12 +128,30 @@ class LauncherApiClient:
         """
         self._request_json(f"/api/gantt/tasks/{task_id}/open-input", {})
 
+    def create_gantt_task(self, payload: dict[str, object]) -> dict[str, Any]:
+        """
+        ランチャーのメモ画面から gantt API へタスク作成リクエストを送る。
+        """
+        return self._request_json_to_base(self.gantt_api_base_url, "/tasks", payload)
+
+    def get_app_settings(self) -> dict[str, Any]:
+        """
+        Web 設定ドロワーで保存した共有設定を取得する。
+        """
+        return self._request_json_get("/api/index/settings")
+
     def _request_json(self, path: str, payload: dict[str, object]) -> dict[str, Any]:
         """
         JSON POST を実行し、エラー時は detail を抽出して例外へ変換する。
         """
+        return self._request_json_to_base(self.base_url, path, payload)
+
+    def _request_json_to_base(self, base_url: str, path: str, payload: dict[str, object]) -> dict[str, Any]:
+        """
+        指定 base URL に対して JSON POST を実行する。
+        """
         body = json.dumps(payload).encode("utf-8")
-        url = urljoin(self.base_url, path.lstrip("/"))
+        url = urljoin(base_url, path.lstrip("/"))
         request = Request(
             url,
             data=body,
@@ -139,6 +159,21 @@ class LauncherApiClient:
             method="POST",
         )
         logger.info("Launcher API request: method=POST url=%s timeout=%.1fs payload_keys=%s", url, self.timeout, sorted(payload.keys()))
+        return self._send_json_request(request, url)
+
+    def _request_json_get(self, path: str) -> dict[str, Any]:
+        """
+        ランチャー接続先 API へ JSON GET を実行する。
+        """
+        url = urljoin(self.base_url, path.lstrip("/"))
+        request = Request(url, headers={"Content-Type": "application/json"}, method="GET")
+        logger.info("Launcher API request: method=GET url=%s timeout=%.1fs", url, self.timeout)
+        return self._send_json_request(request, url)
+
+    def _send_json_request(self, request: Request, url: str) -> dict[str, Any]:
+        """
+        urllib リクエストを実行し、JSON レスポンスか API エラーへ変換する。
+        """
         try:
             with self._open(request) as response:
                 status = getattr(response, "status", None) or getattr(response, "code", None)

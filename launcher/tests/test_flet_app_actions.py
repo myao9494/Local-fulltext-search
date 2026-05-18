@@ -88,6 +88,7 @@ class StubClient:
     def __init__(self) -> None:
         self.clicked_file_ids: list[int] = []
         self.opened_locations: list[str] = []
+        self.created_tasks: list[dict[str, Any]] = []
 
     def record_click(self, file_id: int) -> int:
         self.clicked_file_ids.append(file_id)
@@ -96,6 +97,13 @@ class StubClient:
     def open_location(self, path: str) -> None:
         self.opened_locations.append(path)
 
+    def create_gantt_task(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.created_tasks.append(payload)
+        return {"id": 101}
+
+    def get_app_settings(self) -> dict[str, Any]:
+        return {"gantt_parent": 8}
+
 
 class StubStatus:
     """
@@ -103,6 +111,19 @@ class StubStatus:
     """
 
     value = ""
+
+
+class StubValueControl:
+    """
+    value と focus だけを持つ入力欄スタブ。
+    """
+
+    def __init__(self, value: str = "") -> None:
+        self.value = value
+        self.focus_count = 0
+
+    def focus(self) -> None:
+        self.focus_count += 1
 
 
 class StubResultsColumn:
@@ -431,3 +452,44 @@ def test_search_error_message_survives_async_dispatch() -> None:
         pass
 
     assert app.status.value == "検索に失敗しました: backend down"
+
+
+def test_tab_switches_to_memo_screen_and_enter_creates_gantt_task(monkeypatch: Any) -> None:
+    """
+    Tab でメモ画面へ切り替え、Enter で gantt タスク作成 API に送信する。
+    """
+    client = StubClient()
+    config = LauncherConfig(gantt_parent=5)
+    app = LauncherApp(StubPage(), client, config)  # type: ignore[arg-type]
+    app.status = StubStatus()
+    app.memo_status = StubStatus()
+    app.query = StubValueControl()
+    app.memo_field = StubValueControl("AI テストタスク\nAPI ガイドから作成したメモ")
+    app.memo_parent_label = StubStatus()
+    app.search_area = type("Area", (), {"visible": True})()
+    app.memo_area = type("Area", (), {"visible": False})()
+    monkeypatch.setattr("launcher_app.gantt_task.date", type("DateModule", (), {"today": staticmethod(lambda: __import__("datetime").date(2026, 5, 18))}))
+
+    app._on_keyboard(type("Event", (), {"key": "Tab"})())
+    app._on_keyboard(type("Event", (), {"key": "Enter"})())
+
+    assert app.active_screen == "memo"
+    assert client.created_tasks[0]["text"] == "AI テストタスク"
+    assert client.created_tasks[0]["memo"] == "API ガイドから作成したメモ"
+    assert client.created_tasks[0]["parent"] == 8
+    assert app.memo_field.value == ""
+    assert app.memo_status.value == "gantt に追加しました"
+
+
+def test_memo_shift_enter_inserts_newline() -> None:
+    """
+    メモ画面では Shift+Enter を送信ではなく改行として扱う。
+    """
+    app = LauncherApp(StubPage(), StubClient(), LauncherConfig())  # type: ignore[arg-type]
+    app.active_screen = "memo"
+    app.memo_field = StubValueControl("1行目")
+    app.memo_status = StubStatus()
+
+    app._on_keyboard(type("Event", (), {"key": "Return", "shift": True})())
+
+    assert app.memo_field.value == "1行目\n"

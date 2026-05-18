@@ -187,6 +187,50 @@ def test_record_click_posts_file_id() -> None:
     assert captured["body"] == {"file_id": 4}
 
 
+def test_create_gantt_task_posts_to_gantt_api() -> None:
+    """
+    メモ入力から作った payload は gantt API の /tasks へそのまま POST する。
+    """
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request: Request, timeout: float) -> StubResponse:
+        captured["url"] = request.full_url
+        captured["method"] = request.get_method()
+        captured["body"] = json.loads((request.data or b"{}").decode("utf-8"))
+        return StubResponse({"id": 99, "text": "AI テストタスク"})
+
+    client = LauncherApiClient(
+        base_url="http://127.0.0.1:8079",
+        gantt_api_base_url="http://localhost:8000/api",
+        urlopen=fake_urlopen,
+    )
+
+    response = client.create_gantt_task({"text": "AI テストタスク", "parent": 0})
+
+    assert response == {"id": 99, "text": "AI テストタスク"}
+    assert captured["url"] == "http://localhost:8000/api/tasks"
+    assert captured["method"] == "POST"
+    assert captured["body"] == {"text": "AI テストタスク", "parent": 0}
+
+
+def test_get_app_settings_reads_shared_web_settings() -> None:
+    """
+    ランチャーは Web 設定ドロワーで保存した共有設定を GET で取得する。
+    """
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request: Request, timeout: float) -> StubResponse:
+        captured["url"] = request.full_url
+        captured["method"] = request.get_method()
+        return StubResponse({"gantt_parent": 12})
+
+    client = LauncherApiClient(base_url="http://127.0.0.1:8079", urlopen=fake_urlopen)
+
+    assert client.get_app_settings() == {"gantt_parent": 12}
+    assert captured["url"] == "http://127.0.0.1:8079/api/index/settings"
+    assert captured["method"] == "GET"
+
+
 def test_api_error_extracts_detail() -> None:
     """
     API エラーは HTTP ステータスと FastAPI の detail をユーザー向けメッセージとして保持する。

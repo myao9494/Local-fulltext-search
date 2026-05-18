@@ -27,6 +27,7 @@ class Settings(BaseModel):
     obsidian_sidebar_explorer_data_path_name: str = os.getenv(
         "SEARCH_APP_OBSIDIAN_SIDEBAR_EXPLORER_DATA_PATH_NAME", "obsidian_sidebar_explorer_data_path.txt"
     )
+    gantt_parent_name: str = os.getenv("SEARCH_APP_GANTT_PARENT_NAME", "gantt_parent.txt")
     search_target_folders_name: str = os.getenv("SEARCH_APP_SEARCH_TARGET_FOLDERS_NAME", "search_target_folders.txt")
     index_selected_extensions_name: str = os.getenv("SEARCH_APP_INDEX_SELECTED_EXTENSIONS_NAME", "index_selected_extensions.txt")
     custom_content_extensions_name: str = os.getenv("SEARCH_APP_CUSTOM_CONTENT_EXTENSIONS_NAME", "custom_content_extensions.txt")
@@ -59,6 +60,7 @@ class Settings(BaseModel):
         "hidden_indexed_targets_name",
         "synonym_groups_name",
         "obsidian_sidebar_explorer_data_path_name",
+        "gantt_parent_name",
         "search_target_folders_name",
         "index_selected_extensions_name",
         "custom_content_extensions_name",
@@ -101,6 +103,10 @@ class Settings(BaseModel):
     @property
     def obsidian_sidebar_explorer_data_path_path(self) -> Path:
         return (self.data_dir / self.obsidian_sidebar_explorer_data_path_name).resolve()
+
+    @property
+    def gantt_parent_path(self) -> Path:
+        return (self.data_dir / self.gantt_parent_name).resolve()
 
     @property
     def index_selected_extensions_path(self) -> Path:

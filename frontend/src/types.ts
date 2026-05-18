@@ -79,6 +79,7 @@ export type AppSettings = {
   hidden_indexed_targets: string;
   synonym_groups: string;
   obsidian_sidebar_explorer_data_path: string;
+  gantt_parent: number;
   index_selected_extensions: string;
   custom_content_extensions: string;
   custom_filename_extensions: string;

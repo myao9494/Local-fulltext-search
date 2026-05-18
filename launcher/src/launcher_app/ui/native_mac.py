@@ -20,6 +20,7 @@ from PyObjCTools import AppHelper
 
 from launcher_app.api.client import LauncherApiClient
 from launcher_app.config import LauncherConfig
+from launcher_app.gantt_task import build_gantt_task_payload, normalize_parent_id
 from launcher_app.models import SearchResultItem
 from launcher_app.services.hotkeys import hotkey_spec_for_platform
 from launcher_app.ui.urls import (
@@ -90,6 +91,13 @@ class LauncherDelegate(AppKit.NSObject):
         self.status_label = None
         self.results_stack = None
         self.gantt_checkbox = None
+        self.active_screen = "search"
+        self.search_scroll = None
+        self.memo_scroll = None
+        self.memo_text_view = None
+        self.memo_parent_label = None
+        self.memo_title_label = None
+        self.gantt_parent = config.gantt_parent
         self.include_gantt_tasks = False
         self.last_results_time = 0.0
         return self
@@ -145,7 +153,32 @@ class LauncherDelegate(AppKit.NSObject):
         elif selector == "insertNewline:":
             self._open_selected()
             return True
+        elif selector == "insertTab:":
+            self._switch_screen("memo")
+            return True
         elif selector == "cancelOperation:":
+            self.hide_panel()
+            return True
+        return False
+
+    def textView_doCommandBySelector_(self, textView: Any, commandSelector: Any) -> bool:
+        """
+        メモ画面の Return / Cmd+Return / Shift+Return / Tab を処理する。
+        """
+        selector = str(commandSelector)
+        if selector == "insertTab:":
+            self._switch_screen("search")
+            return True
+        if selector == "insertNewline:":
+            event = AppKit.NSApp.currentEvent()
+            modifiers = event.modifierFlags() if event is not None else 0
+            newline_flags = AppKit.NSEventModifierFlagCommand | AppKit.NSEventModifierFlagShift
+            if modifiers & newline_flags:
+                textView.insertText_("\n")
+            else:
+                self._submit_memo()
+            return True
+        if selector == "cancelOperation:":
             self.hide_panel()
             return True
         return False
@@ -532,19 +565,101 @@ class LauncherDelegate(AppKit.NSObject):
         self.gantt_checkbox.setFrame_(AppKit.NSMakeRect(126, PANEL_HEIGHT - 36, 80, 24))
         content.addSubview_(self.gantt_checkbox)
 
-        scroll = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(24, 54, PANEL_WIDTH - 48, PANEL_HEIGHT - 158))
-        scroll.setDrawsBackground_(False)
-        scroll.setBorderType_(AppKit.NSNoBorder)
-        scroll.setHasVerticalScroller_(True)
+        self.search_scroll = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(24, 54, PANEL_WIDTH - 48, PANEL_HEIGHT - 158))
+        self.search_scroll.setDrawsBackground_(False)
+        self.search_scroll.setBorderType_(AppKit.NSNoBorder)
+        self.search_scroll.setHasVerticalScroller_(True)
         self.results_stack = FlippedView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 66, PANEL_HEIGHT - 158))
-        scroll.setDocumentView_(self.results_stack)
-        content.addSubview_(scroll)
+        self.search_scroll.setDocumentView_(self.results_stack)
+        content.addSubview_(self.search_scroll)
+
+        self.memo_title_label = AppKit.NSTextField.labelWithString_("gantt メモ")
+        self.memo_title_label.setFrame_(AppKit.NSMakeRect(34, PANEL_HEIGHT - 34, 160, 20))
+        self.memo_title_label.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.9, 0.94, 1.0, 1.0))
+        self.memo_title_label.setFont_(AppKit.NSFont.boldSystemFontOfSize_(14))
+        self.memo_title_label.setHidden_(True)
+        content.addSubview_(self.memo_title_label)
+
+        self.memo_parent_label = AppKit.NSTextField.labelWithString_(f"parent: {self.gantt_parent}")
+        self.memo_parent_label.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 214, PANEL_HEIGHT - 34, 180, 20))
+        self.memo_parent_label.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.73, 0.86, 1.0, 1.0))
+        self.memo_parent_label.setHidden_(True)
+        content.addSubview_(self.memo_parent_label)
+
+        self.memo_text_view = AppKit.NSTextView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 72, PANEL_HEIGHT - 174))
+        self.memo_text_view.setDelegate_(self)
+        self.memo_text_view.setFont_(AppKit.NSFont.systemFontOfSize_(18))
+        self.memo_text_view.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.9, 0.94, 1.0, 1.0))
+        self.memo_text_view.setBackgroundColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.07, 0.09, 0.15, 0.98))
+        self.memo_text_view.setInsertionPointColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.38, 0.65, 0.98, 1.0))
+        self.memo_text_view.setString_("")
+        self.memo_scroll = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(24, 54, PANEL_WIDTH - 48, PANEL_HEIGHT - 158))
+        self.memo_scroll.setDrawsBackground_(False)
+        self.memo_scroll.setBorderType_(AppKit.NSNoBorder)
+        self.memo_scroll.setHasVerticalScroller_(True)
+        self.memo_scroll.setDocumentView_(self.memo_text_view)
+        self.memo_scroll.setHidden_(True)
+        content.addSubview_(self.memo_scroll)
 
         self.status_label = AppKit.NSTextField.labelWithString_(f"Hotkey: {hotkey_spec_for_platform()}")
         self.status_label.setFrame_(AppKit.NSMakeRect(34, 22, PANEL_WIDTH - 68, 20))
         self.status_label.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.58, 0.64, 0.73, 1.0))
         self.status_label.setFont_(AppKit.NSFont.boldSystemFontOfSize_(13))
         content.addSubview_(self.status_label)
+
+    @objc.python_method
+    def _switch_screen(self, screen: str) -> None:
+        """
+        Tab キーで検索画面と gantt メモ画面を切り替える。
+        """
+        self.active_screen = "memo" if screen == "memo" else "search"
+        is_memo = self.active_screen == "memo"
+        self.search_field.setHidden_(is_memo)
+        self.gantt_checkbox.setHidden_(is_memo)
+        self.search_scroll.setHidden_(is_memo)
+        self.memo_scroll.setHidden_(not is_memo)
+        self.memo_title_label.setHidden_(not is_memo)
+        self.memo_parent_label.setHidden_(not is_memo)
+        self.status_label.setStringValue_("gantt メモ" if is_memo else f"Hotkey: {hotkey_spec_for_platform()}")
+        if is_memo:
+            self.panel.makeFirstResponder_(self.memo_text_view)
+        else:
+            self.panel.makeFirstResponder_(self.search_field)
+
+    @objc.python_method
+    def _submit_memo(self) -> None:
+        """
+        メモ入力を gantt タスク作成 API へ送る。
+        """
+        raw_text = str(self.memo_text_view.string() or "")
+        if not raw_text.strip():
+            self.status_label.setStringValue_("タスク名を入力してください")
+            return
+        parent = self._load_gantt_parent()
+        payload = build_gantt_task_payload(raw_text, parent=parent)
+        if not str(payload["text"]).strip():
+            self.status_label.setStringValue_("1行目にタスク名を入力してください")
+            return
+        try:
+            self.client.create_gantt_task(payload)
+        except Exception as error:
+            self.status_label.setStringValue_(f"gantt 追加に失敗しました: {error}")
+        else:
+            self.memo_text_view.setString_("")
+            self.status_label.setStringValue_("gantt に追加しました")
+
+    @objc.python_method
+    def _load_gantt_parent(self) -> int:
+        """
+        Web の設定ドロワーで保存した gantt parent ID を取得する。
+        """
+        try:
+            app_settings = self.client.get_app_settings()
+        except Exception:
+            return self.gantt_parent
+        self.gantt_parent = normalize_parent_id(app_settings.get("gantt_parent"), default=self.gantt_parent)
+        self.memo_parent_label.setStringValue_(f"parent: {self.gantt_parent}")
+        return self.gantt_parent
 
     @objc.python_method
     def _center_panel_on_mouse_screen(self) -> None:
@@ -823,7 +938,11 @@ def run_native_mac_app(config: LauncherConfig | None = None) -> None:
     if platform.system() != "Darwin":
         raise RuntimeError("Native macOS launcher is only available on Darwin.")
     app_config = config or LauncherConfig.from_env()
-    client = LauncherApiClient(app_config.api_base_url, timeout=app_config.request_timeout)
+    client = LauncherApiClient(
+        app_config.api_base_url,
+        gantt_api_base_url=app_config.gantt_api_base_url,
+        timeout=app_config.request_timeout,
+    )
     global _delegate_ref
     app = AppKit.NSApplication.sharedApplication()
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)

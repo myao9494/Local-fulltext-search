@@ -5,6 +5,8 @@
 from dataclasses import dataclass
 import os
 
+from launcher_app.gantt_task import normalize_parent_id
+
 
 @dataclass(frozen=True)
 class LauncherConfig:
@@ -14,6 +16,8 @@ class LauncherConfig:
 
     api_base_url: str = "http://127.0.0.1:8079"
     web_base_url: str = "http://localhost:8001"
+    gantt_api_base_url: str = "http://localhost:8000/api"
+    gantt_parent: int = 0
     search_limit: int = 8
     request_timeout: float = 5.0
 
@@ -25,6 +29,8 @@ class LauncherConfig:
         return cls(
             api_base_url=os.environ.get("LAUNCHER_API_BASE_URL", cls.api_base_url),
             web_base_url=os.environ.get("LAUNCHER_WEB_BASE_URL", cls.web_base_url),
+            gantt_api_base_url=os.environ.get("LAUNCHER_GANTT_API_BASE_URL", cls.gantt_api_base_url),
+            gantt_parent=normalize_parent_id(os.environ.get("LAUNCHER_GANTT_PARENT"), default=cls.gantt_parent),
             search_limit=_read_int("LAUNCHER_SEARCH_LIMIT", cls.search_limit),
             request_timeout=_read_float("LAUNCHER_REQUEST_TIMEOUT", cls.request_timeout),
         )

@@ -15,6 +15,7 @@ import webbrowser
 
 from launcher_app.api.client import LauncherApiClient, LauncherApiError
 from launcher_app.config import LauncherConfig
+from launcher_app.gantt_task import build_gantt_task_payload, normalize_parent_id
 from launcher_app.models import SearchResultItem
 from launcher_app.services.hotkeys import GlobalHotkeyController, hotkey_spec_for_platform
 from launcher_app.ui.urls import folder_path_for_item, folder_web_url_for_item, primary_web_url_for_item
@@ -37,6 +38,7 @@ def run_app(config: LauncherConfig | None = None) -> None:
     app_config = config or LauncherConfig.from_env()
     client = LauncherApiClient(
         app_config.api_base_url,
+        gantt_api_base_url=app_config.gantt_api_base_url,
         timeout=app_config.request_timeout,
     )
     ft.app(target=lambda page: LauncherApp(page, client, app_config).build())
@@ -61,6 +63,8 @@ class LauncherApp:
         self._last_open_request_time: float = 0.0
         self._last_open_request_key = ""
         self.include_gantt_tasks = False
+        self.active_screen = "search"
+        self.gantt_parent = config.gantt_parent
 
     def build(self) -> None:
         """
@@ -84,6 +88,7 @@ class LauncherApp:
             on_submit=lambda event: self._open_selected(),
         )
         self.status = ft.Text("", color="#94a3b8", size=12)
+        self.memo_status = ft.Text("", color="#94a3b8", size=12)
         self.results_list = ft.ListView(spacing=8, height=RESULTS_HEIGHT, padding=ft.padding.only(right=4), auto_scroll=False)
         self.results_column = self.results_list
         self.clear_button = ft.IconButton(
@@ -108,6 +113,64 @@ class LauncherApp:
             label_style=ft.TextStyle(color="#bfdbfe", size=12),
             on_change=self._on_gantt_toggle_change,
         )
+        self.memo_field = ft.TextField(
+            border=ft.InputBorder.NONE,
+            hint_text="タスク名\nメモ",
+            multiline=True,
+            min_lines=10,
+            max_lines=10,
+            text_style=ft.TextStyle(size=18, color="#e5eefc", font_family="Inter"),
+            hint_style=ft.TextStyle(size=16, color="#64748b", font_family="Inter"),
+            cursor_color="#60a5fa",
+        )
+        self.memo_parent_label = ft.Text(f"parent: {self.gantt_parent}", color="#bfdbfe", size=12)
+        self.search_area = ft.Column(
+            spacing=12,
+            visible=True,
+            controls=[
+                ft.Row(
+                    spacing=12,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        ft.Icon(ft.Icons.SEARCH_ROUNDED, color="#60a5fa", size=30),
+                        ft.Container(expand=True, content=self.query),
+                        self.gantt_toggle,
+                        self.clear_button,
+                        self.gui_button,
+                    ],
+                ),
+                ft.Container(
+                    height=RESULTS_HEIGHT,
+                    clip_behavior=ft.ClipBehavior.HARD_EDGE,
+                    content=self.results_list,
+                ),
+                self.status,
+            ],
+        )
+        self.memo_area = ft.Column(
+            spacing=12,
+            visible=False,
+            controls=[
+                ft.Row(
+                    spacing=12,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        ft.Text("gantt メモ", color="#e5eefc", size=18, weight=ft.FontWeight.W_600),
+                        ft.Container(expand=True),
+                        self.memo_parent_label,
+                    ],
+                ),
+                ft.Container(
+                    height=RESULTS_HEIGHT,
+                    padding=ft.padding.symmetric(horizontal=14, vertical=12),
+                    border_radius=8,
+                    bgcolor="#111827",
+                    border=ft.border.all(1, "#1f2937"),
+                    content=self.memo_field,
+                ),
+                self.memo_status,
+            ],
+        )
         self.root = ft.Container(
             width=WINDOW_WIDTH,
             height=WINDOW_HEIGHT,
@@ -126,23 +189,8 @@ class LauncherApp:
                             content=ft.Container(width=86, height=4, border_radius=2, bgcolor="#334155"),
                         )
                     ),
-                    ft.Row(
-                        spacing=12,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                        controls=[
-                            ft.Icon(ft.Icons.SEARCH_ROUNDED, color="#60a5fa", size=30),
-                            ft.Container(expand=True, content=self.query),
-                            self.gantt_toggle,
-                            self.clear_button,
-                            self.gui_button,
-                        ],
-                    ),
-                    ft.Container(
-                        height=RESULTS_HEIGHT,
-                        clip_behavior=ft.ClipBehavior.HARD_EDGE,
-                        content=self.results_list,
-                    ),
-                    self.status,
+                    self.search_area,
+                    self.memo_area,
                 ],
             ),
         )
@@ -368,15 +416,79 @@ class LauncherApp:
         key = _normalize_flet_key_name(getattr(event, "key", ""))
         if key == "Escape":
             self._hide_window()
+        elif key == "Tab":
+            self._switch_screen("memo" if self.active_screen == "search" else "search")
         elif key == "Arrow Down":
             self._move_selection(1)
         elif key == "Arrow Up":
             self._move_selection(-1)
         elif key == "Enter":
+            if self.active_screen == "memo":
+                if getattr(event, "meta", False) or getattr(event, "shift", False):
+                    self._append_memo_newline()
+                else:
+                    self._submit_memo()
+                return
             if getattr(event, "meta", False) or getattr(event, "ctrl", False):
                 self._reveal_selected()
             else:
                 self._open_selected()
+
+    def _switch_screen(self, screen: str) -> None:
+        """
+        Tab キーで検索画面と gantt メモ画面を切り替える。
+        """
+        self.active_screen = "memo" if screen == "memo" else "search"
+        self.search_area.visible = self.active_screen == "search"
+        self.memo_area.visible = self.active_screen == "memo"
+        if self.active_screen == "memo":
+            self._run_window_task(self.memo_field.focus)
+        else:
+            self._focus_query()
+        self.page.update()
+
+    def _append_memo_newline(self) -> None:
+        """
+        メモ画面で Cmd+Return / Shift+Return を改行として扱う。
+        """
+        self.memo_field.value = f"{self.memo_field.value or ''}\n"
+        self.page.update()
+
+    def _submit_memo(self) -> None:
+        """
+        メモ入力を gantt タスクに変換して作成 API へ送信する。
+        """
+        raw_text = str(self.memo_field.value or "")
+        if not raw_text.strip():
+            self.memo_status.value = "タスク名を入力してください"
+            self.page.update()
+            return
+        parent = self._load_gantt_parent()
+        payload = build_gantt_task_payload(raw_text, parent=parent)
+        if not str(payload["text"]).strip():
+            self.memo_status.value = "1行目にタスク名を入力してください"
+            self.page.update()
+            return
+        try:
+            self.client.create_gantt_task(payload)
+        except Exception as error:
+            self.memo_status.value = f"gantt 追加に失敗しました: {error}"
+        else:
+            self.memo_field.value = ""
+            self.memo_status.value = "gantt に追加しました"
+        self.page.update()
+
+    def _load_gantt_parent(self) -> int:
+        """
+        Web の設定ドロワーで保存した gantt parent ID を取得する。
+        """
+        try:
+            settings = self.client.get_app_settings()
+        except Exception:
+            return self.gantt_parent
+        self.gantt_parent = normalize_parent_id(settings.get("gantt_parent"), default=self.gantt_parent)
+        self.memo_parent_label.value = f"parent: {self.gantt_parent}"
+        return self.gantt_parent
 
     _BLUR_GUARD_SECONDS = 0.3
 
@@ -612,4 +724,6 @@ def _normalize_flet_key_name(key: object) -> str:
         return "Arrow Up"
     if normalized in {"enter", "return", "numpad enter", "numpadenter"}:
         return "Enter"
+    if normalized in {"tab"}:
+        return "Tab"
     return str(key or "")

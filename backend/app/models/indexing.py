@@ -166,6 +166,7 @@ class AppSettingsResponse(BaseModel):
     hidden_indexed_targets: str
     synonym_groups: str
     obsidian_sidebar_explorer_data_path: str
+    gantt_parent: int = 0
     index_selected_extensions: str
     custom_content_extensions: str
     custom_filename_extensions: str
@@ -181,6 +182,7 @@ class AppSettingsUpdateRequest(BaseModel):
     hidden_indexed_targets: str | None = None
     synonym_groups: str | None = None
     obsidian_sidebar_explorer_data_path: str | None = None
+    gantt_parent: int | None = None
     index_selected_extensions: str | None = None
     custom_content_extensions: str | None = None
     custom_filename_extensions: str | None = None
