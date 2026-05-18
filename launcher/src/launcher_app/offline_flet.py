@@ -41,6 +41,10 @@ def prepare_flet_view() -> Path | None:
     archive_path = _find_archive(platform_name)
     if archive_path is not None:
         extracted_dir = CACHE_ROOT / platform_name
+        cached_view_dir = _find_flet_view_dir(extracted_dir)
+        if cached_view_dir is not None:
+            os.environ["FLET_VIEW_PATH"] = str(cached_view_dir)
+            return cached_view_dir
         _extract_archive(archive_path, extracted_dir)
         view_dir = _find_flet_view_dir(extracted_dir) or extracted_dir
         os.environ["FLET_VIEW_PATH"] = str(view_dir)

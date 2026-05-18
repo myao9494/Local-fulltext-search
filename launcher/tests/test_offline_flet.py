@@ -59,6 +59,33 @@ def test_prepare_flet_view_extracts_vendor_archive(monkeypatch: pytest.MonkeyPat
     assert offline_flet.os.environ["FLET_VIEW_PATH"] == str(view_path)
 
 
+def test_prepare_flet_view_reuses_cached_archive_extract(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """
+    既に展開済みの Flet View がある場合は再展開せず、Windows の DLL ロックを避ける。
+    """
+    vendor_root = tmp_path / "vendor" / "flet-view"
+    cache_root = tmp_path / "cache" / "flet-view"
+    cached_view = cache_root / "windows" / "flet"
+    vendor_root.mkdir(parents=True)
+    cached_view.mkdir(parents=True)
+    archive_path = vendor_root / "flet-view-windows.zip"
+    (cached_view / "flet.exe").write_text("", encoding="utf-8")
+    locked_plugin = cached_view / "audioplayers_windows_plugin.dll"
+    locked_plugin.write_text("in use", encoding="utf-8")
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("flet/flet.exe", "")
+        archive.writestr("flet/audioplayers_windows_plugin.dll", "replacement")
+    monkeypatch.delenv("FLET_VIEW_PATH", raising=False)
+    monkeypatch.setattr(offline_flet.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(offline_flet, "VENDOR_ROOT", vendor_root)
+    monkeypatch.setattr(offline_flet, "CACHE_ROOT", cache_root)
+
+    view_path = prepare_flet_view()
+
+    assert view_path == cached_view
+    assert locked_plugin.read_text(encoding="utf-8") == "in use"
+
+
 def test_prepare_flet_view_ignores_directory_named_like_executable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """
     flet/ ディレクトリを実行ファイルと誤認せず、その中の flet.exe 階層を使う。

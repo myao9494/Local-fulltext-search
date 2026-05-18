@@ -303,6 +303,21 @@ test("検索バーに検索種別フィルタを追加する", () => {
 });
 
 /**
+ * Windows のフォント描画でも検索対象トグルのラベルが縦に折れないようにする。
+ */
+test("検索対象トグルはラベルを折り返さず表示する", () => {
+  const styleSource = readFileSync(appStylesPath, "utf-8");
+
+  assert.match(styleSource, /\.source-toggle\s*\{[\s\S]*flex-shrink:\s*0/);
+  assert.match(styleSource, /button\.source-toggle-button\s*\{[\s\S]*min-width:\s*86px/);
+  assert.match(styleSource, /button\.source-toggle-button\s*\{[\s\S]*white-space:\s*nowrap/);
+  assert.match(styleSource, /button\.small-btn\s*\{[\s\S]*flex-shrink:\s*0/);
+  assert.match(styleSource, /button\.small-btn\s*\{[\s\S]*white-space:\s*nowrap/);
+  assert.match(styleSource, /\.path-group\s*\{[\s\S]*flex:\s*1 1 760px/);
+  assert.match(styleSource, /\.path-picker-row\.top-path-picker\s*\{[\s\S]*flex-wrap:\s*wrap/);
+});
+
+/**
  * 検索バーにファイル作成日の開始・終了フィルタを置き、検索 API へそのまま渡せる。
  */
 test("検索バーに作成日フィルタを追加する", () => {

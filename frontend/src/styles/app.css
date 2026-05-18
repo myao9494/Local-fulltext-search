@@ -855,10 +855,13 @@ h1, h2, h3 {
 .source-toggle {
   display: inline-flex;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 button.source-toggle-button {
   margin-left: 0;
+  min-width: 86px;
+  white-space: nowrap;
 }
 
 .gantt-include-toggle {
@@ -1290,8 +1293,8 @@ button.source-toggle-button {
 }
 
 .path-group {
-  flex: 1;
-  min-width: min(620px, 100%);
+  flex: 1 1 760px;
+  min-width: min(760px, 100%);
 }
 
 .filter-label {
@@ -1303,6 +1306,8 @@ button.source-toggle-button {
 .path-picker-row.top-path-picker {
   flex: 1;
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 .path-picker-block {
@@ -1343,6 +1348,9 @@ button.small-btn {
   font-size: 0.85rem;
   border-radius: 8px;
   margin-left: 8px;
+  min-width: 64px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .filter-hint {
