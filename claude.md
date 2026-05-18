@@ -82,5 +82,17 @@
 - **API**: `/api/index/synonyms` で構造化された同義語リストを取得可能。
 - **詳細は `docs/synonym_management.md` 参照。**
 
+## gantt タスク検索
+- **目的**: gantt アプリのタスク内容を、通常のローカルファイル検索とは分離した任意選択の検索対象として扱う。
+- **API 連携**: 
+  - 既定の取得先は `http://localhost:8000/api/tasks`。バックエンド設定 `SEARCH_APP_GANTT_API_BASE_URL` で変更可能。
+  - レスポンスからタスク一覧を取得し、空白区切りの検索語を AND 条件で照合する。
+- **検索仕様**:
+  - `include_gantt_tasks: true` が指定されたときだけ gantt API を呼び出す（デフォルトは `false`）。
+  - 検索結果は `source_type: "gantt"`, `full_path: "gantt://tasks/{id}"` として返す。
+  - タイトルクリック時は `POST /tasks/{task_id}/open-input` を呼び出す。
+  - タスク JSON に `link` / `url` / `href` / `input_url` / `external_url` がある場合のみ、結果アクションに「ganttのリンクを開く」を表示する。
+- **UI**: Web 版検索バーに `gantt` の追加チェックを設置。ランチャー（macOS/Flet版）も同様に `gantt` チェックを有効にした時のみ結果に追加する。
+- **詳細は `docs/gantt_task_search.md` 参照。**
 
 
