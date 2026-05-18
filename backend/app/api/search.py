@@ -41,6 +41,7 @@ def search(
     created_to: date | None = None,
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
+    include_gantt_tasks: bool = Query(default=False),
     service: SearchService = Depends(get_search_service),
 ) -> SearchResponse:
     params = SearchQueryParams(
@@ -63,6 +64,7 @@ def search(
         created_to=created_to,
         limit=limit,
         offset=offset,
+        include_gantt_tasks=include_gantt_tasks,
     )
     return service.search(params)
 
@@ -92,3 +94,15 @@ def record_search_click(
     service: SearchService = Depends(get_search_service),
 ) -> SearchClickResponse:
     return SearchClickResponse(file_id=payload.file_id, click_count=service.record_click(payload.file_id))
+
+
+@router.post("/gantt/tasks/{task_id}/open-input")
+def open_gantt_task_input(
+    task_id: int,
+    service: SearchService = Depends(get_search_service),
+) -> dict[str, object]:
+    """
+    Web/ランチャーから gantt タスク入力画面表示 API を呼び出す。
+    """
+    service.open_gantt_task_input(task_id)
+    return {"status": "ok", "task_id": task_id}

@@ -861,6 +861,19 @@ button.source-toggle-button {
   margin-left: 0;
 }
 
+.gantt-include-toggle {
+  align-items: center;
+  color: var(--text-muted);
+  display: inline-flex;
+  font-size: 0.82rem;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.gantt-include-toggle input {
+  accent-color: hsl(217, 91%, 60%);
+}
+
 .search-all-button.active,
 .source-toggle-button.active {
   background: linear-gradient(135deg, rgba(59, 130, 246, 0.24), rgba(14, 165, 233, 0.18));

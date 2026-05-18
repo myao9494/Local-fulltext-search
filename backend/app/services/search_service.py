@@ -9,9 +9,11 @@ from sqlite3 import Connection
 import threading
 import time as time_module
 from urllib.parse import urlparse, urlunparse
+from urllib.request import Request, urlopen
 
 from fastapi import HTTPException, status
 
+from app.config import settings
 from app.db.connection import get_connection
 from app.db.schema import initialize_schema
 from app.extractors.text_extractor import normalize_extension_filter
@@ -60,6 +62,12 @@ class SearchService:
         )
 
     def search(self, params: SearchQueryParams) -> SearchResponse:
+        if params.source_type == "gantt":
+            return self._search_gantt_tasks(params)
+
+        if params.include_gantt_tasks:
+            return self._search_with_gantt_tasks(params)
+
         normalized_target_path = ""
         if params.full_path:
             normalized_target_path = (
@@ -110,6 +118,170 @@ class SearchService:
 
         self._schedule_obsidian_access_sync()
         return response.model_copy(update=refresh_flags)
+
+    def _search_with_gantt_tasks(self, params: SearchQueryParams) -> SearchResponse:
+        """
+        通常検索の結果に gantt タスク検索結果を追加し、同じ並び替え・ページングで返す。
+        """
+        base_params = params.model_copy(update={"include_gantt_tasks": False, "limit": 1000, "offset": 0})
+        base_response = self.search(base_params)
+        gantt_response = self._search_gantt_tasks(params.model_copy(update={"limit": 1000, "offset": 0}))
+        merged_items = self._sort_search_result_items(
+            [*base_response.items, *gantt_response.items],
+            sort_by=params.sort_by,
+            sort_order=params.sort_order,
+        )
+        page_items = merged_items[params.offset : params.offset + params.limit]
+        has_more = params.offset + len(page_items) < len(merged_items)
+        return SearchResponse(
+            total=len(merged_items),
+            items=page_items,
+            has_more=has_more,
+            next_offset=params.offset + len(page_items) if has_more else None,
+            used_existing_index=base_response.used_existing_index,
+            background_refresh_scheduled=base_response.background_refresh_scheduled,
+        )
+
+    def _search_gantt_tasks(self, params: SearchQueryParams) -> SearchResponse:
+        """
+        gantt アプリの `/tasks` JSON をオンデマンドで取得し、タスク本文を検索結果として返す。
+        """
+        tasks = self._fetch_gantt_tasks()
+        include_terms, exclude_terms = self._split_search_terms(params.q.strip())
+        lowered_include_terms = [term.lower() for term in include_terms]
+        lowered_exclude_terms = [term.lower() for term in exclude_terms]
+        matched_items: list[SearchResultItem] = []
+        now = datetime.now(tz=UTC)
+        for index, task in enumerate(tasks, start=1):
+            task_text = self._stringify_gantt_task(task)
+            haystack = task_text.lower()
+            if lowered_include_terms and not all(term in haystack for term in lowered_include_terms):
+                continue
+            if lowered_exclude_terms and any(term in haystack for term in lowered_exclude_terms):
+                continue
+            task_id = self._extract_gantt_task_id(task, fallback=index)
+            task_name = self._extract_gantt_task_name(task, fallback=f"Task {task_id}")
+            task_link = self._extract_gantt_task_link(task)
+            matched_items.append(
+                SearchResultItem(
+                    file_id=-task_id,
+                    result_kind="file",
+                    source_type="gantt",
+                    target_path=settings.gantt_api_base_url.rstrip("/") + "/tasks",
+                    file_name=task_name,
+                    full_path=f"gantt://tasks/{task_id}",
+                    file_ext=".gantt",
+                    created_at=now,
+                    mtime=now,
+                    click_count=0,
+                    snippet=self._build_gantt_snippet(task_text, include_terms) if params.include_snippets else "",
+                    gantt_link=task_link,
+                )
+            )
+
+        page_items = matched_items[params.offset : params.offset + params.limit]
+        has_more = params.offset + len(page_items) < len(matched_items)
+        return SearchResponse(
+            total=len(matched_items),
+            items=page_items,
+            has_more=has_more,
+            next_offset=params.offset + len(page_items) if has_more else None,
+        )
+
+    def _fetch_gantt_tasks(self) -> list[object]:
+        """
+        gantt API のタスク一覧レスポンスからタスク配列を取り出す。
+        """
+        url = settings.gantt_api_base_url.rstrip("/") + "/tasks"
+        request = Request(url, headers={"Accept": "application/json"})
+        try:
+            with urlopen(request, timeout=3.0) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"gantt API からタスクを取得できません: {error}") from error
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            for key in ("tasks", "data", "items"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    return value
+        return []
+
+    def _stringify_gantt_task(self, task: object) -> str:
+        """
+        gantt タスクの任意 JSON を検索しやすい平文へ変換する。
+        """
+        if isinstance(task, dict):
+            parts: list[str] = []
+            for key, value in task.items():
+                if isinstance(value, (dict, list)):
+                    parts.append(self._stringify_gantt_task(value))
+                elif value is not None:
+                    parts.append(f"{key}: {value}")
+            return " ".join(parts)
+        if isinstance(task, list):
+            return " ".join(self._stringify_gantt_task(item) for item in task)
+        return str(task)
+
+    def _extract_gantt_task_id(self, task: object, *, fallback: int) -> int:
+        """
+        gantt タスクの代表 ID を整数へ寄せ、なければ表示順を使う。
+        """
+        if isinstance(task, dict):
+            for key in ("id", "task_id", "uid"):
+                value = task.get(key)
+                try:
+                    return max(1, int(str(value)))
+                except (TypeError, ValueError):
+                    continue
+        return fallback
+
+    def _extract_gantt_task_name(self, task: object, *, fallback: str) -> str:
+        """
+        gantt タスクのタイトル候補を検索結果名として返す。
+        """
+        if isinstance(task, dict):
+            for key in ("text", "title", "name", "label", "content"):
+                value = task.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return fallback
+
+    def _extract_gantt_task_link(self, task: object) -> str | None:
+        """
+        gantt タスクに設定された外部リンク候補を取り出す。
+        """
+        if not isinstance(task, dict):
+            return None
+        for key in ("link", "url", "href", "input_url", "external_url"):
+            value = task.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    def open_gantt_task_input(self, task_id: int) -> None:
+        """
+        gantt アプリの入力画面を、開いているガント画面上で表示する。
+        """
+        url = f"{settings.gantt_api_base_url.rstrip('/')}/tasks/{task_id}/open-input"
+        request = Request(url, data=b"{}", headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urlopen(request, timeout=3.0):
+                return
+        except OSError as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"gantt タスクを開けません: {error}") from error
+
+    def _build_gantt_snippet(self, task_text: str, terms: list[str]) -> str:
+        """
+        gantt タスク本文の先頭付近を、検索語を mark で強調した短いスニペットにする。
+        """
+        snippet = escape(task_text[:280])
+        for term in terms:
+            if not term:
+                continue
+            snippet = re.sub(re.escape(escape(term)), lambda match: f"<mark>{match.group(0)}</mark>", snippet, flags=re.IGNORECASE)
+        return snippet
 
     def _refresh_search_targets_for_search_without_path(
         self,
@@ -1571,7 +1743,7 @@ class SearchService:
         return SearchResultItem(
             file_id=int(row["file_id"]),
             result_kind="folder" if result_kind == "folder" else "file",
-            source_type="web" if source_type == "web" else "local",
+            source_type=source_type if source_type in {"web", "gantt"} else "local",
             target_path=normalized_target_path,
             file_name=display_name,
             full_path=full_path,

@@ -21,6 +21,7 @@ import {
   startLauncher,
   recordSearchClick,
   openFileLocation,
+  openGanttTaskInput,
   fetchSearchPage,
   setSearchTargetEnabled,
   startScheduler,
@@ -113,6 +114,7 @@ type SearchExecutionParams = {
   sort_order?: "asc" | "desc";
   created_from?: string;
   created_to?: string;
+  include_gantt_tasks?: boolean;
 };
 type PendingAutoRefresh = {
   params: SearchExecutionParams;
@@ -310,6 +312,7 @@ function App() {
   const [indexDepth, setIndexDepth] = useState(() => launchParams.indexDepth);
   const [isSearchAllEnabled, setIsSearchAllEnabled] = useState(() => launchParams.searchAll);
   const [searchSource, setSearchSource] = useState<SearchSource>("local");
+  const [includeGanttTasks, setIncludeGanttTasks] = useState(false);
   const [isRegexEnabled, setIsRegexEnabled] = useState(() => localStorage.getItem("regex_enabled") === "true");
   const [refreshWindowMinutes, setRefreshWindowMinutes] = useState(() => localStorage.getItem("refresh_window_minutes") ?? "60");
   const [savedExcludeKeywords, setSavedExcludeKeywords] = useState(DEFAULT_EXCLUDE_KEYWORDS);
@@ -600,7 +603,7 @@ function App() {
       isActive = false;
       window.clearTimeout(timerId);
     };
-  }, [fullPath, searchTargets]);
+  }, [fullPath, searchTargets, searchSource]);
 
   /**
    * 検索中やインデックス実行中はステータスを定期取得し、中止ボタンの表示状態を追従させる。
@@ -666,6 +669,7 @@ function App() {
     createdTo,
     searchTarget,
     searchSource,
+    includeGanttTasks,
   ]);
 
   useEffect(() => {
@@ -733,6 +737,7 @@ function App() {
       query,
       fullPath.trim(),
       searchSource,
+      String(includeGanttTasks),
       String(isSearchAllEnabled),
       indexDepth,
       refreshWindowMinutes,
@@ -872,6 +877,7 @@ function App() {
       full_path: resolvedSearchPath,
       search_all_enabled: isSearchAllEnabled,
       source_type: searchSource,
+      include_gantt_tasks: includeGanttTasks,
       index_depth: parsedDepth,
       refresh_window_minutes: parsedWindow,
       regex_enabled: isRegexEnabled,
@@ -988,6 +994,12 @@ function App() {
     setNoticeMessage("");
   }
 
+  function handleIncludeGanttTasksChange(value: boolean): void {
+    setIncludeGanttTasks(value);
+    setErrorMessage("");
+    setNoticeMessage("");
+  }
+
   /**
    * 作成日フィルタは 2 項目まとめて解除し、未指定検索へ戻す。
    */
@@ -1020,6 +1032,13 @@ function App() {
         );
       })
       .catch(() => undefined);
+  }
+
+  function handleGanttTaskOpen(taskId: number): void {
+    void openGanttTaskInput(taskId).catch((error) => {
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "gantt タスクを開けませんでした。");
+    });
   }
 
   async function handleResultDelete(fileId: number, fullPath: string): Promise<void> {
@@ -1731,6 +1750,7 @@ function App() {
             indexDepth={indexDepth}
             searchFilterText={searchFilterText}
             searchSource={searchSource}
+            includeGanttTasks={includeGanttTasks}
             searchTarget={searchTarget}
             dateField={dateField}
             sortBy={sortBy}
@@ -1749,6 +1769,7 @@ function App() {
             onIndexDepthChange={setIndexDepth}
             onSearchFilterTextChange={setSearchFilterText}
             onSearchSourceChange={handleSearchSourceChange}
+            onIncludeGanttTasksChange={handleIncludeGanttTasksChange}
             onSearchTargetChange={handleSearchTargetChange}
             onDateFieldChange={setDateField}
             onSortByChange={setSortBy}
@@ -1788,6 +1809,7 @@ function App() {
               items={visibleResults}
               dateField={dateField}
               onResultOpen={handleResultOpen}
+              onGanttTaskOpen={handleGanttTaskOpen}
               onResultDelete={handleResultDelete}
               onResultIgnore={handleResultIgnore}
               ignoringResultPath={isIgnoringResultPath}

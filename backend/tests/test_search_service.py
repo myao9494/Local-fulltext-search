@@ -91,6 +91,89 @@ def test_search_defaults_to_local_source_and_web_is_opt_in(tmp_path: Path) -> No
     assert [item.file_name for item in web_result.items] == ["Web Page"]
 
 
+def test_search_gantt_source_fetches_tasks_on_demand(tmp_path: Path, monkeypatch) -> None:
+    """
+    source_type=gantt の検索は gantt API のタスク本文を選択時だけ検索する。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+
+    class StubResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"tasks": [{"id": 12, "text": "設計レビュー", "description": "alpha gantt task"}]}).encode("utf-8")
+
+    monkeypatch.setattr(search_service_module, "urlopen", lambda request, timeout: StubResponse())
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            source_type="gantt",
+            full_path="",
+            search_all_enabled=True,
+            index_depth=0,
+            skip_refresh=True,
+        )
+    )
+
+    assert result.total == 1
+    assert result.items[0].source_type == "gantt"
+    assert result.items[0].file_name == "設計レビュー"
+    assert result.items[0].full_path == "gantt://tasks/12"
+
+
+def test_search_can_include_gantt_tasks_with_local_results(tmp_path: Path, monkeypatch) -> None:
+    """
+    include_gantt_tasks=True は通常のローカル検索結果に gantt タスク結果を追加する。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+    created_at = datetime(2026, 4, 10, tzinfo=UTC)
+    local_docs = tmp_path / "docs"
+    local_docs.mkdir()
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="local.md",
+        full_path=str(local_docs / "local.md"),
+        created_at=created_at,
+        mtime=created_at,
+        body="alpha local",
+        click_count=0,
+    )
+
+    class StubResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"tasks": [{"id": 21, "text": "gantt alpha", "link": "https://example.test/task"}]}).encode("utf-8")
+
+    monkeypatch.setattr(search_service_module, "urlopen", lambda request, timeout: StubResponse())
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            search_all_enabled=True,
+            index_depth=5,
+            include_gantt_tasks=True,
+        )
+    )
+
+    assert result.total == 2
+    assert {item.source_type for item in result.items} == {"local", "gantt"}
+    assert next(item for item in result.items if item.source_type == "gantt").gantt_link == "https://example.test/task"
+
+
 def test_search_web_source_includes_exact_page_url(tmp_path: Path) -> None:
     """
     Web 検索はベース URL がページそのものの場合も、そのページ自身を候補に含める。

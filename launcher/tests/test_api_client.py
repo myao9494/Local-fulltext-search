@@ -125,6 +125,41 @@ def test_search_posts_windows_defaults(monkeypatch) -> None:
     assert response.items[0].file_name == "a.md"
 
 
+def test_search_posts_gantt_include_for_all_platforms(monkeypatch) -> None:
+    """
+    gantt 選択時は Windows でも通常検索に gantt 追加フラグを指定する。
+    """
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request: Request, timeout: float) -> StubResponse:
+        captured["url"] = request.full_url
+        captured["body"] = json.loads((request.data or b"{}").decode("utf-8"))
+        return _stub_search_response()
+
+    client = LauncherApiClient(base_url="http://127.0.0.1:8000", urlopen=fake_urlopen)
+
+    client.search("alpha", include_gantt_tasks=True)
+
+    assert captured["url"] == "http://127.0.0.1:8000/api/search"
+    assert captured["body"] == {
+        "q": "alpha",
+        "full_path": "",
+        "search_all_enabled": True,
+        "skip_refresh": True,
+        "source_type": "local",
+        "index_depth": 5,
+        "refresh_window_minutes": 0,
+        "search_target": "all",
+        "sort_by": "click_count",
+        "sort_order": "desc",
+        "limit": 8,
+        "offset": 0,
+        "include_snippets": True,
+        "include_gantt_tasks": True,
+    }
+
+
 def test_default_base_url_uses_project_backend_port() -> None:
     """
     ランチャーの既定接続先は本プロジェクトのバックエンド既定ポート 8079 を使う。

@@ -60,6 +60,7 @@ class LauncherApp:
         self._show_time: float = 0.0
         self._last_open_request_time: float = 0.0
         self._last_open_request_key = ""
+        self.include_gantt_tasks = False
 
     def build(self) -> None:
         """
@@ -99,6 +100,14 @@ class LauncherApp:
             style=ft.ButtonStyle(color="#93c5fd", padding=ft.padding.symmetric(horizontal=10, vertical=6)),
             on_click=lambda event: self._open_gui_url(),
         )
+        self.gantt_toggle = ft.Checkbox(
+            label="gantt",
+            value=False,
+            check_color="#0f172a",
+            fill_color="#60a5fa",
+            label_style=ft.TextStyle(color="#bfdbfe", size=12),
+            on_change=self._on_gantt_toggle_change,
+        )
         self.root = ft.Container(
             width=WINDOW_WIDTH,
             height=WINDOW_HEIGHT,
@@ -123,6 +132,7 @@ class LauncherApp:
                         controls=[
                             ft.Icon(ft.Icons.SEARCH_ROUNDED, color="#60a5fa", size=30),
                             ft.Container(expand=True, content=self.query),
+                            self.gantt_toggle,
                             self.clear_button,
                             self.gui_button,
                         ],
@@ -248,7 +258,7 @@ class LauncherApp:
         バックグラウンドで API 検索を実行し、UI 更新はメインスレッドへ戻す。
         """
         try:
-            response = self.client.search(query, limit=self.config.search_limit)
+            response = self.client.search(query, limit=self.config.search_limit, include_gantt_tasks=self.include_gantt_tasks)
         except Exception as error:
             logger.exception("Launcher search failed: query=%r api_base_url=%s", query, self.config.api_base_url)
             if sequence != self.search_sequence:
@@ -294,6 +304,16 @@ class LauncherApp:
         ft = self.ft
         snippet = strip_html(item.snippet)
         reveal_label = "Explorerで開く" if self._platform_name() == "Windows" else "Finderで開く"
+        action_controls = []
+        if item.source_type == "gantt":
+            if item.gantt_link:
+                action_controls.append(self._small_action_button("ganttのリンクを開く", ft.Icons.OPEN_IN_NEW_ROUNDED, lambda event, result=item: self._open_gantt_link(result)))
+        else:
+            action_controls = [
+                self._small_action_button("フルパス", ft.Icons.CONTENT_COPY_ROUNDED, lambda event, result=item: self._copy_path(result)),
+                self._small_action_button(reveal_label, ft.Icons.FOLDER_OPEN_ROUNDED, lambda event, result=item: self._reveal_item(result)),
+                self._small_action_button("フォルダを開く", ft.Icons.OPEN_IN_NEW_ROUNDED, lambda event, result=item: self._open_folder_url(result)),
+            ]
         return ft.Container(
             key=f"result-{index}",
             on_click=lambda event, result=item: self._select_and_open(result),
@@ -318,11 +338,7 @@ class LauncherApp:
                     ),
                     ft.Row(
                         spacing=6,
-                        controls=[
-                            self._small_action_button("フルパス", ft.Icons.CONTENT_COPY_ROUNDED, lambda event, result=item: self._copy_path(result)),
-                            self._small_action_button(reveal_label, ft.Icons.FOLDER_OPEN_ROUNDED, lambda event, result=item: self._reveal_item(result)),
-                            self._small_action_button("フォルダを開く", ft.Icons.OPEN_IN_NEW_ROUNDED, lambda event, result=item: self._open_folder_url(result)),
-                        ],
+                        controls=action_controls,
                     ),
                 ],
             ),
@@ -416,16 +432,28 @@ class LauncherApp:
         指定結果を開いた後、ランチャーを自動で隠す。
         """
         try:
+            if item.source_type == "gantt":
+                self.client.open_gantt_task_input(abs(item.file_id))
+                self._hide_window()
+                self.page.update()
+                return
             open_url = primary_web_url_for_item(item, self.config.web_base_url)
             if self._is_duplicate_open_request(open_url):
                 return
             webbrowser.open(open_url)
-            if item.result_kind == "file":
+            if item.result_kind == "file" and item.source_type != "gantt" and item.file_id > 0:
                 self.client.record_click(item.file_id)
             self._hide_window()
         except (OSError, LauncherApiError) as error:
             self.status.value = f"ファイルを開けませんでした: {error}"
         self.page.update()
+
+    def _open_gantt_link(self, item: SearchResultItem) -> None:
+        """
+        gantt タスクに設定されているリンクを既定ブラウザで開く。
+        """
+        if item.gantt_link:
+            webbrowser.open(item.gantt_link)
 
     def _reveal_selected(self) -> None:
         """
@@ -440,6 +468,9 @@ class LauncherApp:
         """
         指定結果の保存場所を Explorer / Finder で開く。
         """
+        if item.source_type == "gantt":
+            self._select_and_open(item)
+            return
         target_path = item.full_path if item.result_kind == "folder" else folder_path_for_item(item)
         try:
             self.client.open_location(target_path)
@@ -506,6 +537,24 @@ class LauncherApp:
         """
         webbrowser.open("http://127.0.0.1:8079/")
         self._hide_window()
+
+    def _on_gantt_toggle_change(self, event: Any) -> None:
+        """
+        ランチャーから gantt タスク検索へ切り替え、現在の検索語で再検索する。
+        """
+        self.include_gantt_tasks = bool(getattr(event.control, "value", False))
+        query = str(self.query.value or "").strip()
+        if not query:
+            return
+        if self.search_timer is not None:
+            self.search_timer.cancel()
+        self.search_sequence += 1
+        sequence = self.search_sequence
+        self.status.value = "検索中..."
+        self.page.update()
+        self.search_timer = threading.Timer(0.18, lambda: self._search(query, sequence))
+        self.search_timer.daemon = True
+        self.search_timer.start()
 
     def _focus_query(self) -> None:
         """

@@ -125,6 +125,7 @@ def make_item(*, result_kind: str = "file", full_path: str = "/tmp/docs/a b.md")
     return SearchResultItem(
         file_id=42,
         result_kind=result_kind,
+        source_type="local",
         target_path=full_path,
         file_name=full_path.rsplit("/", maxsplit=1)[-1],
         full_path=full_path,
@@ -416,7 +417,7 @@ def test_search_error_message_survives_async_dispatch() -> None:
     app.search_sequence = 1
 
     class FailingClient:
-        def search(self, query: str, *, limit: int) -> None:
+        def search(self, query: str, *, limit: int, include_gantt_tasks: bool = False) -> None:
             raise RuntimeError("backend down")
 
     app.client = FailingClient()  # type: ignore[assignment]

@@ -31,7 +31,7 @@ def _validate_absolute_path_or_unc(value: str, *, field_name: str) -> str:
 class SearchResultItem(BaseModel):
     file_id: int
     result_kind: Literal["file", "folder"] = "file"
-    source_type: Literal["local", "web"] = "local"
+    source_type: Literal["local", "web", "gantt"] = "local"
     target_path: str
     file_name: str
     full_path: str
@@ -40,6 +40,7 @@ class SearchResultItem(BaseModel):
     mtime: datetime
     click_count: int
     snippet: str
+    gantt_link: str | None = None
 
 
 class SearchResponse(BaseModel):
@@ -56,7 +57,7 @@ class SearchQueryParams(BaseModel):
     full_path: str = ""
     search_all_enabled: bool = False
     skip_refresh: bool = False
-    source_type: Literal["local", "web"] = "local"
+    source_type: Literal["local", "web", "gantt"] = "local"
     index_depth: int = Field(ge=0, le=128)
     refresh_window_minutes: int = Field(default=60, ge=0, le=1440)
     regex_enabled: bool = False
@@ -72,6 +73,7 @@ class SearchQueryParams(BaseModel):
     limit: int = Field(default=20, ge=1, le=1000)
     offset: int = Field(default=0, ge=0)
     include_snippets: bool = True
+    include_gantt_tasks: bool = False
 
     @field_validator("full_path")
     @classmethod

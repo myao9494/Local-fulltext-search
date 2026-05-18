@@ -89,6 +89,8 @@ class LauncherDelegate(AppKit.NSObject):
         self.search_field = None
         self.status_label = None
         self.results_stack = None
+        self.gantt_checkbox = None
+        self.include_gantt_tasks = False
         self.last_results_time = 0.0
         return self
 
@@ -526,6 +528,10 @@ class LauncherDelegate(AppKit.NSObject):
         gui_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
         content.addSubview_(gui_button)
 
+        self.gantt_checkbox = AppKit.NSButton.checkboxWithTitle_target_action_("gantt", self, "toggleGanttSearch:")
+        self.gantt_checkbox.setFrame_(AppKit.NSMakeRect(126, PANEL_HEIGHT - 36, 80, 24))
+        content.addSubview_(self.gantt_checkbox)
+
         scroll = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(24, 54, PANEL_WIDTH - 48, PANEL_HEIGHT - 158))
         scroll.setDrawsBackground_(False)
         scroll.setBorderType_(AppKit.NSNoBorder)
@@ -562,7 +568,7 @@ class LauncherDelegate(AppKit.NSObject):
         バックグラウンド検索を実行し、結果更新はメインスレッドへ戻す。
         """
         try:
-            response = self.client.search(query, limit=self.config.search_limit)
+            response = self.client.search(query, limit=self.config.search_limit, include_gantt_tasks=self.include_gantt_tasks)
         except Exception as error:
             AppHelper.callAfter(self._show_search_error, sequence, str(error))
         else:
@@ -695,23 +701,31 @@ class LauncherDelegate(AppKit.NSObject):
         invisible_button.setTag_(index)
         card.addSubview_(invisible_button)
 
-        copy_button = AppKit.NSButton.buttonWithTitle_target_action_("フルパス", self, "copyPathResult:")
-        copy_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 316, 20, 68, 24))
-        copy_button.setTag_(index)
-        copy_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
-        card.addSubview_(copy_button)
+        if item.source_type == "gantt":
+            if item.gantt_link:
+                link_button = AppKit.NSButton.buttonWithTitle_target_action_("ganttのリンクを開く", self, "openGanttLinkResult:")
+                link_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 236, 20, 162, 24))
+                link_button.setTag_(index)
+                link_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
+                card.addSubview_(link_button)
+        else:
+            copy_button = AppKit.NSButton.buttonWithTitle_target_action_("フルパス", self, "copyPathResult:")
+            copy_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 316, 20, 68, 24))
+            copy_button.setTag_(index)
+            copy_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
+            card.addSubview_(copy_button)
 
-        finder_button = AppKit.NSButton.buttonWithTitle_target_action_("Finderで開く", self, "revealResult:")
-        finder_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 240, 20, 76, 24))
-        finder_button.setTag_(index)
-        finder_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
-        card.addSubview_(finder_button)
+            finder_button = AppKit.NSButton.buttonWithTitle_target_action_("Finderで開く", self, "revealResult:")
+            finder_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 240, 20, 76, 24))
+            finder_button.setTag_(index)
+            finder_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
+            card.addSubview_(finder_button)
 
-        folder_button = AppKit.NSButton.buttonWithTitle_target_action_("フォルダを開く", self, "openFolderResult:")
-        folder_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 156, 20, 82, 24))
-        folder_button.setTag_(index)
-        folder_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
-        card.addSubview_(folder_button)
+            folder_button = AppKit.NSButton.buttonWithTitle_target_action_("フォルダを開く", self, "openFolderResult:")
+            folder_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 156, 20, 82, 24))
+            folder_button.setTag_(index)
+            folder_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
+            card.addSubview_(folder_button)
         
         return card
 
@@ -727,8 +741,12 @@ class LauncherDelegate(AppKit.NSObject):
     @objc.python_method
     def _open_item(self, item: SearchResultItem) -> None:
         try:
+            if item.source_type == "gantt":
+                self.client.open_gantt_task_input(abs(item.file_id))
+                self.hide_panel()
+                return
             webbrowser.open(primary_web_url_for_item(item, self.web_base_url))
-            if item.result_kind == "file":
+            if item.result_kind == "file" and item.source_type != "gantt" and item.file_id > 0:
                 self.client.record_click(item.file_id)
             self.hide_panel()
         except Exception as error:
@@ -761,6 +779,14 @@ class LauncherDelegate(AppKit.NSObject):
         pasteboard.setString_forType_(item.full_path, AppKit.NSPasteboardTypeString)
         self.status_label.setStringValue_("クリップボードにコピーしました")
 
+    def toggleGanttSearch_(self, sender: Any) -> None:
+        """
+        macOS ランチャーで gantt タスク検索の有効/無効を切り替える。
+        """
+        self.include_gantt_tasks = bool(sender.state())
+        if self.search_field is not None and str(self.search_field.stringValue()).strip():
+            self.controlTextDidChange_(None)
+
     def openFolderResult_(self, sender: Any) -> None:
         """
         Web アプリのフォルダリンクと同じ URL を既定ブラウザで開く。
@@ -770,6 +796,17 @@ class LauncherDelegate(AppKit.NSObject):
             return
         item = self.results[index]
         webbrowser.open(folder_web_url_for_item(item, self.web_base_url))
+
+    def openGanttLinkResult_(self, sender: Any) -> None:
+        """
+        gantt タスクに設定されているリンクを既定ブラウザで開く。
+        """
+        index = int(sender.tag())
+        if index < 0 or index >= len(self.results):
+            return
+        item = self.results[index]
+        if item.gantt_link:
+            webbrowser.open(item.gantt_link)
 
     def openGuiUrl_(self, sender: Any) -> None:
         """

@@ -18,6 +18,7 @@ def make_item(*, result_kind: str, full_path: str) -> SearchResultItem:
     return SearchResultItem(
         file_id=1,
         result_kind=result_kind,
+        source_type="local",
         target_path=full_path,
         file_name=full_path.rsplit("/", maxsplit=1)[-1],
         full_path=full_path,

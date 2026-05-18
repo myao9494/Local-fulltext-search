@@ -188,7 +188,7 @@ export async function fetchSearchPage(params: {
   full_path: string;
   search_all_enabled?: boolean;
   skip_refresh?: boolean;
-  source_type?: "local" | "web";
+  source_type?: "local" | "web" | "gantt";
   index_depth: number;
   refresh_window_minutes: number;
   regex_enabled?: boolean;
@@ -203,6 +203,7 @@ export async function fetchSearchPage(params: {
   limit?: number;
   offset?: number;
   include_snippets?: boolean;
+  include_gantt_tasks?: boolean;
 }): Promise<SearchResponse> {
   return request<SearchResponse>("/api/search", {
     method: "POST",
@@ -220,7 +221,7 @@ export async function search(params: {
   full_path: string;
   search_all_enabled?: boolean;
   skip_refresh?: boolean;
-  source_type?: "local" | "web";
+  source_type?: "local" | "web" | "gantt";
   index_depth: number;
   refresh_window_minutes: number;
   regex_enabled?: boolean;
@@ -232,6 +233,7 @@ export async function search(params: {
   sort_order?: "asc" | "desc";
   created_from?: string;
   created_to?: string;
+  include_gantt_tasks?: boolean;
 }, options?: {
   onProgress?: (response: SearchResponse) => void;
 }): Promise<SearchResponse> {
@@ -258,5 +260,12 @@ export async function openFileLocation(path: string): Promise<{ status: string }
   return request<{ status: string }>("/api/files/open-location", {
     method: "POST",
     body: JSON.stringify({ path }),
+  });
+}
+
+export async function openGanttTaskInput(taskId: number): Promise<{ status: string; task_id: number }> {
+  return request<{ status: string; task_id: number }>(`/api/gantt/tasks/${taskId}/open-input`, {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }

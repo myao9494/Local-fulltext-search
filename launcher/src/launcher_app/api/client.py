@@ -47,13 +47,31 @@ class LauncherApiClient:
         self.timeout = timeout
         self._urlopen = urlopen
 
-    def search(self, query: str, *, limit: int = 8) -> SearchResponse:
+    def search(self, query: str, *, limit: int = 8, include_gantt_tasks: bool = False) -> SearchResponse:
         """
-        macOS では検索時にインデックス更新を許可し、他 OS では高速な既存インデックス専用 API を使用する。
+        gantt 選択時は通常検索に gantt タスク結果も追加する。
         """
         is_mac = platform.system() == "Darwin"
         
-        if is_mac:
+        if include_gantt_tasks and not is_mac:
+            endpoint = "/api/search"
+            payload = {
+                "q": query,
+                "full_path": "",
+                "search_all_enabled": True,
+                "skip_refresh": True,
+                "source_type": "local",
+                "index_depth": 5,
+                "refresh_window_minutes": 0,
+                "search_target": "all",
+                "sort_by": "click_count",
+                "sort_order": "desc",
+                "limit": limit,
+                "offset": 0,
+                "include_snippets": True,
+                "include_gantt_tasks": True,
+            }
+        elif is_mac:
             # macOS: 検索時に登録済みフォルダのインデックス更新を走らせる
             endpoint = "/api/search"
             payload = {
@@ -70,6 +88,8 @@ class LauncherApiClient:
                 "offset": 0,
                 "include_snippets": True,
             }
+            if include_gantt_tasks:
+                payload["include_gantt_tasks"] = True
         else:
             # 他 OS: 既存インデックスのみを使用して高速にレスポンスを返す
             endpoint = "/api/search/indexed"
@@ -99,6 +119,12 @@ class LauncherApiClient:
         バックエンドの OS 連携 API でファイル位置を開く。
         """
         self._request_json("/api/files/open-location", {"path": path})
+
+    def open_gantt_task_input(self, task_id: int) -> None:
+        """
+        gantt タスクの入力画面表示をバックエンド経由で依頼する。
+        """
+        self._request_json(f"/api/gantt/tasks/{task_id}/open-input", {})
 
     def _request_json(self, path: str, payload: dict[str, object]) -> dict[str, Any]:
         """
@@ -146,6 +172,7 @@ def _parse_search_item(raw_item: object) -> SearchResultItem:
     return SearchResultItem(
         file_id=int(item.get("file_id", 0)),
         result_kind=str(item.get("result_kind", "file")),
+        source_type=str(item.get("source_type", "local")),
         target_path=str(item.get("target_path", "")),
         file_name=str(item.get("file_name", "")),
         full_path=str(item.get("full_path", "")),
@@ -154,6 +181,7 @@ def _parse_search_item(raw_item: object) -> SearchResultItem:
         mtime=str(item.get("mtime", "")),
         click_count=int(item.get("click_count", 0)),
         snippet=str(item.get("snippet", "")),
+        gantt_link=str(item.get("gantt_link") or "") or None,
     )
 
 

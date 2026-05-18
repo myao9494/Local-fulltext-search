@@ -1,7 +1,7 @@
 export type SearchResult = {
   file_id: number;
   result_kind: "file" | "folder";
-  source_type: "local" | "web";
+  source_type: "local" | "web" | "gantt";
   target_path: string;
   file_name: string;
   full_path: string;
@@ -10,6 +10,7 @@ export type SearchResult = {
   mtime: string;
   click_count: number;
   snippet: string;
+  gantt_link?: string | null;
 };
 
 export type SearchResponse = {
@@ -44,7 +45,7 @@ export type FailedFileListResponse = {
 
 export type IndexedTarget = {
   full_path: string;
-  source_type: "local" | "web";
+  source_type: "local" | "web" | "gantt";
   last_indexed_at: string | null;
   indexed_file_count: number;
 };
@@ -55,7 +56,7 @@ export type IndexedTargetListResponse = {
 
 export type SearchTargetFolder = {
   full_path: string;
-  source_type: "local" | "web";
+  source_type: "local" | "web" | "gantt";
   is_enabled: boolean;
   last_indexed_at: string | null;
   indexed_file_count: number;
@@ -67,7 +68,7 @@ export type SearchTargetListResponse = {
 
 export type SearchTargetCoverage = {
   normalized_path: string;
-  source_type: "local" | "web";
+  source_type: "local" | "web" | "gantt";
   is_covered: boolean;
   covering_path: string | null;
 };

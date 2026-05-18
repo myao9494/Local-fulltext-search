@@ -13,6 +13,7 @@ class SearchResultItem:
 
     file_id: int
     result_kind: str
+    source_type: str
     target_path: str
     file_name: str
     full_path: str
@@ -21,6 +22,7 @@ class SearchResultItem:
     mtime: str
     click_count: int
     snippet: str
+    gantt_link: str | None = None
 
 
 @dataclass(frozen=True)

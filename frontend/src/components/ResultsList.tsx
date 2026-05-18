@@ -6,6 +6,7 @@ type ResultsListProps = {
   items: SearchResult[];
   dateField: "created" | "modified";
   onResultOpen: (fileId: number) => void;
+  onGanttTaskOpen: (taskId: number) => void;
   onResultDelete: (fileId: number, fullPath: string) => void;
   onResultIgnore: (fileId: number, fullPath: string) => void;
   ignoringResultPath: string | null;
@@ -89,6 +90,7 @@ type ResultCardProps = {
   onCopyFullPath: (fileId: number, fullPath: string) => Promise<void>;
   onOpenLocation: (fileId: number, fullPath: string) => Promise<void>;
   onResultOpen: (fileId: number) => void;
+  onGanttTaskOpen: (taskId: number) => void;
   onResultDelete: (fileId: number, fullPath: string) => void;
   onResultIgnore: (fileId: number, fullPath: string) => void;
   ignoringResultPath: string | null;
@@ -106,6 +108,7 @@ function ResultCard({
   onCopyFullPath,
   onOpenLocation,
   onResultOpen,
+  onGanttTaskOpen,
   onResultDelete,
   onResultIgnore,
   ignoringResultPath,
@@ -118,7 +121,9 @@ function ResultCard({
   const fullPathUrl = `${webAppBaseUrl}/api/fullpath?path=${encodeURIComponent(item.full_path)}`;
   const folderUrl = `${webAppBaseUrl}/?path=${encodeURIComponent(item.result_kind === "folder" ? item.full_path : folderPath)}`;
   const isWebResult = item.source_type === "web";
-  const primaryUrl = isWebResult ? buildWebTextFragmentUrl(item) : item.result_kind === "folder" ? folderUrl : fullPathUrl;
+  const isGanttResult = item.source_type === "gantt";
+  const ganttTaskId = Math.abs(item.file_id);
+  const primaryUrl = isGanttResult ? "#" : isWebResult ? buildWebTextFragmentUrl(item) : item.result_kind === "folder" ? folderUrl : fullPathUrl;
 
   useEffect(() => {
     const snippetElement = snippetRef.current;
@@ -153,15 +158,17 @@ function ResultCard({
           {item.full_path}
         </code>
         <div className="result-path-actions">
-          <button
-            type="button"
-            className="result-copy-button"
-            onClick={() => void onCopyFullPath(item.file_id, item.full_path)}
-            title="フルパスをコピー"
-          >
-            パスをコピー
-          </button>
-          {!isWebResult ? (
+          {!isGanttResult ? (
+            <button
+              type="button"
+              className="result-copy-button"
+              onClick={() => void onCopyFullPath(item.file_id, item.full_path)}
+              title="フルパスをコピー"
+            >
+              パスをコピー
+            </button>
+          ) : null}
+          {!isWebResult && !isGanttResult ? (
             <button
               type="button"
               className="result-open-location-button"
@@ -172,7 +179,7 @@ function ResultCard({
               {openingLocationFileId === item.file_id ? "開いています..." : openLocationLabel}
             </button>
           ) : null}
-          {!isWebResult ? (
+          {!isWebResult && !isGanttResult ? (
             <a
               className="result-folder-link"
               href={folderUrl}
@@ -183,7 +190,7 @@ function ResultCard({
               フォルダを開く
             </a>
           ) : null}
-          {item.result_kind === "file" && !isWebResult ? (
+          {item.result_kind === "file" && !isWebResult && !isGanttResult ? (
             <button
               type="button"
               className="result-ignore-button"
@@ -194,7 +201,7 @@ function ResultCard({
               {ignoringResultPath === item.full_path ? "無視中..." : "無視"}
             </button>
           ) : null}
-          {item.result_kind === "file" && !isWebResult ? (
+          {item.result_kind === "file" && !isWebResult && !isGanttResult ? (
             <button
               type="button"
               className="result-delete-button"
@@ -207,6 +214,17 @@ function ResultCard({
           {copiedFileId === item.file_id ? (
             <span className="result-path-status">コピーしました</span>
           ) : null}
+          {isGanttResult && item.gantt_link ? (
+            <a
+              className="result-folder-link"
+              href={item.gantt_link}
+              target="_blank"
+              rel="noreferrer"
+              title="gantt に設定されたリンクを開く"
+            >
+              ganttのリンクを開く
+            </a>
+          ) : null}
         </div>
       </div>
       <div className="result-header">
@@ -216,9 +234,14 @@ function ResultCard({
             href={primaryUrl}
             target="_blank"
             rel="noreferrer"
-            onClick={() => {
+            onClick={(event) => {
               if (item.result_kind === "file") {
-                onResultOpen(item.file_id);
+                if (isGanttResult) {
+                  event.preventDefault();
+                  onGanttTaskOpen(ganttTaskId);
+                } else {
+                  onResultOpen(item.file_id);
+                }
               }
             }}
           >
@@ -227,7 +250,7 @@ function ResultCard({
         </h3>
         <div className="result-meta">
           <span>{dateField === "created" ? "作成" : "編集"}: {new Date(dateField === "created" ? item.created_at : item.mtime).toLocaleString()}</span>
-          {isWebResult ? <span>種別: Web</span> : item.result_kind === "file" ? <span>アクセス: {item.click_count}</span> : <span>種別: フォルダ</span>}
+          {isGanttResult ? <span>種別: gantt</span> : isWebResult ? <span>種別: Web</span> : item.result_kind === "file" ? <span>アクセス: {item.click_count}</span> : <span>種別: フォルダ</span>}
         </div>
       </div>
       <div className="result-snippet-wrapper">
@@ -251,7 +274,7 @@ function ResultCard({
   );
 }
 
-export function ResultsList({ items, dateField, onResultOpen, onResultDelete, onResultIgnore, ignoringResultPath }: ResultsListProps) {
+export function ResultsList({ items, dateField, onResultOpen, onGanttTaskOpen, onResultDelete, onResultIgnore, ignoringResultPath }: ResultsListProps) {
   const [copiedFileId, setCopiedFileId] = useState<number | null>(null);
   const [openingLocationFileId, setOpeningLocationFileId] = useState<number | null>(null);
 
@@ -319,6 +342,7 @@ export function ResultsList({ items, dateField, onResultOpen, onResultDelete, on
           onCopyFullPath={handleCopyFullPath}
           onOpenLocation={handleOpenLocation}
           onResultOpen={onResultOpen}
+          onGanttTaskOpen={onGanttTaskOpen}
           onResultDelete={onResultDelete}
           onResultIgnore={onResultIgnore}
           ignoringResultPath={ignoringResultPath}

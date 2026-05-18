@@ -6,6 +6,7 @@ type SearchBarProps = {
   indexDepth: string;
   searchFilterText: string;
   searchSource: "local" | "web";
+  includeGanttTasks: boolean;
   searchTarget: "all" | "body" | "filename" | "folder" | "filename_and_folder";
   dateField: "created" | "modified";
   sortBy: "created" | "modified" | "click_count";
@@ -24,6 +25,7 @@ type SearchBarProps = {
   onIndexDepthChange: (value: string) => void;
   onSearchFilterTextChange: (value: string) => void;
   onSearchSourceChange: (value: "local" | "web") => void;
+  onIncludeGanttTasksChange: (value: boolean) => void;
   onSearchTargetChange: (value: "all" | "body" | "filename" | "folder" | "filename_and_folder") => void;
   onDateFieldChange: (value: "created" | "modified") => void;
   onSortByChange: (value: "created" | "modified" | "click_count") => void;
@@ -49,6 +51,7 @@ export function SearchBar({
   indexDepth,
   searchFilterText,
   searchSource,
+  includeGanttTasks,
   searchTarget,
   dateField,
   sortBy,
@@ -67,6 +70,7 @@ export function SearchBar({
   onIndexDepthChange,
   onSearchFilterTextChange,
   onSearchSourceChange,
+  onIncludeGanttTasksChange,
   onSearchTargetChange,
   onDateFieldChange,
   onSortByChange,
@@ -111,6 +115,14 @@ export function SearchBar({
                     Web
                   </button>
                 </div>
+                <label className="gantt-include-toggle">
+                  <input
+                    type="checkbox"
+                    checked={includeGanttTasks}
+                    onChange={(event) => onIncludeGanttTasksChange(event.target.checked)}
+                  />
+                  <span>gantt</span>
+                </label>
                 <button
                   className={`secondary-button small-btn search-all-button ${isSearchAllEnabled ? "active" : ""}`}
                   onClick={onSearchAllToggle}
