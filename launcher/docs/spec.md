@@ -65,6 +65,7 @@ launcher/
 - macOS では `NSWindowCollectionBehaviorCanJoinAllSpaces` により、アクティブな仮想デスクトップ上へ表示する。
 - macOS ではスリープ直前にホットキー押下状態をクリアし、復帰後に `CGEventTap`、watchdog polling、Cocoa のグローバル/ローカルイベント monitor を張り直す。
 - macOS では表示のたびに `CanJoinAllSpaces` / `FullScreenAuxiliary` / `Stationary` / `Transient` と `NSStatusWindowLevel` を再適用し、現在の Space 上で前面表示する。
+- Windows / Linux の Flet 版では、再表示時に `center`、`to_front`、検索欄 `focus` を順に実行し、検索結果の再描画後も検索欄へフォーカスを戻して `Enter` 起動を維持する。Flet 側の Enter イベントが失われた場合に備え、ランチャー表示中かつ検索画面の単独 `Enter` は `pynput` のグローバルキー監視でも補助的に拾う。
 
 ## 7. OS 別パーミッション・注意事項
 

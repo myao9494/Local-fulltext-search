@@ -65,6 +65,7 @@ class LauncherApp:
         self.include_gantt_tasks = False
         self.active_screen = "search"
         self.gantt_parent = config.gantt_parent
+        self._suppress_render_focus = False
 
     def build(self) -> None:
         """
@@ -197,7 +198,11 @@ class LauncherApp:
         self.page.add(self.root)
         self.page.on_keyboard_event = self._on_keyboard
         self.page.on_window_event = self._on_window_event
-        self.hotkeys = GlobalHotkeyController(self.toggle_window)
+        self.hotkeys = GlobalHotkeyController(
+            self.toggle_window,
+            on_enter=self._open_selected_from_global_enter,
+            enter_enabled=self._global_enter_enabled,
+        )
         if self.hotkeys.start():
             self.status.value = f"Hotkey: {hotkey_spec_for_platform()}"
         else:
@@ -227,10 +232,16 @@ class LauncherApp:
         self._show_time = time.monotonic()
         self.page.window.minimized = False
         self.page.window.opacity = 1
-        self._run_window_task(self.page.window.center)
-        self._run_window_task(self.page.window.to_front)
-        self._run_window_task(self.query.focus)
+        self._run_window_task(self._restore_window_and_query_focus)
         self.page.update()
+
+    async def _restore_window_and_query_focus(self) -> None:
+        """
+        Windows で再表示後の Enter 起動が失われないよう、前面化後に検索欄へフォーカスする。
+        """
+        await self.page.window.center()
+        await self.page.window.to_front()
+        await self.query.focus()
 
     def _hide_window(self) -> None:
         """
@@ -344,6 +355,8 @@ class LauncherApp:
             controls.append(self._result_tile(item, index=index, selected=index == self.selected_index))
         self.results_column.controls = controls
         self.page.update()
+        if self.active_screen == "search" and not self.is_hidden and not self._suppress_render_focus:
+            self._focus_query()
 
     def _result_tile(self, item: SearchResultItem, *, index: int, selected: bool) -> Any:
         """
@@ -509,7 +522,11 @@ class LauncherApp:
         if not self.results:
             return
         self.selected_index = (self.selected_index + delta) % len(self.results)
-        self._render_results()
+        self._suppress_render_focus = True
+        try:
+            self._render_results()
+        finally:
+            self._suppress_render_focus = False
         self._scroll_to_selected(delta)
         self._focus_query()
 
@@ -539,12 +556,33 @@ class LauncherApp:
             return
         self._select_and_open(self.results[self.selected_index])
 
+    def _global_enter_enabled(self) -> bool:
+        """
+        Flet の Enter イベントが失われた場合だけ、検索画面表示中の単独 Enter を補助する。
+        """
+        return self.active_screen == "search" and not self.is_hidden
+
+    def _open_selected_from_global_enter(self) -> None:
+        """
+        pynput のリスナースレッドから Enter 起動を UI スレッドへ戻す。
+        """
+
+        async def _open() -> None:
+            self._open_selected()
+
+        future = self.page.run_task(_open)
+        add_done_callback = getattr(future, "add_done_callback", None)
+        if callable(add_done_callback):
+            add_done_callback(_log_task_error)
+
     def _select_and_open(self, item: SearchResultItem) -> None:
         """
         指定結果を開いた後、ランチャーを自動で隠す。
         """
         try:
             if item.source_type == "gantt":
+                if self._is_duplicate_open_request(f"gantt:{abs(item.file_id)}"):
+                    return
                 self.client.open_gantt_task_input(abs(item.file_id))
                 self._hide_window()
                 self.page.update()

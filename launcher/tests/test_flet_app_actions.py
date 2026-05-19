@@ -15,6 +15,13 @@ class StubWindow:
     """
 
     minimized = False
+    opacity = 1
+
+    async def center(self) -> None:
+        return None
+
+    async def to_front(self) -> None:
+        return None
 
 
 class StubPage:
@@ -88,6 +95,7 @@ class StubClient:
     def __init__(self) -> None:
         self.clicked_file_ids: list[int] = []
         self.opened_locations: list[str] = []
+        self.opened_gantt_task_ids: list[int] = []
         self.created_tasks: list[dict[str, Any]] = []
 
     def record_click(self, file_id: int) -> int:
@@ -96,6 +104,9 @@ class StubClient:
 
     def open_location(self, path: str) -> None:
         self.opened_locations.append(path)
+
+    def open_gantt_task_input(self, task_id: int) -> None:
+        self.opened_gantt_task_ids.append(task_id)
 
     def create_gantt_task(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.created_tasks.append(payload)
@@ -139,6 +150,35 @@ class StubResultsColumn:
         self.scroll_calls.append(kwargs)
 
 
+class AsyncWindow:
+    """
+    再表示時の非同期ウィンドウ操作順を記録する。
+    """
+
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+        self.minimized = True
+        self.opacity = 0
+
+    async def center(self) -> None:
+        self.calls.append("center")
+
+    async def to_front(self) -> None:
+        self.calls.append("to_front")
+
+
+class AsyncQuery:
+    """
+    非同期 focus の呼び出し順を記録する。
+    """
+
+    def __init__(self, calls: list[str]) -> None:
+        self.calls = calls
+
+    async def focus(self) -> None:
+        self.calls.append("focus")
+
+
 def make_item(*, result_kind: str = "file", full_path: str = "/tmp/docs/a b.md") -> SearchResultItem:
     """
     アクションテスト用の検索結果を作る。
@@ -151,6 +191,25 @@ def make_item(*, result_kind: str = "file", full_path: str = "/tmp/docs/a b.md")
         file_name=full_path.rsplit("/", maxsplit=1)[-1],
         full_path=full_path,
         file_ext=".md",
+        created_at="2026-01-01T00:00:00",
+        mtime="2026-01-01T00:00:00",
+        click_count=0,
+        snippet="",
+    )
+
+
+def make_gantt_item(*, task_id: int = 42) -> SearchResultItem:
+    """
+    gantt 検索結果のアクションテスト用アイテムを作る。
+    """
+    return SearchResultItem(
+        file_id=-abs(task_id),
+        result_kind="task",
+        source_type="gantt",
+        target_path=f"gantt://tasks/{task_id}",
+        file_name=f"task {task_id}",
+        full_path=f"gantt://tasks/{task_id}",
+        file_ext="",
         created_at="2026-01-01T00:00:00",
         mtime="2026-01-01T00:00:00",
         click_count=0,
@@ -315,6 +374,47 @@ def test_move_selection_refocuses_query_for_enter_open() -> None:
     assert focus_calls == ["focus"]
 
 
+def test_render_results_refocuses_query_after_list_update() -> None:
+    """
+    検索結果の再描画後は Windows Flet のフォーカスずれに備えて検索欄へ戻す。
+    """
+    page = StubPage()
+    focus_calls: list[str] = []
+    app = LauncherApp(page, StubClient(), LauncherConfig())  # type: ignore[arg-type]
+    app.query = type("Query", (), {"focus": lambda self: focus_calls.append("focus")})()
+    app.results_column = StubResultsColumn()
+    app.results = []
+    app.active_screen = "search"
+    app.is_hidden = False
+
+    app._render_results()
+
+    assert len(page.tasks) == 1
+    page.tasks[0]()
+    assert focus_calls == ["focus"]
+
+
+def test_show_window_restores_focus_after_window_is_front() -> None:
+    """
+    再表示時は to_front 完了後に検索欄へ focus し、Enter 起動を復旧する。
+    """
+    calls: list[str] = []
+    page = StubPage()
+    page.window = AsyncWindow(calls)
+    app = LauncherApp(page, StubClient(), LauncherConfig())  # type: ignore[arg-type]
+    app.query = AsyncQuery(calls)
+
+    app._show_window()
+    coroutine = page.tasks[0]()
+    try:
+        coroutine.send(None)
+    except StopIteration:
+        pass
+
+    assert calls == ["center", "to_front", "focus"]
+    assert app.is_hidden is False
+
+
 def test_keyboard_accepts_windows_flet_arrow_and_enter_names(monkeypatch: Any) -> None:
     """
     Windows の Flet で揺れるキー名でも矢印選択と Enter 起動を処理する。
@@ -356,6 +456,41 @@ def test_enter_open_is_deduplicated_when_submit_and_keyboard_both_fire(monkeypat
     assert client.clicked_file_ids == [42]
 
 
+def test_global_enter_fallback_runs_open_on_ui_thread() -> None:
+    """
+    pynput の Enter フォールバックは UI スレッドへ戻して選択結果を開く。
+    """
+    page = StubPage()
+    opened: list[bool] = []
+    app = LauncherApp(page, StubClient(), LauncherConfig())  # type: ignore[arg-type]
+    app._open_selected = lambda: opened.append(True)  # type: ignore[method-assign]
+
+    app._open_selected_from_global_enter()
+    coroutine = page.tasks[0]()
+    try:
+        coroutine.send(None)
+    except StopIteration:
+        pass
+
+    assert opened == [True]
+
+
+def test_global_enter_fallback_only_enabled_on_visible_search_screen() -> None:
+    """
+    グローバル Enter の保険は検索画面が表示中のときだけ有効にする。
+    """
+    app = LauncherApp(StubPage(), StubClient(), LauncherConfig())  # type: ignore[arg-type]
+
+    assert app._global_enter_enabled() is True
+
+    app.is_hidden = True
+    assert app._global_enter_enabled() is False
+
+    app.is_hidden = False
+    app.active_screen = "memo"
+    assert app._global_enter_enabled() is False
+
+
 def test_select_and_open_deduplicates_same_item_like_click(monkeypatch: Any) -> None:
     """
     Enter 由来の複数イベントが直接起動処理へ来ても、クリックと同じく 1 回だけ開く。
@@ -373,6 +508,20 @@ def test_select_and_open_deduplicates_same_item_like_click(monkeypatch: Any) -> 
 
     assert opened_urls == ["http://localhost:8001/api/fullpath?path=%2Ftmp%2Fdocs%2Fa.md"]
     assert client.clicked_file_ids == [42]
+
+
+def test_select_and_open_deduplicates_gantt_task_input() -> None:
+    """
+    Flet と pynput の Enter が両方届いても gantt タスク入力は 1 回だけ開く。
+    """
+    client = StubClient()
+    app = LauncherApp(StubPage(), client, LauncherConfig())  # type: ignore[arg-type]
+    item = make_gantt_item(task_id=123)
+
+    app._select_and_open(item)
+    app._select_and_open(item)
+
+    assert client.opened_gantt_task_ids == [123]
 
 
 def test_keyboard_accepts_windows_flet_escape_name() -> None:

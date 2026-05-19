@@ -118,12 +118,18 @@ class GlobalHotkeyController:
         hotkey: str | None = None,
         required_modifiers: frozenset[str] | None = None,
         modifier_state_verifier: Callable[[frozenset[str]], bool] | None = None,
+        on_enter: Callable[[], None] | None = None,
+        enter_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self.on_activate = on_activate
         self.hotkey = hotkey or hotkey_spec_for_platform()
         self.required_modifiers = required_modifiers or modifier_names_for_platform()
         self.state = ModifierChordState(self.required_modifiers)
         self.modifier_state_verifier = modifier_state_verifier or _required_modifiers_are_physically_down
+        self.on_enter = on_enter
+        self.enter_enabled = enter_enabled or (lambda: True)
+        self._pressed_modifiers: set[str] = set()
+        self._enter_pressed = False
         self._listener: Any | None = None
 
     def start(self) -> bool:
@@ -151,9 +157,15 @@ class GlobalHotkeyController:
 
     def _on_press(self, key: Any) -> None:
         """
-        pynput のキー押下イベントを修飾キー名へ正規化して発火判定する。
+        pynput のキー押下イベントを修飾キー名と Enter へ正規化して発火判定する。
         """
-        if self.state.press(_modifier_name(key)):
+        modifier_name = _modifier_name(key)
+        if modifier_name is not None:
+            self._pressed_modifiers.add(modifier_name)
+        if _is_enter_key(key):
+            self._activate_enter_fallback()
+            return
+        if self.state.press(modifier_name):
             if not self.modifier_state_verifier(self.required_modifiers):
                 self.state.reset()
                 return
@@ -163,7 +175,24 @@ class GlobalHotkeyController:
         """
         pynput のキー解除イベントを修飾キー名へ正規化して状態を戻す。
         """
-        self.state.release(_modifier_name(key))
+        modifier_name = _modifier_name(key)
+        if modifier_name is not None:
+            self._pressed_modifiers.discard(modifier_name)
+        if _is_enter_key(key):
+            self._enter_pressed = False
+            return
+        self.state.release(modifier_name)
+
+    def _activate_enter_fallback(self) -> None:
+        """
+        Flet に Enter が届かない場合の保険として、単独 Enter を 1 押下 1 回だけ通知する。
+        """
+        if self.on_enter is None or self._enter_pressed:
+            return
+        self._enter_pressed = True
+        if not self.enter_enabled() or not _modifiers_are_clear(self._pressed_modifiers):
+            return
+        self.on_enter()
 
 
 def _modifier_name(key: Any) -> str | None:
@@ -184,6 +213,30 @@ def _modifier_name(key: Any) -> str | None:
     if normalized in {"shift", "shift_l", "shift_r"}:
         return "shift"
     return None
+
+
+def _is_enter_key(key: Any) -> bool:
+    """
+    pynput の Enter / Return キー表現を判定する。
+    """
+    name = getattr(key, "name", None)
+    if not isinstance(name, str):
+        text = str(key)
+        name = text.rsplit(".", maxsplit=1)[-1]
+    normalized = name.lower().replace("-", "_").replace(" ", "_")
+    return normalized in {"enter", "return", "numpad_enter", "numpadenter"}
+
+
+def _modifiers_are_clear(pressed_modifiers: set[str]) -> bool:
+    """
+    Enter フォールバックが Ctrl+Enter 等を横取りしないよう修飾キー状態を確認する。
+    """
+    if platform.system() == "Windows":
+        try:
+            return not any(_windows_modifier_is_down(modifier) for modifier in {"ctrl", "cmd", "alt", "shift"})
+        except Exception:
+            return not pressed_modifiers
+    return not pressed_modifiers
 
 
 def _required_modifiers_are_physically_down(required_modifiers: frozenset[str]) -> bool:

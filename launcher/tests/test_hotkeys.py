@@ -2,6 +2,8 @@
 グローバルホットキー定義が OS ごとの仕様に合うことを検証する。
 """
 
+from typing import Any
+
 from launcher_app.services.hotkeys import (
     GlobalHotkeyController,
     ModifierChordState,
@@ -122,3 +124,56 @@ def test_global_hotkey_activates_when_required_modifiers_are_physically_down() -
 
     assert activated == [True]
     assert seen_required == [frozenset({"ctrl", "cmd"})]
+
+
+def test_global_hotkey_enter_fallback_activates_once_until_release() -> None:
+    """
+    Flet に Enter が届かない場合の保険は、キーリピートではなく 1 押下 1 回だけ発火する。
+    """
+    activated: list[bool] = []
+    controller = GlobalHotkeyController(
+        lambda: None,
+        on_enter=lambda: activated.append(True),
+        enter_enabled=lambda: True,
+    )
+
+    controller._on_press(StubKey("enter"))
+    controller._on_press(StubKey("enter"))
+    controller._on_release(StubKey("enter"))
+    controller._on_press(StubKey("return"))
+
+    assert activated == [True, True]
+
+
+def test_global_hotkey_enter_fallback_respects_enabled_flag() -> None:
+    """
+    ランチャー非表示時など、許可されていない状態では Enter フォールバックを発火しない。
+    """
+    activated: list[bool] = []
+    controller = GlobalHotkeyController(
+        lambda: None,
+        on_enter=lambda: activated.append(True),
+        enter_enabled=lambda: False,
+    )
+
+    controller._on_press(StubKey("enter"))
+
+    assert activated == []
+
+
+def test_global_hotkey_enter_fallback_ignores_modified_enter(monkeypatch: Any) -> None:
+    """
+    Ctrl+Enter などの修飾キー付き Enter は Flet 側の通常ショートカットに任せる。
+    """
+    activated: list[bool] = []
+    controller = GlobalHotkeyController(
+        lambda: None,
+        on_enter=lambda: activated.append(True),
+        enter_enabled=lambda: True,
+    )
+    monkeypatch.setattr("launcher_app.services.hotkeys.platform.system", lambda: "Linux")
+
+    controller._on_press(StubKey("ctrl"))
+    controller._on_press(StubKey("enter"))
+
+    assert activated == []
