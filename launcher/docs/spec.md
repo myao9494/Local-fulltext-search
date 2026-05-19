@@ -15,7 +15,7 @@
     - ランチャー表示中に `Tab` を押すと検索画面とメモ画面を切り替える。
     - メモ画面では 1 行目を `text`、2 行目以降を `memo` として `LAUNCHER_GANTT_API_BASE_URL/tasks` へ POST する。
     - `start_date` は当日 00:00:00、`end_date` は翌日 00:00:00、`progress` は `0.1`、`kind_task` は `1` とする。
-    - `Enter` で送信し、macOS は `Command+Enter`、全 OS 共通で `Shift+Enter` を改行として扱う。
+    - `Enter` で 1 回送信し、送信完了後はランチャーを最小化して非表示にする。macOS は `Command+Enter`、全 OS 共通で `Shift+Enter` を改行として扱う。
     - `parent` ID は Web アプリの設定ドロワーにある `gantt parent` で保存した共有設定を、送信直前に読み込んで使用する。
 - **オートハイド**:
     - 実行完了（ファイル起動）時に自動的に非表示。
@@ -65,7 +65,7 @@ launcher/
 - macOS では `NSWindowCollectionBehaviorCanJoinAllSpaces` により、アクティブな仮想デスクトップ上へ表示する。
 - macOS ではスリープ直前にホットキー押下状態をクリアし、復帰後に `CGEventTap`、watchdog polling、Cocoa のグローバル/ローカルイベント monitor を張り直す。
 - macOS では表示のたびに `CanJoinAllSpaces` / `FullScreenAuxiliary` / `Stationary` / `Transient` と `NSStatusWindowLevel` を再適用し、現在の Space 上で前面表示する。
-- Windows / Linux の Flet 版では、再表示時に `center`、`to_front`、検索欄 `focus` を順に実行し、検索結果の再描画後も検索欄へフォーカスを戻して `Enter` 起動を維持する。Flet 側の Enter イベントが失われた場合に備え、ランチャー表示中かつ検索画面の単独 `Enter` は `pynput` のグローバルキー監視でも補助的に拾う。
+- Windows / Linux の Flet 版では、再表示時に `center`、`to_front`、検索欄 `focus` を順に実行し、検索結果の再描画後も検索欄へフォーカスを戻して `Enter` 起動を維持する。Flet 側の Enter イベントが失われた場合に備え、ランチャー表示中かつ検索画面または gantt メモ画面の単独 `Enter` は `pynput` のグローバルキー監視でも補助的に拾う。
 
 ## 7. OS 別パーミッション・注意事項
 

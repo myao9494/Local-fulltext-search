@@ -62,6 +62,8 @@ class LauncherApp:
         self._show_time: float = 0.0
         self._last_open_request_time: float = 0.0
         self._last_open_request_key = ""
+        self._last_memo_submit_time: float = 0.0
+        self._last_memo_submit_text = ""
         self.include_gantt_tasks = False
         self.active_screen = "search"
         self.gantt_parent = config.gantt_parent
@@ -123,6 +125,7 @@ class LauncherApp:
             text_style=ft.TextStyle(size=18, color="#e5eefc", font_family="Inter"),
             hint_style=ft.TextStyle(size=16, color="#64748b", font_family="Inter"),
             cursor_color="#60a5fa",
+            on_submit=lambda event: self._submit_memo(),
         )
         self.memo_parent_label = ft.Text(f"parent: {self.gantt_parent}", color="#bfdbfe", size=12)
         self.search_area = ft.Column(
@@ -200,7 +203,7 @@ class LauncherApp:
         self.page.on_window_event = self._on_window_event
         self.hotkeys = GlobalHotkeyController(
             self.toggle_window,
-            on_enter=self._open_selected_from_global_enter,
+            on_enter=self._handle_global_enter_fallback,
             enter_enabled=self._global_enter_enabled,
         )
         if self.hotkeys.start():
@@ -426,7 +429,7 @@ class LauncherApp:
         """
         矢印・Enter・Escape のランチャー操作を処理する。
         """
-        key = _normalize_flet_key_name(getattr(event, "key", ""))
+        key = _key_name_from_flet_event(event)
         if key == "Escape":
             self._hide_window()
         elif key == "Tab":
@@ -472,6 +475,8 @@ class LauncherApp:
         メモ入力を gantt タスクに変換して作成 API へ送信する。
         """
         raw_text = str(self.memo_field.value or "")
+        if self._recently_submitted_memo(raw_text):
+            return
         if not raw_text.strip():
             self.memo_status.value = "タスク名を入力してください"
             self.page.update()
@@ -487,8 +492,11 @@ class LauncherApp:
         except Exception as error:
             self.memo_status.value = f"gantt 追加に失敗しました: {error}"
         else:
+            self._last_memo_submit_text = raw_text
+            self._last_memo_submit_time = time.monotonic()
             self.memo_field.value = ""
             self.memo_status.value = "gantt に追加しました"
+            self._hide_window()
         self.page.update()
 
     def _load_gantt_parent(self) -> int:
@@ -558,22 +566,38 @@ class LauncherApp:
 
     def _global_enter_enabled(self) -> bool:
         """
-        Flet の Enter イベントが失われた場合だけ、検索画面表示中の単独 Enter を補助する。
+        Flet の Enter イベントが失われた場合だけ、表示中の単独 Enter を補助する。
         """
-        return self.active_screen == "search" and not self.is_hidden
+        return self.active_screen in {"search", "memo"} and not self.is_hidden
 
-    def _open_selected_from_global_enter(self) -> None:
+    def _handle_global_enter_fallback(self) -> None:
         """
-        pynput のリスナースレッドから Enter 起動を UI スレッドへ戻す。
+        pynput のリスナースレッドから Enter 操作を UI スレッドへ戻す。
         """
 
-        async def _open() -> None:
-            self._open_selected()
+        async def _handle_enter() -> None:
+            if self.active_screen == "memo":
+                self._submit_memo()
+            else:
+                self._open_selected()
 
-        future = self.page.run_task(_open)
+        future = self.page.run_task(_handle_enter)
         add_done_callback = getattr(future, "add_done_callback", None)
         if callable(add_done_callback):
             add_done_callback(_log_task_error)
+
+    def _open_selected_from_global_enter(self) -> None:
+        """
+        旧テスト・呼び出し互換用に検索結果起動の Enter フォールバックを残す。
+        """
+        self._handle_global_enter_fallback()
+
+    def _recently_submitted_memo(self, raw_text: str) -> bool:
+        """
+        TextField submit とページキーイベントが同じ Enter を二重送信しないようにする。
+        """
+        current_time = time.monotonic()
+        return raw_text == self._last_memo_submit_text and current_time - self._last_memo_submit_time < 1.0
 
     def _select_and_open(self, item: SearchResultItem) -> None:
         """
@@ -760,8 +784,18 @@ def _normalize_flet_key_name(key: object) -> str:
         return "Arrow Down"
     if normalized in {"arrow up", "arrowup", "up"}:
         return "Arrow Up"
-    if normalized in {"enter", "return", "numpad enter", "numpadenter"}:
+    if normalized in {"enter", "return", "numpad enter", "numpadenter", "\n", "\r"}:
         return "Enter"
     if normalized in {"tab"}:
         return "Tab"
     return str(key or "")
+
+
+def _key_name_from_flet_event(event: Any) -> str:
+    """
+    Flet の key/data 表現差を吸収して内部キー名へ変換する。
+    """
+    key = _normalize_flet_key_name(getattr(event, "key", ""))
+    if key:
+        return key
+    return _normalize_flet_key_name(getattr(event, "data", ""))

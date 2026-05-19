@@ -477,7 +477,7 @@ def test_global_enter_fallback_runs_open_on_ui_thread() -> None:
 
 def test_global_enter_fallback_only_enabled_on_visible_search_screen() -> None:
     """
-    グローバル Enter の保険は検索画面が表示中のときだけ有効にする。
+    グローバル Enter の保険は検索画面またはメモ画面が表示中のときだけ有効にする。
     """
     app = LauncherApp(StubPage(), StubClient(), LauncherConfig())  # type: ignore[arg-type]
 
@@ -488,7 +488,7 @@ def test_global_enter_fallback_only_enabled_on_visible_search_screen() -> None:
 
     app.is_hidden = False
     app.active_screen = "memo"
-    assert app._global_enter_enabled() is False
+    assert app._global_enter_enabled() is True
 
 
 def test_select_and_open_deduplicates_same_item_like_click(monkeypatch: Any) -> None:
@@ -605,7 +605,7 @@ def test_search_error_message_survives_async_dispatch() -> None:
 
 def test_tab_switches_to_memo_screen_and_enter_creates_gantt_task(monkeypatch: Any) -> None:
     """
-    Tab でメモ画面へ切り替え、Enter で gantt タスク作成 API に送信する。
+    Tab でメモ画面へ切り替え、Enter で gantt タスク作成 API に送信して非表示にする。
     """
     client = StubClient()
     config = LauncherConfig(gantt_parent=5)
@@ -628,6 +628,47 @@ def test_tab_switches_to_memo_screen_and_enter_creates_gantt_task(monkeypatch: A
     assert client.created_tasks[0]["parent"] == 8
     assert app.memo_field.value == ""
     assert app.memo_status.value == "gantt に追加しました"
+    assert app.is_hidden is True
+    assert app.page.window.minimized is True
+
+
+def test_global_enter_fallback_submits_memo_on_ui_thread() -> None:
+    """
+    Flet の Enter イベントが失われても、メモ画面では pynput の保険で送信する。
+    """
+    page = StubPage()
+    submitted: list[bool] = []
+    app = LauncherApp(page, StubClient(), LauncherConfig())  # type: ignore[arg-type]
+    app.active_screen = "memo"
+    app._submit_memo = lambda: submitted.append(True)  # type: ignore[method-assign]
+
+    app._handle_global_enter_fallback()
+    coroutine = page.tasks[0]()
+    try:
+        coroutine.send(None)
+    except StopIteration:
+        pass
+
+    assert submitted == [True]
+
+
+def test_submit_memo_deduplicates_enter_events(monkeypatch: Any) -> None:
+    """
+    TextField submit と page keyboard の両方が届いても gantt タスクは 1 回だけ作成する。
+    """
+    now = 100.0
+    client = StubClient()
+    app = LauncherApp(StubPage(), client, LauncherConfig())  # type: ignore[arg-type]
+    app.memo_status = StubStatus()
+    app.memo_field = StubValueControl("AI テストタスク\nメモ")
+    app.memo_parent_label = StubStatus()
+    monkeypatch.setattr("launcher_app.ui.app.time.monotonic", lambda: now)
+
+    app._submit_memo()
+    app.memo_field.value = "AI テストタスク\nメモ"
+    app._submit_memo()
+
+    assert len(client.created_tasks) == 1
 
 
 def test_memo_shift_enter_inserts_newline() -> None:
