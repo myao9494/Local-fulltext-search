@@ -31,10 +31,10 @@ def test_hotkey_spec_for_macos() -> None:
 
 def test_hotkey_spec_for_windows() -> None:
     """
-    Windows では Ctrl + Windows を表示名として返す。
+    Windows では Windows + Alt を表示名として返す。
     """
-    assert hotkey_spec_for_platform("Windows") == "Ctrl + Windows"
-    assert modifier_names_for_platform("Windows") == frozenset({"ctrl", "cmd"})
+    assert hotkey_spec_for_platform("Windows") == "Windows + Alt"
+    assert modifier_names_for_platform("Windows") == frozenset({"cmd", "alt"})
 
 
 def test_hotkey_spec_for_linux() -> None:
@@ -61,50 +61,50 @@ def test_modifier_chord_activates_once_until_release() -> None:
 
 def test_modifier_chord_does_not_keep_stale_windows_key_after_activation() -> None:
     """
-    Windows キーの release を取りこぼしても、次の Ctrl 単独押下で再発火しない。
+    Windows キーの release を取りこぼしても、次の Alt 単独押下で再発火しない。
     """
-    state = ModifierChordState(frozenset({"ctrl", "cmd"}))
+    state = ModifierChordState(frozenset({"cmd", "alt"}))
 
     assert state.press("cmd") is False
-    assert state.press("ctrl") is True
+    assert state.press("alt") is True
 
-    state.release("ctrl")
-    assert state.press("ctrl") is False
+    state.release("alt")
+    assert state.press("alt") is False
 
 
 def test_modifier_chord_ignores_stale_windows_key_before_activation() -> None:
     """
-    Windows キーの押下状態だけが古く残っても、後から Ctrl 単独で発火しない。
+    Windows キーの押下状態だけが古く残っても、後から Alt 単独で発火しない。
     """
     now = 100.0
-    state = ModifierChordState(frozenset({"ctrl", "cmd"}), now=lambda: now, max_chord_seconds=1.0)
+    state = ModifierChordState(frozenset({"cmd", "alt"}), now=lambda: now, max_chord_seconds=1.0)
 
     assert state.press("cmd") is False
     now = 102.0
 
-    assert state.press("ctrl") is False
+    assert state.press("alt") is False
 
 
 def test_global_hotkey_does_not_activate_when_required_modifiers_are_not_physically_down() -> None:
     """
-    イベント履歴上は Ctrl+Win が揃っても、実キー状態が揃わなければ発火しない。
+    イベント履歴上は Win+Alt が揃っても、実キー状態が揃わなければ発火しない。
     """
     activated: list[bool] = []
     controller = GlobalHotkeyController(
         lambda: activated.append(True),
-        required_modifiers=frozenset({"ctrl", "cmd"}),
+        required_modifiers=frozenset({"cmd", "alt"}),
         modifier_state_verifier=lambda required: False,
     )
 
     controller._on_press(StubKey("cmd"))
-    controller._on_press(StubKey("ctrl"))
+    controller._on_press(StubKey("alt"))
 
     assert activated == []
 
 
 def test_global_hotkey_activates_when_required_modifiers_are_physically_down() -> None:
     """
-    Ctrl+Win のイベントと実キー状態がどちらも揃った場合だけ発火する。
+    Win+Alt のイベントと実キー状態がどちらも揃った場合だけ発火する。
     """
     activated: list[bool] = []
     seen_required: list[frozenset[str]] = []
@@ -115,15 +115,15 @@ def test_global_hotkey_activates_when_required_modifiers_are_physically_down() -
 
     controller = GlobalHotkeyController(
         lambda: activated.append(True),
-        required_modifiers=frozenset({"ctrl", "cmd"}),
+        required_modifiers=frozenset({"cmd", "alt"}),
         modifier_state_verifier=verifier,
     )
 
     controller._on_press(StubKey("cmd"))
-    controller._on_press(StubKey("ctrl"))
+    controller._on_press(StubKey("alt"))
 
     assert activated == [True]
-    assert seen_required == [frozenset({"ctrl", "cmd"})]
+    assert seen_required == [frozenset({"cmd", "alt"})]
 
 
 def test_global_hotkey_enter_fallback_activates_once_until_release() -> None:

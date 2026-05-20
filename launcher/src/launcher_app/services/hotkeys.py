@@ -17,7 +17,7 @@ def hotkey_spec_for_platform(system_name: str | None = None) -> str:
     if name == "Darwin":
         return "Command + Option"
     if name == "Windows":
-        return "Ctrl + Windows"
+        return "Windows + Alt"
     return "Ctrl + Shift"
 
 
@@ -25,13 +25,13 @@ def modifier_names_for_platform(system_name: str | None = None) -> frozenset[str
     """
     ランチャー表示トグルに使う修飾キー名を OS ごとに返す。
 
-    macOS は Command + Option、Windows は Ctrl + Windows、その他 OS は Ctrl + Shift を使う。
+    macOS は Command + Option、Windows は Windows + Alt、その他 OS は Ctrl + Shift を使う。
     """
     name = system_name or platform.system()
     if name == "Darwin":
         return frozenset({"cmd", "alt"})
     if name == "Windows":
-        return frozenset({"ctrl", "cmd"})
+        return frozenset({"cmd", "alt"})
     return frozenset({"ctrl", "shift"})
 
 

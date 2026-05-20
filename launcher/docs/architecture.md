@@ -14,7 +14,7 @@
 ```mermaid
 graph LR
     subgraph "OS (Windows/Mac)"
-        HK[Global Hotkey: Cmd+Option / Ctrl+Windows]
+        HK[Global Hotkey: Cmd+Option / Win+Alt]
         Mouse[Mouse Cursor Position]
     end
 
