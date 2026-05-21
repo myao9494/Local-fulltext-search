@@ -237,10 +237,13 @@ class LauncherApp:
         """
         self.is_hidden = False
         self._show_time = time.monotonic()
+        if self.hotkeys is not None:
+            self.hotkeys.reset()
         self.page.window.minimized = False
         self.page.window.opacity = 1
         self._run_window_task(self._restore_window_and_query_focus)
         self.page.update()
+
 
     async def _restore_window_and_query_focus(self) -> None:
         """
@@ -274,8 +277,11 @@ class LauncherApp:
         Flet セッションを維持したままランチャーを隠す。
         """
         self.is_hidden = True
+        if self.hotkeys is not None:
+            self.hotkeys.reset()
         self.page.window.minimized = True
         self.page.update()
+
 
     def _configure_window(self) -> None:
         """

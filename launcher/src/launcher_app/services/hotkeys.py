@@ -155,6 +155,15 @@ class GlobalHotkeyController:
             self._listener.stop()
             self._listener = None
 
+    def reset(self) -> None:
+        """
+        キー押下状態をリセットし、イベントの漏れによるスタックを防ぐ。
+        """
+        self._enter_pressed = False
+        self._pressed_modifiers.clear()
+        self.state.reset()
+
+
     def _on_press(self, key: Any) -> None:
         """
         pynput のキー押下イベントを修飾キー名と Enter へ正規化して発火判定する。

@@ -177,3 +177,31 @@ def test_global_hotkey_enter_fallback_ignores_modified_enter(monkeypatch: Any) -
     controller._on_press(StubKey("enter"))
 
     assert activated == []
+
+
+def test_global_hotkey_reset_clears_enter_pressed() -> None:
+    """
+    reset() メソッドを呼び出すと、_enter_pressed および _pressed_modifiers がクリアされる。
+    """
+    activated: list[bool] = []
+    controller = GlobalHotkeyController(
+        lambda: None,
+        on_enter=lambda: activated.append(True),
+        enter_enabled=lambda: True,
+    )
+
+    # 1回目の Enter 押下で発火する
+    controller._on_press(StubKey("enter"))
+    assert activated == [True]
+
+    # release が漏れたと仮定し、2回目の Enter 押下（通常は無視される）
+    controller._on_press(StubKey("enter"))
+    assert activated == [True]
+
+    # reset() を呼び出して状態をクリアする
+    controller.reset()
+
+    # 再度 Enter を押下すると、発火するはず
+    controller._on_press(StubKey("enter"))
+    assert activated == [True, True]
+
