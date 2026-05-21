@@ -456,6 +456,39 @@ def test_enter_open_is_deduplicated_when_submit_and_keyboard_both_fire(monkeypat
     assert client.clicked_file_ids == [42]
 
 
+def test_windows_query_focused_enter_commits_text_without_opening(monkeypatch: Any) -> None:
+    """
+    Windows の検索欄フォーカス中 Enter は IME 変換確定として扱い、結果を開かない。
+    """
+    opened_urls: list[str] = []
+    client = StubClient()
+    app = LauncherApp(StubPage(), client, LauncherConfig(web_base_url="http://localhost:8001"))  # type: ignore[arg-type]
+    app.status = StubStatus()
+    app.results = [make_item(full_path="/tmp/docs/a.md")]
+    app.active_screen = "search"
+    app._query_focused = True
+    monkeypatch.setattr("webbrowser.open", lambda url: opened_urls.append(url))
+    monkeypatch.setattr(LauncherApp, "_platform_name", staticmethod(lambda: "Windows"))
+
+    app._on_query_submit(type("Event", (), {})())
+    app._on_keyboard(type("Event", (), {"key": "Enter"})())
+
+    assert opened_urls == []
+    assert client.clicked_file_ids == []
+
+
+def test_windows_query_focused_enter_disables_global_fallback(monkeypatch: Any) -> None:
+    """
+    pynput の Enter 保険も、Windows の検索欄フォーカス中は IME 確定を横取りしない。
+    """
+    app = LauncherApp(StubPage(), StubClient(), LauncherConfig())  # type: ignore[arg-type]
+    app.active_screen = "search"
+    app._query_focused = True
+    monkeypatch.setattr(LauncherApp, "_platform_name", staticmethod(lambda: "Windows"))
+
+    assert app._global_enter_enabled() is False
+
+
 def test_global_enter_fallback_runs_open_on_ui_thread() -> None:
     """
     pynput の Enter フォールバックは UI スレッドへ戻して選択結果を開く。

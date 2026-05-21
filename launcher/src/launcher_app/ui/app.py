@@ -68,6 +68,7 @@ class LauncherApp:
         self.active_screen = "search"
         self.gantt_parent = config.gantt_parent
         self._suppress_render_focus = False
+        self._query_focused = False
 
     def build(self) -> None:
         """
@@ -88,7 +89,9 @@ class LauncherApp:
             hint_style=ft.TextStyle(size=26, color="#64748b", font_family="Inter"),
             cursor_color="#60a5fa",
             on_change=self._on_query_change,
-            on_submit=lambda event: self._open_selected(),
+            on_focus=lambda event: self._set_query_focus(True),
+            on_blur=lambda event: self._set_query_focus(False),
+            on_submit=self._on_query_submit,
         )
         self.status = ft.Text("", color="#94a3b8", size=12)
         self.memo_status = ft.Text("", color="#94a3b8", size=12)
@@ -199,6 +202,7 @@ class LauncherApp:
             ),
         )
         self.page.add(self.root)
+        self._query_focused = True
         self.page.on_keyboard_event = self._on_keyboard
         self.page.on_window_event = self._on_window_event
         self.hotkeys = GlobalHotkeyController(
@@ -445,10 +449,41 @@ class LauncherApp:
                 else:
                     self._submit_memo()
                 return
+            if self._plain_search_enter_should_commit_text(event):
+                return
             if getattr(event, "meta", False) or getattr(event, "ctrl", False):
                 self._reveal_selected()
             else:
                 self._open_selected()
+
+    def _set_query_focus(self, focused: bool) -> None:
+        """
+        検索欄が IME の Enter 確定対象か判定するため、フォーカス状態を保持する。
+        """
+        self._query_focused = focused
+
+    def _on_query_submit(self, event: Any) -> None:
+        """
+        検索欄の submit を処理する。Windows では IME 変換確定の Enter を結果起動に使わない。
+        """
+        if self._plain_search_enter_should_commit_text(event):
+            return
+        self._open_selected()
+
+    def _plain_search_enter_should_commit_text(self, event: Any | None = None) -> bool:
+        """
+        Windows の検索欄フォーカス中の素の Enter は IME 変換確定として扱う。
+        """
+        if self._platform_name() != "Windows":
+            return False
+        if self.active_screen != "search" or not self._query_focused:
+            return False
+        if event is None:
+            return True
+        return not any(
+            bool(getattr(event, modifier, False))
+            for modifier in ("alt", "ctrl", "meta", "shift")
+        )
 
     def _switch_screen(self, screen: str) -> None:
         """
@@ -568,6 +603,8 @@ class LauncherApp:
         """
         Flet の Enter イベントが失われた場合だけ、表示中の単独 Enter を補助する。
         """
+        if self._plain_search_enter_should_commit_text():
+            return False
         return self.active_screen in {"search", "memo"} and not self.is_hidden
 
     def _handle_global_enter_fallback(self) -> None:
