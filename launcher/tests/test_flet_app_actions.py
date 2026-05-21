@@ -716,3 +716,33 @@ def test_memo_shift_enter_inserts_newline() -> None:
     app._on_keyboard(type("Event", (), {"key": "Return", "shift": True})())
 
     assert app.memo_field.value == "1行目\n"
+
+
+def test_show_window_selects_all_query_text() -> None:
+    """
+    再表示時に検索欄にテキストがある場合、テキストが全選択されることを検証する。
+    """
+    import flet as ft
+    calls: list[str] = []
+    page = StubPage()
+    page.window = AsyncWindow(calls)
+    app = LauncherApp(page, StubClient(), LauncherConfig())  # type: ignore[arg-type]
+
+    # 検索欄のスタブを作成
+    class QueryStub(AsyncQuery):
+        value = "existing_query"
+        selection = None
+
+    app.query = QueryStub(calls)
+
+    app._show_window()
+    coroutine = page.tasks[0]()
+    try:
+        coroutine.send(None)
+    except StopIteration:
+        pass
+
+    # focus が呼ばれた後に selection が設定される
+    assert app.query.selection is not None
+    assert app.query.selection.base_offset == 0
+    assert app.query.selection.extent_offset == len("existing_query")

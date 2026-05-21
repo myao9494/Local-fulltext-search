@@ -249,6 +249,25 @@ class LauncherApp:
         await self.page.window.center()
         await self.page.window.to_front()
         await self.query.focus()
+        self._select_all_query_text()
+
+    def _select_all_query_text(self) -> None:
+        """
+        検索欄のテキストをすべて選択状態にする。
+        """
+        import flet as ft
+        query = getattr(self, "query", None)
+        if query is None:
+            return
+        val = getattr(query, "value", "") or ""
+        if val:
+            query.selection = ft.TextSelection(
+                base_offset=0,
+                extent_offset=len(val)
+            )
+            page = getattr(self, "page", None)
+            if page is not None:
+                page.update()
 
     def _hide_window(self) -> None:
         """
