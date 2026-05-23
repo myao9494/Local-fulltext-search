@@ -646,20 +646,57 @@ def test_tab_switches_to_memo_screen_and_enter_creates_gantt_task(monkeypatch: A
     app.status = StubStatus()
     app.memo_status = StubStatus()
     app.query = StubValueControl()
-    app.memo_field = StubValueControl("AI テストタスク\nAPI ガイドから作成したメモ")
+    app.memo_title_field = StubValueControl("AI テストタスク")
+    app.memo_body_field = StubValueControl("API ガイドから作成したメモ")
+    app.memo_submit_button = StubValueControl()
+    app.memo_cancel_button = StubValueControl()
     app.memo_parent_label = StubStatus()
     app.search_area = type("Area", (), {"visible": True})()
     app.memo_area = type("Area", (), {"visible": False})()
+    app.memo_focused_control = "title"
     monkeypatch.setattr("launcher_app.gantt_task.date", type("DateModule", (), {"today": staticmethod(lambda: __import__("datetime").date(2026, 5, 18))}))
 
+    # 検索画面から Tab を押してメモ画面へ
     app._on_keyboard(type("Event", (), {"key": "Tab"})())
+    assert app.active_screen == "memo"
+    
+    # キューされた focus タスクを消費
+    while app.page.tasks:
+        app.page.tasks.pop(0)()
+
+    # メモ画面での Tab 巡回テスト
+    app._on_keyboard(type("Event", (), {"key": "Tab"})()) # title -> body
+    while app.page.tasks:
+        app.page.tasks.pop(0)()
+    assert app.memo_body_field.focus_count == 1
+
+    app.memo_focused_control = "body"
+    app._on_keyboard(type("Event", (), {"key": "Tab"})()) # body -> submit
+    while app.page.tasks:
+        app.page.tasks.pop(0)()
+    assert app.memo_submit_button.focus_count == 1
+
+    app.memo_focused_control = "submit"
+    app._on_keyboard(type("Event", (), {"key": "Tab"})()) # submit -> cancel
+    while app.page.tasks:
+        app.page.tasks.pop(0)()
+    assert app.memo_cancel_button.focus_count == 1
+
+    app.memo_focused_control = "cancel"
+    app._on_keyboard(type("Event", (), {"key": "Tab", "shift": True})()) # cancel -> submit (Shift+Tab)
+    while app.page.tasks:
+        app.page.tasks.pop(0)()
+    assert app.memo_submit_button.focus_count == 2
+
+    # 送信
+    app.memo_focused_control = "submit"
     app._on_keyboard(type("Event", (), {"key": "Enter"})())
 
-    assert app.active_screen == "memo"
     assert client.created_tasks[0]["text"] == "AI テストタスク"
     assert client.created_tasks[0]["memo"] == "API ガイドから作成したメモ"
     assert client.created_tasks[0]["parent"] == 8
-    assert app.memo_field.value == ""
+    assert app.memo_title_field.value == ""
+    assert app.memo_body_field.value == ""
     assert app.memo_status.value == "gantt に追加しました"
     assert app.is_hidden is True
     assert app.page.window.minimized is True
@@ -687,35 +724,24 @@ def test_global_enter_fallback_submits_memo_on_ui_thread() -> None:
 
 def test_submit_memo_deduplicates_enter_events(monkeypatch: Any) -> None:
     """
-    TextField submit と page keyboard の両方が届いても gantt タスクは 1 回だけ作成する。
+    Enter の二重送信を防ぐ。
     """
     now = 100.0
     client = StubClient()
     app = LauncherApp(StubPage(), client, LauncherConfig())  # type: ignore[arg-type]
     app.memo_status = StubStatus()
-    app.memo_field = StubValueControl("AI テストタスク\nメモ")
+    app.memo_title_field = StubValueControl("AI テストタスク")
+    app.memo_body_field = StubValueControl("メモ")
     app.memo_parent_label = StubStatus()
     monkeypatch.setattr("launcher_app.ui.app.time.monotonic", lambda: now)
 
     app._submit_memo()
-    app.memo_field.value = "AI テストタスク\nメモ"
+    app.memo_title_field.value = "AI テストタスク"
+    app.memo_body_field.value = "メモ"
     app._submit_memo()
 
     assert len(client.created_tasks) == 1
 
-
-def test_memo_shift_enter_inserts_newline() -> None:
-    """
-    メモ画面では Shift+Enter を送信ではなく改行として扱う。
-    """
-    app = LauncherApp(StubPage(), StubClient(), LauncherConfig())  # type: ignore[arg-type]
-    app.active_screen = "memo"
-    app.memo_field = StubValueControl("1行目")
-    app.memo_status = StubStatus()
-
-    app._on_keyboard(type("Event", (), {"key": "Return", "shift": True})())
-
-    assert app.memo_field.value == "1行目\n"
 
 
 def test_show_window_selects_all_query_text() -> None:
@@ -746,3 +772,24 @@ def test_show_window_selects_all_query_text() -> None:
     assert app.query.selection is not None
     assert app.query.selection.base_offset == 0
     assert app.query.selection.extent_offset == len("existing_query")
+
+
+def test_memo_shift_enter_submits_task(monkeypatch: Any) -> None:
+    """
+    メモ画面では Shift+Enter でフォーカスが body にあってもタスクを送信する。
+    """
+    client = StubClient()
+    app = LauncherApp(StubPage(), client, LauncherConfig())  # type: ignore[arg-type]
+    app.active_screen = "memo"
+    app.memo_title_field = StubValueControl("AI テストタスク")
+    app.memo_body_field = StubValueControl("API ガイドから作成したメモ")
+    app.memo_submit_button = StubValueControl()
+    app.memo_cancel_button = StubValueControl()
+    app.memo_status = StubStatus()
+    app.memo_parent_label = StubStatus()
+    app.memo_focused_control = "body"
+
+    app._on_keyboard(type("Event", (), {"key": "Return", "shift": True})())
+
+    assert client.created_tasks[0]["text"] == "AI テストタスク"
+    assert client.created_tasks[0]["memo"] == "API ガイドから作成したメモ"

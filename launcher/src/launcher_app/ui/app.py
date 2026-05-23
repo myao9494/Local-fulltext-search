@@ -119,17 +119,52 @@ class LauncherApp:
             label_style=ft.TextStyle(color="#bfdbfe", size=12),
             on_change=self._on_gantt_toggle_change,
         )
-        self.memo_field = ft.TextField(
+        self.memo_title_field = ft.TextField(
             border=ft.InputBorder.NONE,
-            hint_text="タスク名\nメモ",
-            multiline=True,
-            min_lines=10,
-            max_lines=10,
+            hint_text="タスク名を入力してください...",
+            multiline=False,
             text_style=ft.TextStyle(size=18, color="#e5eefc", font_family="Inter"),
             hint_style=ft.TextStyle(size=16, color="#64748b", font_family="Inter"),
             cursor_color="#60a5fa",
+            on_focus=lambda e: self._set_memo_focused("title"),
             on_submit=lambda event: self._submit_memo(),
         )
+        self.memo_body_field = ft.TextField(
+            border=ft.InputBorder.NONE,
+            hint_text="メモを入力してください...",
+            multiline=True,
+            min_lines=6,
+            max_lines=6,
+            text_style=ft.TextStyle(size=16, color="#cbd5e1", font_family="Inter"),
+            hint_style=ft.TextStyle(size=14, color="#64748b", font_family="Inter"),
+            cursor_color="#60a5fa",
+            on_focus=lambda e: self._set_memo_focused("body"),
+        )
+        self.memo_submit_button = ft.TextButton(
+            "送信",
+            icon=ft.Icons.SEND_ROUNDED,
+            style=ft.ButtonStyle(
+                color="#ffffff",
+                bgcolor="#1d4ed8",
+                padding=ft.padding.symmetric(horizontal=20, vertical=10),
+                shape=ft.RoundedRectangleBorder(radius=8),
+            ),
+            on_focus=lambda e: self._set_memo_focused("submit"),
+            on_click=lambda event: self._submit_memo(),
+        )
+        self.memo_cancel_button = ft.TextButton(
+            "キャンセル",
+            icon=ft.Icons.CANCEL_ROUNDED,
+            style=ft.ButtonStyle(
+                color="#94a3b8",
+                bgcolor="#1f2937",
+                padding=ft.padding.symmetric(horizontal=20, vertical=10),
+                shape=ft.RoundedRectangleBorder(radius=8),
+            ),
+            on_focus=lambda e: self._set_memo_focused("cancel"),
+            on_click=lambda event: self._switch_screen("search"),
+        )
+        self.memo_focused_control = "title"
         self.memo_parent_label = ft.Text(f"parent: {self.gantt_parent}", color="#bfdbfe", size=12)
         self.search_area = ft.Column(
             spacing=12,
@@ -156,7 +191,7 @@ class LauncherApp:
         )
         self.memo_area = ft.Column(
             spacing=12,
-            visible=False,
+            visible=True,
             controls=[
                 ft.Row(
                     spacing=12,
@@ -168,14 +203,43 @@ class LauncherApp:
                     ],
                 ),
                 ft.Container(
-                    height=RESULTS_HEIGHT,
-                    padding=ft.padding.symmetric(horizontal=14, vertical=12),
+                    padding=ft.padding.symmetric(horizontal=14, vertical=6),
                     border_radius=8,
                     bgcolor="#111827",
                     border=ft.border.all(1, "#1f2937"),
-                    content=self.memo_field,
+                    content=self.memo_title_field,
+                ),
+                ft.Container(
+                    height=200,
+                    padding=ft.padding.symmetric(horizontal=14, vertical=6),
+                    border_radius=8,
+                    bgcolor="#111827",
+                    border=ft.border.all(1, "#1f2937"),
+                    content=self.memo_body_field,
+                ),
+                ft.Row(
+                    spacing=12,
+                    alignment=ft.MainAxisAlignment.END,
+                    controls=[
+                        self.memo_cancel_button,
+                        self.memo_submit_button,
+                    ],
                 ),
                 self.memo_status,
+            ],
+        )
+        self.drag_area = ft.WindowDragArea(
+            content=ft.Container(
+                height=18,
+                alignment=ft.Alignment(0, 0),
+                content=ft.Container(width=86, height=4, border_radius=2, bgcolor="#334155"),
+            )
+        )
+        self.main_column = ft.Column(
+            spacing=12,
+            controls=[
+                self.drag_area,
+                self.search_area,
             ],
         )
         self.root = ft.Container(
@@ -186,20 +250,7 @@ class LauncherApp:
             bgcolor="#0f172a",
             border=ft.border.all(1, "#1d4ed8"),
             shadow=ft.BoxShadow(blur_radius=34, color="#000000", offset=ft.Offset(0, 18)),
-            content=ft.Column(
-                spacing=12,
-                controls=[
-                    ft.WindowDragArea(
-                        content=ft.Container(
-                            height=18,
-                            alignment=ft.Alignment(0, 0),
-                            content=ft.Container(width=86, height=4, border_radius=2, bgcolor="#334155"),
-                        )
-                    ),
-                    self.search_area,
-                    self.memo_area,
-                ],
-            ),
+            content=self.main_column,
         )
         self.page.add(self.root)
         self._query_focused = True
@@ -460,17 +511,32 @@ class LauncherApp:
         """
         key = _key_name_from_flet_event(event)
         if key == "Escape":
-            self._hide_window()
+            if self.active_screen == "memo":
+                self._switch_screen("search")
+            else:
+                self._hide_window()
         elif key == "Tab":
-            self._switch_screen("memo" if self.active_screen == "search" else "search")
+            if self.active_screen == "memo":
+                if getattr(event, "shift", False):
+                    self._focus_previous_memo_control()
+                else:
+                    self._focus_next_memo_control()
+            else:
+                self._switch_screen("memo")
         elif key == "Arrow Down":
             self._move_selection(1)
         elif key == "Arrow Up":
             self._move_selection(-1)
         elif key == "Enter":
             if self.active_screen == "memo":
-                if getattr(event, "meta", False) or getattr(event, "shift", False):
-                    self._append_memo_newline()
+                if getattr(event, "shift", False):
+                    self._submit_memo()
+                    return
+                if self.memo_focused_control == "body":
+                    # メモ入力中の Enter は改行として扱う（標準の挙動に任せるためここでは何も処理しない）
+                    return
+                elif self.memo_focused_control == "cancel":
+                    self._switch_screen("search")
                 else:
                     self._submit_memo()
                 return
@@ -515,38 +581,66 @@ class LauncherApp:
         Tab キーで検索画面と gantt メモ画面を切り替える。
         """
         self.active_screen = "memo" if screen == "memo" else "search"
-        self.search_area.visible = self.active_screen == "search"
-        self.memo_area.visible = self.active_screen == "memo"
+        drag_area = getattr(self, "drag_area", None)
+        main_column = getattr(self, "main_column", None)
         if self.active_screen == "memo":
-            self._run_window_task(self.memo_field.focus)
+            if main_column is not None:
+                main_column.controls = [drag_area, self.memo_area] if drag_area is not None else [self.memo_area]
+            self.memo_focused_control = "title"
+            self._run_window_task(self.memo_title_field.focus)
         else:
+            if main_column is not None:
+                main_column.controls = [drag_area, self.search_area] if drag_area is not None else [self.search_area]
             self._focus_query()
         self.page.update()
 
-    def _append_memo_newline(self) -> None:
+    def _set_memo_focused(self, name: str) -> None:
         """
-        メモ画面で Cmd+Return / Shift+Return を改行として扱う。
+        現在フォーカスのあるメモ画面コントロール名を記録する。
         """
-        self.memo_field.value = f"{self.memo_field.value or ''}\n"
-        self.page.update()
+        self.memo_focused_control = name
+
+    def _focus_next_memo_control(self) -> None:
+        """
+        gantt メモ画面で次のコントロールへフォーカスを移す。
+        """
+        if self.memo_focused_control == "title":
+            self._run_window_task(self.memo_body_field.focus)
+        elif self.memo_focused_control == "body":
+            self._run_window_task(self.memo_submit_button.focus)
+        elif self.memo_focused_control == "submit":
+            self._run_window_task(self.memo_cancel_button.focus)
+        elif self.memo_focused_control == "cancel":
+            self._run_window_task(self.memo_title_field.focus)
+
+    def _focus_previous_memo_control(self) -> None:
+        """
+        gantt メモ画面で前のコントロールへフォーカスを戻す。
+        """
+        if self.memo_focused_control == "title":
+            self._run_window_task(self.memo_cancel_button.focus)
+        elif self.memo_focused_control == "body":
+            self._run_window_task(self.memo_title_field.focus)
+        elif self.memo_focused_control == "submit":
+            self._run_window_task(self.memo_body_field.focus)
+        elif self.memo_focused_control == "cancel":
+            self._run_window_task(self.memo_submit_button.focus)
 
     def _submit_memo(self) -> None:
         """
         メモ入力を gantt タスクに変換して作成 API へ送信する。
         """
-        raw_text = str(self.memo_field.value or "")
+        title = str(self.memo_title_field.value or "").strip()
+        memo = str(self.memo_body_field.value or "").strip()
+        raw_text = f"{title}\n{memo}"
         if self._recently_submitted_memo(raw_text):
             return
-        if not raw_text.strip():
+        if not title:
             self.memo_status.value = "タスク名を入力してください"
             self.page.update()
             return
         parent = self._load_gantt_parent()
-        payload = build_gantt_task_payload(raw_text, parent=parent)
-        if not str(payload["text"]).strip():
-            self.memo_status.value = "1行目にタスク名を入力してください"
-            self.page.update()
-            return
+        payload = build_gantt_task_payload(title, memo, parent=parent)
         try:
             self.client.create_gantt_task(payload)
         except Exception as error:
@@ -554,7 +648,8 @@ class LauncherApp:
         else:
             self._last_memo_submit_text = raw_text
             self._last_memo_submit_time = time.monotonic()
-            self.memo_field.value = ""
+            self.memo_title_field.value = ""
+            self.memo_body_field.value = ""
             self.memo_status.value = "gantt に追加しました"
             self._hide_window()
         self.page.update()

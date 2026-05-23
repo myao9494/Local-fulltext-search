@@ -9,10 +9,11 @@ from launcher_app.gantt_task import build_gantt_task_payload, normalize_parent_i
 
 def test_build_gantt_task_payload_splits_first_line_and_memo() -> None:
     """
-    1行目を text、2行目以降を memo にし、開始日は今日、終了日は明日にする。
+    タスク名とメモを指定して、開始日は今日、終了日は明日にする。
     """
     payload = build_gantt_task_payload(
-        "AI テストタスク\nAPI ガイドから作成したメモ\n2行目",
+        "AI テストタスク",
+        "API ガイドから作成したメモ\n2行目",
         parent=12,
         today=date(2026, 5, 18),
     )
@@ -26,6 +27,7 @@ def test_build_gantt_task_payload_splits_first_line_and_memo() -> None:
         "kind_task": 1,
         "memo": "API ガイドから作成したメモ\n2行目",
     }
+
 
 
 def test_normalize_parent_id_accepts_non_negative_integer_text() -> None:

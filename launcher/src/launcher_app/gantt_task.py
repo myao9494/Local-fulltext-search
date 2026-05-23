@@ -8,23 +8,20 @@ from datetime import date, timedelta
 from typing import Any
 
 
-def build_gantt_task_payload(raw_text: str, *, parent: int = 0, today: date | None = None) -> dict[str, Any]:
+def build_gantt_task_payload(title: str, memo: str, *, parent: int = 0, today: date | None = None) -> dict[str, Any]:
     """
-    1行目をタスク名、2行目以降をメモとして gantt のタスク作成 payload へ変換する。
+    タスク名とメモから gantt のタスク作成 payload へ変換する。
     """
-    lines = raw_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    title = lines[0].strip() if lines else ""
-    memo = "\n".join(lines[1:]).strip()
     base_date = today or date.today()
     end_date = base_date + timedelta(days=1)
     return {
-        "text": title,
+        "text": title.strip(),
         "start_date": f"{base_date.isoformat()} 00:00:00",
         "end_date": f"{end_date.isoformat()} 00:00:00",
         "progress": 0.1,
         "parent": parent,
         "kind_task": 1,
-        "memo": memo,
+        "memo": memo.strip(),
     }
 
 

@@ -141,46 +141,65 @@ class LauncherDelegate(AppKit.NSObject):
 
     def control_textView_doCommandBySelector_(self, control: Any, textView: Any, commandSelector: Any) -> bool:
         """
-        NSSearchField のテキスト入力中の上下キー、Enterキー、ESCキーを捕捉する。
+        NSSearchField および memo_title_field のテキスト入力中の上下キー、Enterキー、ESCキー、Tabキーを捕捉する。
         """
         selector = str(commandSelector)
-        if selector == "moveUp:":
-            self._move_selection(-1)
-            return True
-        elif selector == "moveDown:":
-            self._move_selection(1)
-            return True
-        elif selector == "insertNewline:":
-            self._open_selected()
-            return True
-        elif selector == "insertTab:":
-            self._switch_screen("memo")
-            return True
-        elif selector == "cancelOperation:":
-            self.hide_panel()
-            return True
+        if control == self.search_field:
+            if selector == "moveUp:":
+                self._move_selection(-1)
+                return True
+            elif selector == "moveDown:":
+                self._move_selection(1)
+                return True
+            elif selector == "insertNewline:":
+                self._open_selected()
+                return True
+            elif selector == "insertTab:":
+                self._switch_screen("memo")
+                return True
+            elif selector == "cancelOperation:":
+                self.hide_panel()
+                return True
+        elif control == self.memo_title_field:
+            if selector == "insertTab:":
+                self.panel.makeFirstResponder_(self.memo_body_view)
+                return True
+            elif selector == "insertBacktab:":
+                self.panel.makeFirstResponder_(self.memo_cancel_button)
+                return True
+            elif selector == "insertNewline:":
+                self._submit_memo()
+                return True
+            elif selector == "cancelOperation:":
+                self._switch_screen("search")
+                return True
         return False
 
     def textView_doCommandBySelector_(self, textView: Any, commandSelector: Any) -> bool:
         """
-        メモ画面の Return / Cmd+Return / Shift+Return / Tab を処理する。
+        メモ画面のメモ本文入力中の Tab / Shift+Tab / Return / ESC を処理する。
         """
         selector = str(commandSelector)
-        if selector == "insertTab:":
-            self._switch_screen("search")
-            return True
-        if selector == "insertNewline:":
-            event = AppKit.NSApp.currentEvent()
-            modifiers = event.modifierFlags() if event is not None else 0
-            newline_flags = AppKit.NSEventModifierFlagCommand | AppKit.NSEventModifierFlagShift
-            if modifiers & newline_flags:
-                textView.insertText_("\n")
-            else:
-                self._submit_memo()
-            return True
-        if selector == "cancelOperation:":
-            self.hide_panel()
-            return True
+        if textView == self.memo_body_view:
+            if selector == "insertTab:":
+                self.panel.makeFirstResponder_(self.memo_submit_button)
+                return True
+            elif selector == "insertBacktab:":
+                self.panel.makeFirstResponder_(self.memo_title_field)
+                return True
+            elif selector == "insertNewline:":
+                event = AppKit.NSApp.currentEvent()
+                modifiers = event.modifierFlags() if event is not None else 0
+                if modifiers & AppKit.NSEventModifierFlagShift:
+                    # Shift+Enter で送信
+                    self._submit_memo()
+                else:
+                    # 通常の Enter は改行
+                    textView.insertText_("\n")
+                return True
+            elif selector == "cancelOperation:":
+                self._switch_screen("search")
+                return True
         return False
 
     @objc.python_method
@@ -556,10 +575,10 @@ class LauncherDelegate(AppKit.NSObject):
         self.search_field.setDrawsBackground_(False)
         content.addSubview_(self.search_field)
 
-        gui_button = AppKit.NSButton.buttonWithTitle_target_action_("Web GUI", self, "openGuiUrl:")
-        gui_button.setFrame_(AppKit.NSMakeRect(34, PANEL_HEIGHT - 36, 80, 24))
-        gui_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
-        content.addSubview_(gui_button)
+        self.gui_button = AppKit.NSButton.buttonWithTitle_target_action_("Web GUI", self, "openGuiUrl:")
+        self.gui_button.setFrame_(AppKit.NSMakeRect(34, PANEL_HEIGHT - 36, 80, 24))
+        self.gui_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
+        content.addSubview_(self.gui_button)
 
         self.gantt_checkbox = AppKit.NSButton.checkboxWithTitle_target_action_("gantt", self, "toggleGanttSearch:")
         self.gantt_checkbox.setFrame_(AppKit.NSMakeRect(126, PANEL_HEIGHT - 36, 80, 24))
@@ -586,20 +605,55 @@ class LauncherDelegate(AppKit.NSObject):
         self.memo_parent_label.setHidden_(True)
         content.addSubview_(self.memo_parent_label)
 
-        self.memo_text_view = AppKit.NSTextView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 72, PANEL_HEIGHT - 174))
-        self.memo_text_view.setDelegate_(self)
-        self.memo_text_view.setFont_(AppKit.NSFont.systemFontOfSize_(18))
-        self.memo_text_view.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.9, 0.94, 1.0, 1.0))
-        self.memo_text_view.setBackgroundColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.07, 0.09, 0.15, 0.98))
-        self.memo_text_view.setInsertionPointColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.38, 0.65, 0.98, 1.0))
-        self.memo_text_view.setString_("")
-        self.memo_scroll = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(24, 54, PANEL_WIDTH - 48, PANEL_HEIGHT - 158))
+        # タスク名入力欄 (NSTextField)
+        self.memo_title_field = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(24, PANEL_HEIGHT - 80, PANEL_WIDTH - 48, 36))
+        self.memo_title_field.setBezelStyle_(AppKit.NSTextFieldSquareBezel)
+        self.memo_title_field.setPlaceholderString_("タスク名を入力してください...")
+        self.memo_title_field.setFont_(AppKit.NSFont.systemFontOfSize_(16))
+        self.memo_title_field.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.9, 0.94, 1.0, 1.0))
+        self.memo_title_field.setDrawsBackground_(True)
+        self.memo_title_field.setBackgroundColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.07, 0.09, 0.15, 0.98))
+        self.memo_title_field.setDelegate_(self)
+        self.memo_title_field.setHidden_(True)
+        content.addSubview_(self.memo_title_field)
+
+        # メモ入力部 (NSTextView)
+        self.memo_body_view = AppKit.NSTextView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 48, PANEL_HEIGHT - 220))
+        self.memo_body_view.setDelegate_(self)
+        self.memo_body_view.setFont_(AppKit.NSFont.systemFontOfSize_(14))
+        self.memo_body_view.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.9, 0.94, 1.0, 1.0))
+        self.memo_body_view.setBackgroundColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.07, 0.09, 0.15, 0.98))
+        self.memo_body_view.setInsertionPointColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.38, 0.65, 0.98, 1.0))
+        self.memo_body_view.setString_("")
+        
+        # メモ用スクロールビュー
+        self.memo_scroll = AppKit.NSScrollView.alloc().initWithFrame_(AppKit.NSMakeRect(24, 90, PANEL_WIDTH - 48, PANEL_HEIGHT - 220))
         self.memo_scroll.setDrawsBackground_(False)
         self.memo_scroll.setBorderType_(AppKit.NSNoBorder)
         self.memo_scroll.setHasVerticalScroller_(True)
-        self.memo_scroll.setDocumentView_(self.memo_text_view)
+        self.memo_scroll.setDocumentView_(self.memo_body_view)
         self.memo_scroll.setHidden_(True)
         content.addSubview_(self.memo_scroll)
+
+        # 送信ボタン
+        self.memo_submit_button = AppKit.NSButton.buttonWithTitle_target_action_("送信", self, "submitMemo:")
+        self.memo_submit_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 120, 50, 96, 32))
+        self.memo_submit_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
+        self.memo_submit_button.setHidden_(True)
+        content.addSubview_(self.memo_submit_button)
+
+        # キャンセルボタン
+        self.memo_cancel_button = AppKit.NSButton.buttonWithTitle_target_action_("キャンセル", self, "cancelMemo:")
+        self.memo_cancel_button.setFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 226, 50, 96, 32))
+        self.memo_cancel_button.setBezelStyle_(AppKit.NSBezelStyleRounded)
+        self.memo_cancel_button.setHidden_(True)
+        content.addSubview_(self.memo_cancel_button)
+
+        # Cocoa 標準のフォーカス移動チェーンの構築
+        self.memo_title_field.setNextKeyView_(self.memo_body_view)
+        self.memo_body_view.setNextKeyView_(self.memo_submit_button)
+        self.memo_submit_button.setNextKeyView_(self.memo_cancel_button)
+        self.memo_cancel_button.setNextKeyView_(self.memo_title_field)
 
         self.status_label = AppKit.NSTextField.labelWithString_(f"Hotkey: {hotkey_spec_for_platform()}")
         self.status_label.setFrame_(AppKit.NSMakeRect(34, 22, PANEL_WIDTH - 68, 20))
@@ -615,14 +669,18 @@ class LauncherDelegate(AppKit.NSObject):
         self.active_screen = "memo" if screen == "memo" else "search"
         is_memo = self.active_screen == "memo"
         self.search_field.setHidden_(is_memo)
+        self.gui_button.setHidden_(is_memo)
         self.gantt_checkbox.setHidden_(is_memo)
         self.search_scroll.setHidden_(is_memo)
         self.memo_scroll.setHidden_(not is_memo)
         self.memo_title_label.setHidden_(not is_memo)
         self.memo_parent_label.setHidden_(not is_memo)
+        self.memo_title_field.setHidden_(not is_memo)
+        self.memo_submit_button.setHidden_(not is_memo)
+        self.memo_cancel_button.setHidden_(not is_memo)
         self.status_label.setStringValue_("gantt メモ" if is_memo else f"Hotkey: {hotkey_spec_for_platform()}")
         if is_memo:
-            self.panel.makeFirstResponder_(self.memo_text_view)
+            self.panel.makeFirstResponder_(self.memo_title_field)
         else:
             self.panel.makeFirstResponder_(self.search_field)
 
@@ -631,22 +689,34 @@ class LauncherDelegate(AppKit.NSObject):
         """
         メモ入力を gantt タスク作成 API へ送る。
         """
-        raw_text = str(self.memo_text_view.string() or "")
-        if not raw_text.strip():
+        title = str(self.memo_title_field.stringValue() or "").strip()
+        memo = str(self.memo_body_view.string() or "").strip()
+        if not title:
             self.status_label.setStringValue_("タスク名を入力してください")
             return
         parent = self._load_gantt_parent()
-        payload = build_gantt_task_payload(raw_text, parent=parent)
-        if not str(payload["text"]).strip():
-            self.status_label.setStringValue_("1行目にタスク名を入力してください")
-            return
+        payload = build_gantt_task_payload(title, memo, parent=parent)
         try:
             self.client.create_gantt_task(payload)
         except Exception as error:
             self.status_label.setStringValue_(f"gantt 追加に失敗しました: {error}")
         else:
-            self.memo_text_view.setString_("")
+            self.memo_title_field.setStringValue_("")
+            self.memo_body_view.setString_("")
             self.status_label.setStringValue_("gantt に追加しました")
+            self.hide_panel()
+
+    def submitMemo_(self, sender: Any) -> None:
+        """
+        Cocoa の送信ボタン押下時のアクション。
+        """
+        self._submit_memo()
+
+    def cancelMemo_(self, sender: Any) -> None:
+        """
+        Cocoa のキャンセルボタン押下時のアクション。
+        """
+        self._switch_screen("search")
 
     @objc.python_method
     def _load_gantt_parent(self) -> int:
