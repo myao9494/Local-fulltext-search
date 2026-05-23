@@ -651,7 +651,8 @@ class LauncherApp:
             self.memo_title_field.value = ""
             self.memo_body_field.value = ""
             self.memo_status.value = "gantt に追加しました"
-            self._hide_window()
+            self.memo_focused_control = "title"
+            self._run_window_task(self.memo_title_field.focus)
         self.page.update()
 
     def _load_gantt_parent(self) -> int:

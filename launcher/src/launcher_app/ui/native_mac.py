@@ -704,7 +704,7 @@ class LauncherDelegate(AppKit.NSObject):
             self.memo_title_field.setStringValue_("")
             self.memo_body_view.setString_("")
             self.status_label.setStringValue_("gantt に追加しました")
-            self.hide_panel()
+            self.panel.makeFirstResponder_(self.memo_title_field)
 
     def submitMemo_(self, sender: Any) -> None:
         """
