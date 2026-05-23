@@ -34,7 +34,7 @@
 | :--- | :--- | :--- |
 | **名前入力欄** (`memo_title_field`) | テキスト入力欄 (Flet: `TextField` / Cocoa: `NSTextField`) | - シングルライン入力<br>- プレースホルダー: `タスク名を入力...`<br>- メモ画面遷移時に自動フォーカスされる |
 | **メモ入力欄** (`memo_body_field`) | テキストエリア (Flet: `TextField` / Cocoa: `NSTextView`) | - マルチライン入力<br>- プレースホルダー: `メモを入力...` |
-| **送信ボタン** (`memo_submit_button`) | ボタン (Flet: `TextButton` / Cocoa: `NSButton`) | - クリックまたはフォーカス状態で `Enter` キー押下時にタスクを作成して API 送信<br>- 送信成功時は入力値をクリアし、ウィンドウを非表示にする |
+| **送信ボタン** (`memo_submit_button`) | ボタン (Flet: `TextButton` / Cocoa: `NSButton`) | - クリックまたはフォーカス状態で `Enter` キー押下時にタスクを作成して API 送信<br>- 送信成功時は入力値をクリアし、「タスク名」入力欄へフォーカスを戻してランチャーウィンドウを開いたままにする（連続してタスクを追加可能） |
 | **キャンセルボタン** (`memo_cancel_button`)| ボタン (Flet: `TextButton` / Cocoa: `NSButton`) | - クリックまたはフォーカス状態で `Enter` キー押下時に検索画面へ戻る |
 
 ---
