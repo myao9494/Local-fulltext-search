@@ -698,8 +698,15 @@ def test_tab_switches_to_memo_screen_and_enter_creates_gantt_task(monkeypatch: A
     assert app.memo_title_field.value == ""
     assert app.memo_body_field.value == ""
     assert app.memo_status.value == "gantt に追加しました"
-    assert app.is_hidden is True
-    assert app.page.window.minimized is True
+    assert app.is_hidden is False
+    assert app.page.window.minimized is False
+    assert app.memo_focused_control == "title"
+
+    # 送信成功時にキューされた focus タスクを消費
+    while app.page.tasks:
+        app.page.tasks.pop(0)()
+    assert app.memo_title_field.focus_count == 2
+
 
 
 def test_global_enter_fallback_submits_memo_on_ui_thread() -> None:
