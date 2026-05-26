@@ -1,5 +1,9 @@
 """
 Spotlight 風の Flet ランチャー UI を構築する。
+
+【仕様】
+- gantt メモ画面において、タスク名欄 (memo_title_field) および本文欄 (memo_body_field) での Return/Enter および Shift+Enter キー押下時は、送信を行わずに改行（または通常の入力継続）を行う。
+- gantt タスクの送信は、送信ボタンのクリック、または送信ボタンにフォーカス（カーソル）が合っている状態での Return/Enter キー押下時のみ実行する。
 """
 
 from __future__ import annotations
@@ -122,12 +126,13 @@ class LauncherApp:
         self.memo_title_field = ft.TextField(
             border=ft.InputBorder.NONE,
             hint_text="タスク名を入力してください...",
-            multiline=False,
+            multiline=True,
+            min_lines=1,
+            max_lines=2,
             text_style=ft.TextStyle(size=18, color="#e5eefc", font_family="Inter"),
             hint_style=ft.TextStyle(size=16, color="#64748b", font_family="Inter"),
             cursor_color="#60a5fa",
             on_focus=lambda e: self._set_memo_focused("title"),
-            on_submit=lambda event: self._submit_memo(),
         )
         self.memo_body_field = ft.TextField(
             border=ft.InputBorder.NONE,
@@ -529,15 +534,12 @@ class LauncherApp:
             self._move_selection(-1)
         elif key == "Enter":
             if self.active_screen == "memo":
-                if getattr(event, "shift", False):
-                    self._submit_memo()
-                    return
-                if self.memo_focused_control == "body":
-                    # メモ入力中の Enter は改行として扱う（標準の挙動に任せるためここでは何も処理しない）
+                # 各テキストボックス（タイトル・本文）での Enter/Shift+Enter は送信せず改行とする（標準挙動に委ねる）
+                if self.memo_focused_control in {"title", "body"}:
                     return
                 elif self.memo_focused_control == "cancel":
                     self._switch_screen("search")
-                else:
+                elif self.memo_focused_control == "submit":
                     self._submit_memo()
                 return
             if self._plain_search_enter_should_commit_text(event):
@@ -735,7 +737,11 @@ class LauncherApp:
 
         async def _handle_enter() -> None:
             if self.active_screen == "memo":
-                self._submit_memo()
+                # 送信ボタンにフォーカスがあるときのみ送信、キャンセルボタンのときは検索画面へ戻る
+                if self.memo_focused_control == "submit":
+                    self._submit_memo()
+                elif self.memo_focused_control == "cancel":
+                    self._switch_screen("search")
             else:
                 self._open_selected()
 

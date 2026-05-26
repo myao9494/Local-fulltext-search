@@ -96,3 +96,173 @@ def test_begin_activity_starts_app_nap_prevention_once(monkeypatch) -> None:
 
     assert delegate.activity_token == "activity-token"
     assert process_info.started == [(48, "Local Fulltext Search launcher hotkey monitor")]
+
+
+def test_launcher_panel_key_down_submits_memo_on_focus(monkeypatch) -> None:
+    """
+    送信ボタンにフォーカスがある状態で Return キーが押された場合、gantt 追加処理が実行されることを検証する。
+    """
+    import AppKit
+    panel = native_mac.LauncherPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+        AppKit.NSMakeRect(0, 0, 100, 100),
+        AppKit.NSWindowStyleMaskBorderless,
+        AppKit.NSBackingStoreBuffered,
+        False
+    )
+    
+    class FakeDelegate:
+        def __init__(self) -> None:
+            self.memo_submit_button = "submit_btn"
+            self.memo_cancel_button = "cancel_btn"
+            self.submitted = False
+            self.screen = None
+            
+        def _submit_memo(self) -> None:
+            self.submitted = True
+            
+        def _switch_screen(self, screen: str) -> None:
+            self.screen = screen
+            
+    delegate = FakeDelegate()
+    panel.setDelegate_(delegate)
+    
+    monkeypatch.setattr(panel, "firstResponder", lambda: delegate.memo_submit_button)
+    
+    # super() 呼び出しのモック
+    super_called = []
+    monkeypatch.setattr(native_mac, "objc", SimpleNamespace(
+        super=lambda cls, self: SimpleNamespace(keyDown_=lambda ev: super_called.append(True))
+    ))
+    
+    # 本物のキーイベントを作成 (\r)
+    event = AppKit.NSEvent.keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode_(
+        AppKit.NSEventTypeKeyDown,
+        AppKit.NSMakePoint(0, 0),
+        0,
+        0.0,
+        0,
+        None,
+        "\r",
+        "\r",
+        False,
+        36
+    )
+    
+    panel.keyDown_(event)
+    
+    assert delegate.submitted is True
+    assert len(super_called) == 0
+
+
+def test_launcher_panel_key_down_switches_to_search_on_cancel_focus(monkeypatch) -> None:
+    """
+    キャンセルボタンにフォーカスがある状態で Return キーが押された場合、検索画面へ戻る処理が実行されることを検証する。
+    """
+    import AppKit
+    panel = native_mac.LauncherPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+        AppKit.NSMakeRect(0, 0, 100, 100),
+        AppKit.NSWindowStyleMaskBorderless,
+        AppKit.NSBackingStoreBuffered,
+        False
+    )
+    
+    class FakeDelegate:
+        def __init__(self) -> None:
+            self.memo_submit_button = "submit_btn"
+            self.memo_cancel_button = "cancel_btn"
+            self.submitted = False
+            self.screen = None
+            
+        def _submit_memo(self) -> None:
+            self.submitted = True
+            
+        def _switch_screen(self, screen: str) -> None:
+            self.screen = screen
+            
+    delegate = FakeDelegate()
+    panel.setDelegate_(delegate)
+    
+    monkeypatch.setattr(panel, "firstResponder", lambda: delegate.memo_cancel_button)
+    
+    # super() 呼び出しのモック
+    super_called = []
+    monkeypatch.setattr(native_mac, "objc", SimpleNamespace(
+        super=lambda cls, self: SimpleNamespace(keyDown_=lambda ev: super_called.append(True))
+    ))
+    
+    # 本物のキーイベントを作成 (\n)
+    event = AppKit.NSEvent.keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode_(
+        AppKit.NSEventTypeKeyDown,
+        AppKit.NSMakePoint(0, 0),
+        0,
+        0.0,
+        0,
+        None,
+        "\n",
+        "\n",
+        False,
+        36
+    )
+    
+    panel.keyDown_(event)
+    
+    assert delegate.screen == "search"
+    assert len(super_called) == 0
+
+
+def test_launcher_panel_key_down_falls_back_for_other_keys(monkeypatch) -> None:
+    """
+    Return/Enter 以外のキーや他のフォーカス状態では、親クラス (super) の keyDown_ にフォールバックすることを検証する。
+    """
+    import AppKit
+    panel = native_mac.LauncherPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+        AppKit.NSMakeRect(0, 0, 100, 100),
+        AppKit.NSWindowStyleMaskBorderless,
+        AppKit.NSBackingStoreBuffered,
+        False
+    )
+    
+    class FakeDelegate:
+        def __init__(self) -> None:
+            self.memo_submit_button = "submit_btn"
+            self.memo_cancel_button = "cancel_btn"
+            self.submitted = False
+            self.screen = None
+            
+        def _submit_memo(self) -> None:
+            self.submitted = True
+            
+        def _switch_screen(self, screen: str) -> None:
+            self.screen = screen
+            
+    delegate = FakeDelegate()
+    panel.setDelegate_(delegate)
+    
+    monkeypatch.setattr(panel, "firstResponder", lambda: delegate.memo_submit_button)
+    
+    # super() 呼び出しのモック
+    super_called = []
+    monkeypatch.setattr(native_mac, "objc", SimpleNamespace(
+        super=lambda cls, self: SimpleNamespace(keyDown_=lambda ev: super_called.append(True))
+    ))
+    
+    # 本物のキーイベントを作成 ("a")
+    event = AppKit.NSEvent.keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode_(
+        AppKit.NSEventTypeKeyDown,
+        AppKit.NSMakePoint(0, 0),
+        0,
+        0.0,
+        0,
+        None,
+        "a",
+        "a",
+        False,
+        0
+    )
+    
+    panel.keyDown_(event)
+    
+    assert delegate.submitted is False
+    assert delegate.screen is None
+    assert super_called == [True]
+

@@ -639,6 +639,7 @@ def test_search_error_message_survives_async_dispatch() -> None:
 def test_tab_switches_to_memo_screen_and_enter_creates_gantt_task(monkeypatch: Any) -> None:
     """
     Tab でメモ画面へ切り替え、Enter で gantt タスク作成 API に送信して非表示にする。
+    テキストボックスでの Enter は送信されないことを確認し、送信ボタンにフォーカスがある時のみ Enter で送信されることを確認する。
     """
     client = StubClient()
     config = LauncherConfig(gantt_parent=5)
@@ -664,13 +665,22 @@ def test_tab_switches_to_memo_screen_and_enter_creates_gantt_task(monkeypatch: A
     while app.page.tasks:
         app.page.tasks.pop(0)()
 
+    # 1. タイトル欄（title）で Enter を押しても送信されないこと
+    app.memo_focused_control = "title"
+    app._on_keyboard(type("Event", (), {"key": "Enter"})())
+    assert len(client.created_tasks) == 0
+
     # メモ画面での Tab 巡回テスト
     app._on_keyboard(type("Event", (), {"key": "Tab"})()) # title -> body
     while app.page.tasks:
         app.page.tasks.pop(0)()
     assert app.memo_body_field.focus_count == 1
 
+    # 2. 本文欄（body）で Enter を押しても送信されないこと
     app.memo_focused_control = "body"
+    app._on_keyboard(type("Event", (), {"key": "Enter"})())
+    assert len(client.created_tasks) == 0
+
     app._on_keyboard(type("Event", (), {"key": "Tab"})()) # body -> submit
     while app.page.tasks:
         app.page.tasks.pop(0)()
@@ -688,10 +698,11 @@ def test_tab_switches_to_memo_screen_and_enter_creates_gantt_task(monkeypatch: A
         app.page.tasks.pop(0)()
     assert app.memo_submit_button.focus_count == 2
 
-    # 送信
+    # 3. 送信ボタン（submit）にフォーカスがある状態で Enter を押すと送信されること
     app.memo_focused_control = "submit"
     app._on_keyboard(type("Event", (), {"key": "Enter"})())
 
+    assert len(client.created_tasks) == 1
     assert client.created_tasks[0]["text"] == "AI テストタスク"
     assert client.created_tasks[0]["memo"] == "API ガイドから作成したメモ"
     assert client.created_tasks[0]["parent"] == 8
@@ -711,12 +722,13 @@ def test_tab_switches_to_memo_screen_and_enter_creates_gantt_task(monkeypatch: A
 
 def test_global_enter_fallback_submits_memo_on_ui_thread() -> None:
     """
-    Flet の Enter イベントが失われても、メモ画面では pynput の保険で送信する。
+    Flet の Enter イベントが失われても、送信ボタンにフォーカスがあるときだけ送信する。
     """
     page = StubPage()
     submitted: list[bool] = []
     app = LauncherApp(page, StubClient(), LauncherConfig())  # type: ignore[arg-type]
     app.active_screen = "memo"
+    app.memo_focused_control = "submit"
     app._submit_memo = lambda: submitted.append(True)  # type: ignore[method-assign]
 
     app._handle_global_enter_fallback()
@@ -727,6 +739,27 @@ def test_global_enter_fallback_submits_memo_on_ui_thread() -> None:
         pass
 
     assert submitted == [True]
+
+
+def test_global_enter_fallback_does_not_submit_on_textbox() -> None:
+    """
+    グローバル Enter の保険でも、テキストボックスにフォーカスがあるときは送信しない。
+    """
+    page = StubPage()
+    submitted: list[bool] = []
+    app = LauncherApp(page, StubClient(), LauncherConfig())  # type: ignore[arg-type]
+    app.active_screen = "memo"
+    app.memo_focused_control = "body"
+    app._submit_memo = lambda: submitted.append(True)  # type: ignore[method-assign]
+
+    app._handle_global_enter_fallback()
+    coroutine = page.tasks[0]()
+    try:
+        coroutine.send(None)
+    except StopIteration:
+        pass
+
+    assert submitted == []
 
 
 def test_submit_memo_deduplicates_enter_events(monkeypatch: Any) -> None:
@@ -781,9 +814,9 @@ def test_show_window_selects_all_query_text() -> None:
     assert app.query.selection.extent_offset == len("existing_query")
 
 
-def test_memo_shift_enter_submits_task(monkeypatch: Any) -> None:
+def test_memo_shift_enter_does_not_submit_task(monkeypatch: Any) -> None:
     """
-    メモ画面では Shift+Enter でフォーカスが body にあってもタスクを送信する。
+    メモ画面では Shift+Enter を押しても送信されないことを検証する。
     """
     client = StubClient()
     app = LauncherApp(StubPage(), client, LauncherConfig())  # type: ignore[arg-type]
@@ -798,5 +831,6 @@ def test_memo_shift_enter_submits_task(monkeypatch: Any) -> None:
 
     app._on_keyboard(type("Event", (), {"key": "Return", "shift": True})())
 
-    assert client.created_tasks[0]["text"] == "AI テストタスク"
-    assert client.created_tasks[0]["memo"] == "API ガイドから作成したメモ"
+    # 送信されていないこと
+    assert len(client.created_tasks) == 0
+

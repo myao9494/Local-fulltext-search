@@ -1,5 +1,9 @@
 """
 macOS Spaces 上でも現在のデスクトップへ表示できる Cocoa ネイティブランチャーを提供する。
+
+【仕様】
+- gantt メモ画面において、タスク名欄 (memo_title_field) および本文欄 (memo_body_view) での Return/Enter および Shift+Enter キー押下時は、送信を行わずに改行（または通常の入力継続）を行う。
+- gantt タスクの送信は、送信ボタンのクリック、または送信ボタンにフォーカス（カーソル）が合っている状態での Return/Enter キー押下時のみ実行する。
 """
 
 from __future__ import annotations
@@ -58,6 +62,23 @@ class LauncherPanel(AppKit.NSPanel):
         アプリを前面化したときにメインウィンドウとして扱えるようにする。
         """
         return True
+
+    def keyDown_(self, event: Any) -> None:
+        """
+        送信ボタンやキャンセルボタンにフォーカスがある状態で Return キーが押された場合に、アクションを実行する。
+        """
+        chars = event.characters()
+        if chars == "\r" or chars == "\n":
+            delegate = self.delegate()
+            if delegate is not None:
+                first_responder = self.firstResponder()
+                if first_responder == delegate.memo_submit_button:
+                    delegate._submit_memo()
+                    return
+                elif first_responder == delegate.memo_cancel_button:
+                    delegate._switch_screen("search")
+                    return
+        objc.super(LauncherPanel, self).keyDown_(event)
 
 
 class LauncherDelegate(AppKit.NSObject):
@@ -168,7 +189,9 @@ class LauncherDelegate(AppKit.NSObject):
                 self.panel.makeFirstResponder_(self.memo_cancel_button)
                 return True
             elif selector == "insertNewline:":
-                self._submit_memo()
+                # タイトル欄でのEnterでは送信しない。
+                # NSTextFieldは単一行のため改行文字を挿入することはできませんが、
+                # 送信されずに何もしないように制御します。
                 return True
             elif selector == "cancelOperation:":
                 self._switch_screen("search")
@@ -188,14 +211,8 @@ class LauncherDelegate(AppKit.NSObject):
                 self.panel.makeFirstResponder_(self.memo_title_field)
                 return True
             elif selector == "insertNewline:":
-                event = AppKit.NSApp.currentEvent()
-                modifiers = event.modifierFlags() if event is not None else 0
-                if modifiers & AppKit.NSEventModifierFlagShift:
-                    # Shift+Enter で送信
-                    self._submit_memo()
-                else:
-                    # 通常の Enter は改行
-                    textView.insertText_("\n")
+                # Shift+Enter および通常の Enter でも送信は行わず、常に改行を挿入する
+                textView.insertText_("\n")
                 return True
             elif selector == "cancelOperation:":
                 self._switch_screen("search")
