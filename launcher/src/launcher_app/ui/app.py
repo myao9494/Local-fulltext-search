@@ -73,6 +73,7 @@ class LauncherApp:
         self.gantt_parent = config.gantt_parent
         self._suppress_render_focus = False
         self._query_focused = False
+        self._arrow_navigated = False
 
     def build(self) -> None:
         """
@@ -367,7 +368,9 @@ class LauncherApp:
     def _on_query_change(self, event: Any) -> None:
         """
         入力変更を短くデバウンスしてバックエンド検索を実行する。
+        テキスト入力が行われたら矢印ナビゲーションフラグをリセットする。
         """
+        self._arrow_navigated = False
         if self.search_timer is not None:
             self.search_timer.cancel()
         query = str(event.control.value or "").strip()
@@ -566,10 +569,15 @@ class LauncherApp:
     def _plain_search_enter_should_commit_text(self, event: Any | None = None) -> bool:
         """
         Windows の検索欄フォーカス中の素の Enter は IME 変換確定として扱う。
+        ただし、上下キーによるナビゲーション直後の Enter は結果起動として扱う。
         """
         if self._platform_name() != "Windows":
             return False
         if self.active_screen != "search" or not self._query_focused:
+            return False
+        # 上下キーで選択を移動した直後の Enter はファイルを開く意図
+        if self._arrow_navigated:
+            self._arrow_navigated = False
             return False
         if event is None:
             return True
@@ -684,9 +692,11 @@ class LauncherApp:
     def _move_selection(self, delta: int) -> None:
         """
         検索結果の選択位置を上下に移動する。
+        矢印ナビゲーションフラグを立てて、直後の Enter をファイル起動として扱えるようにする。
         """
         if not self.results:
             return
+        self._arrow_navigated = True
         self.selected_index = (self.selected_index + delta) % len(self.results)
         self._suppress_render_focus = True
         try:

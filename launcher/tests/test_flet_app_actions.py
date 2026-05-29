@@ -814,6 +814,82 @@ def test_show_window_selects_all_query_text() -> None:
     assert app.query.selection.extent_offset == len("existing_query")
 
 
+def test_windows_arrow_then_enter_opens_selected_result(monkeypatch: Any) -> None:
+    """
+    Windows で上下キーによるナビゲーション後の Enter は IME 確定ではなく結果起動として扱う。
+    """
+    opened_urls: list[str] = []
+    client = StubClient()
+    app = LauncherApp(StubPage(), client, LauncherConfig(web_base_url="http://localhost:8001"))  # type: ignore[arg-type]
+    app.status = StubStatus()
+    app.results_column = StubResultsColumn()
+    app.results = [make_item(full_path="/tmp/docs/a.md"), make_item(full_path="/tmp/docs/b.md")]
+    app._render_results = lambda: None  # type: ignore[method-assign]
+    app.active_screen = "search"
+    app._query_focused = True
+    monkeypatch.setattr("webbrowser.open", lambda url: opened_urls.append(url))
+    monkeypatch.setattr(LauncherApp, "_platform_name", staticmethod(lambda: "Windows"))
+
+    # 下キーで 2 番目の結果を選択
+    app._on_keyboard(type("Event", (), {"key": "Arrow Down"})())
+    assert app.selected_index == 1
+
+    # Enter で結果を開く（IME ガードをバイパスして起動されること）
+    app._on_keyboard(type("Event", (), {"key": "Enter"})())
+
+    assert opened_urls == ["http://localhost:8001/api/fullpath?path=%2Ftmp%2Fdocs%2Fb.md"]
+    assert client.clicked_file_ids == [42]
+
+
+def test_windows_arrow_navigation_flag_resets_on_query_change(monkeypatch: Any) -> None:
+    """
+    矢印ナビゲーション後にテキスト入力するとフラグがリセットされ、次の Enter は IME 確定に戻る。
+    """
+    opened_urls: list[str] = []
+    client = StubClient()
+    app = LauncherApp(StubPage(), client, LauncherConfig(web_base_url="http://localhost:8001"))  # type: ignore[arg-type]
+    app.status = StubStatus()
+    app.results_column = StubResultsColumn()
+    app.results = [make_item(full_path="/tmp/docs/a.md"), make_item(full_path="/tmp/docs/b.md")]
+    app._render_results = lambda: None  # type: ignore[method-assign]
+    app.active_screen = "search"
+    app._query_focused = True
+    monkeypatch.setattr("webbrowser.open", lambda url: opened_urls.append(url))
+    monkeypatch.setattr(LauncherApp, "_platform_name", staticmethod(lambda: "Windows"))
+
+    # 下キーで選択移動
+    app._on_keyboard(type("Event", (), {"key": "Arrow Down"})())
+    assert app.selected_index == 1
+
+    # テキスト入力（on_change）でフラグリセット
+    app._on_query_change(type("Event", (), {"control": type("C", (), {"value": "新しい検索"})()})())
+
+    # Enter は IME 確定として扱われ、ファイルを開かない
+    app._on_keyboard(type("Event", (), {"key": "Enter"})())
+
+    assert opened_urls == []
+
+
+def test_windows_arrow_then_global_enter_fallback_opens_result(monkeypatch: Any) -> None:
+    """
+    pynput のグローバル Enter フォールバックも、矢印ナビゲーション後に結果を開く。
+    """
+    app = LauncherApp(StubPage(), StubClient(), LauncherConfig())  # type: ignore[arg-type]
+    app.status = StubStatus()
+    app.results_column = StubResultsColumn()
+    app.results = [make_item(full_path="/tmp/docs/a.md"), make_item(full_path="/tmp/docs/b.md")]
+    app._render_results = lambda: None  # type: ignore[method-assign]
+    app.active_screen = "search"
+    app._query_focused = True
+    monkeypatch.setattr(LauncherApp, "_platform_name", staticmethod(lambda: "Windows"))
+
+    # 下キーで選択移動
+    app._on_keyboard(type("Event", (), {"key": "Arrow Down"})())
+
+    # グローバル Enter の保険が有効であること
+    assert app._global_enter_enabled() is True
+
+
 def test_memo_shift_enter_does_not_submit_task(monkeypatch: Any) -> None:
     """
     メモ画面では Shift+Enter を押しても送信されないことを検証する。
