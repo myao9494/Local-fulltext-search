@@ -85,11 +85,14 @@ class SearchService:
         )
         excluded_keywords = self.index_service._parse_exclude_keywords(effective_exclude_keywords)
         refresh_flags = {"used_existing_index": False, "background_refresh_scheduled": False}
+
+        index_depth = params.index_depth if params.index_depth is not None else 99999
+
         if not normalized_target_path and not params.search_all_enabled:
             self._refresh_search_targets_for_search_without_path(
                 refresh_window_minutes=params.refresh_window_minutes,
                 effective_exclude_keywords=effective_exclude_keywords,
-                index_depth=params.index_depth,
+                index_depth=index_depth,
                 index_types=params.index_types,
                 custom_content_extensions=app_settings.custom_content_extensions,
                 custom_filename_extensions=app_settings.custom_filename_extensions,
@@ -100,7 +103,7 @@ class SearchService:
                 normalized_target_path=normalized_target_path,
                 refresh_window_minutes=params.refresh_window_minutes,
                 effective_exclude_keywords=effective_exclude_keywords,
-                index_depth=params.index_depth,
+                index_depth=index_depth,
                 index_types=params.index_types,
                 custom_content_extensions=app_settings.custom_content_extensions,
                 custom_filename_extensions=app_settings.custom_filename_extensions,
@@ -112,7 +115,7 @@ class SearchService:
             normalized_target_path=normalized_target_path,
             excluded_keywords=excluded_keywords,
             app_settings=app_settings,
-            path_depth_limit=params.index_depth,
+            path_depth_limit=index_depth,
         )
         elapsed = time_module.perf_counter() - start_time
         logger.info("Search total time: %.3fs (q=%s, search_all=%s)", elapsed, params.q, params.search_all_enabled)

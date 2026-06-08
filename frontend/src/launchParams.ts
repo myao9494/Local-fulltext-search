@@ -1,5 +1,6 @@
 /**
- * 起動 URL のクエリ文字列から初期検索条件を取り出す。
+ * 起動 URL のクエリ文字列から初期検索条件を取り出す処理
+ * 階層指定（index_depth）のデフォルト値を空文字（無制限）として扱う。
  */
 export type LaunchParams = {
   q: string;
@@ -8,7 +9,7 @@ export type LaunchParams = {
   searchAll: boolean;
 };
 
-const DEFAULT_INDEX_DEPTH = "5";
+const DEFAULT_INDEX_DEPTH = "";
 
 /**
  * URLSearchParams から画面初期値を生成する。

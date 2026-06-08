@@ -230,3 +230,35 @@ def test_record_search_click_returns_updated_count() -> None:
     assert payload.file_id == 3
     assert payload.click_count == 7
     assert service.last_clicked_file_id == 3
+
+
+def test_search_with_body_accepts_none_and_large_index_depth() -> None:
+    """
+    POST /api/search は index_depth=None および 99999 を受け付ける。
+    """
+    service = StubSearchService()
+
+    # None の場合
+    search_with_body(
+        SearchRequest(
+            q="alpha",
+            full_path="",
+            index_depth=None,
+        ),
+        service,
+    )
+    assert service.last_search_params is not None
+    assert service.last_search_params.index_depth is None
+
+    # 99999 の場合
+    search_with_body(
+        SearchRequest(
+            q="alpha",
+            full_path="",
+            index_depth=99999,
+        ),
+        service,
+    )
+    assert service.last_search_params is not None
+    assert service.last_search_params.index_depth == 99999
+

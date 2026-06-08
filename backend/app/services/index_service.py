@@ -277,7 +277,7 @@ class IndexService:
         full_path: str,
         refresh_window_minutes: int,
         exclude_keywords: str | None = None,
-        index_depth: int = 1,
+        index_depth: int | None = 1,
         types: str | None = None,
     ) -> None:
         if self._is_running():
@@ -287,7 +287,8 @@ class IndexService:
         self._assert_indexing_allowed_for_search_target(normalized_full_path, source_type=source_type)
         effective_full_path = self._resolve_enabled_target_covering_path(normalized_full_path, source_type=source_type) or normalized_full_path
         is_partial_target_refresh = normalized_full_path != effective_full_path
-        scan_depth = index_depth + self._relative_directory_depth(effective_full_path, normalized_full_path)
+        effective_depth = index_depth if index_depth is not None else 99999
+        scan_depth = effective_depth + self._relative_directory_depth(effective_full_path, normalized_full_path)
         app_settings = self.get_app_settings()
         default_exclude_keywords = app_settings.web_exclude_keywords if source_type == "web" else app_settings.exclude_keywords
         normalized_keywords = self._normalize_exclude_keywords(
@@ -305,7 +306,7 @@ class IndexService:
             target = self._ensure_target(
                 full_path=effective_full_path,
                 exclude_keywords=normalized_keywords,
-                index_depth=index_depth,
+                index_depth=effective_depth,
                 selected_extensions=normalized_extensions,
             )
             effective_keywords = self._merge_exclude_keyword_strings(
@@ -316,7 +317,7 @@ class IndexService:
                 target,
                 refresh_window_minutes,
                 effective_keywords,
-                index_depth,
+                effective_depth,
                 normalized_extensions,
             )
             if not needs_refresh:
@@ -1061,17 +1062,18 @@ class IndexService:
         self.connection.commit()
         return self.list_search_targets()
 
-    def add_search_target(self, *, folder_path: str, index_depth: int = 3) -> SearchTargetListResponse:
+    def add_search_target(self, *, folder_path: str, index_depth: int | None = 3) -> SearchTargetListResponse:
         """
         検索対象フォルダへ新規追加し、有効状態にする。
         """
         response = self.set_search_target_enabled(folder_path=folder_path, is_enabled=True)
         normalized_path, source_type = self._normalize_target_identifier_or_raise(folder_path)
+        effective_depth = index_depth if index_depth is not None else 99999
         if source_type == "web":
             self.ensure_fresh_target(
                 full_path=normalized_path,
                 refresh_window_minutes=0,
-                index_depth=index_depth,
+                index_depth=effective_depth,
             )
             return self.list_search_targets()
         return response

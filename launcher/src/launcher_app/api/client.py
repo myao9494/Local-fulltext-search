@@ -63,7 +63,6 @@ class LauncherApiClient:
                 "search_all_enabled": True,
                 "skip_refresh": True,
                 "source_type": "local",
-                "index_depth": 5,
                 "refresh_window_minutes": 0,
                 "search_target": "all",
                 "sort_by": "click_count",
@@ -81,7 +80,6 @@ class LauncherApiClient:
                 "full_path": "",
                 "search_all_enabled": False,  # 登録済みフォルダを順次更新して検索するトリガー
                 "skip_refresh": False,        # 更新を許可
-                "index_depth": 5,
                 "refresh_window_minutes": 60,
                 "search_target": "all",
                 "sort_by": "click_count",

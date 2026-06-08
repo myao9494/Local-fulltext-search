@@ -1,7 +1,7 @@
 """
-ランチャー用 API クライアントが既存 FastAPI サーバーへ最小検索条件を送ることを検証する。
+ランチャー用 API クライアントが既存 FastAPI サーバーへ最小検索条件を送ることを検証するテスト。
+index_depth が省略され、バックエンド側で無制限（99999）になるように変更されたため、リクエストペイロードから index_depth が送信されないことを検証する。
 """
-
 import json
 from urllib.error import HTTPError
 from urllib.request import Request
@@ -81,7 +81,6 @@ def test_search_posts_mac_defaults(monkeypatch) -> None:
         "full_path": "",
         "search_all_enabled": False,
         "skip_refresh": False,
-        "index_depth": 5,
         "refresh_window_minutes": 60,
         "search_target": "all",
         "sort_by": "click_count",
@@ -148,7 +147,6 @@ def test_search_posts_gantt_include_for_all_platforms(monkeypatch) -> None:
         "search_all_enabled": True,
         "skip_refresh": True,
         "source_type": "local",
-        "index_depth": 5,
         "refresh_window_minutes": 0,
         "search_target": "all",
         "sort_by": "click_count",

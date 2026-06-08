@@ -1,3 +1,6 @@
+"""
+インデックス処理用の各種リクエスト・レスポンスモデル定義。
+"""
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -125,7 +128,7 @@ class SearchTargetAddRequest(BaseModel):
     """
 
     folder_path: str
-    index_depth: int = 3
+    index_depth: int | None = 3
 
 
 class ReindexSearchTargetsRequest(BaseModel):

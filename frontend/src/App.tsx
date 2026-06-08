@@ -1,3 +1,8 @@
+/**
+ * メインアプリケーションコンポーネント。
+ * 各種検索機能、設定ドロワー、インデックス管理、スケジューラーのUI制御を担当する。
+ * 階層指定（index_depth）は未入力時に無制限として処理するためオプショナルにする。
+ **/
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -866,15 +871,14 @@ function App() {
       setErrorMessage("検索語を入力してください。");
       return;
     }
-    if (!indexDepth.trim()) {
-      setErrorMessage("階層数を入力してください。");
-      return;
-    }
-    const parsedDepth = Number(indexDepth);
     const parsedWindow = Number(refreshWindowMinutes);
-    if (Number.isNaN(parsedDepth) || parsedDepth < 0) {
-      setErrorMessage("階層数は 0 以上で入力してください。");
-      return;
+    let parsedDepth: number | undefined = undefined;
+    if (indexDepth.trim()) {
+      parsedDepth = Number(indexDepth);
+      if (Number.isNaN(parsedDepth) || parsedDepth < 0) {
+        setErrorMessage("階層数は 0 以上で入力してください。");
+        return;
+      }
     }
     if (Number.isNaN(parsedWindow) || parsedWindow < 0) {
       setErrorMessage("更新間隔は 0 以上の分で入力してください。");

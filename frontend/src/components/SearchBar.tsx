@@ -1,3 +1,7 @@
+/**
+ * 検索バーコンポーネント。
+ * 検索クエリ、対象フォルダ、階層、拡張子、作成日などのフィルタ入力UIを提供する。
+ **/
 type IndexUiStatus = "idle" | "running" | "cancelling";
 
 type SearchBarProps = {
@@ -140,6 +144,19 @@ export function SearchBar({
                 <button className="secondary-button small-btn" onClick={onPickFolder} type="button" disabled={searchSource === "web"}>
                   選択
                 </button>
+                <div className="depth-field-inline" title="最大走査階層（0=直下のみ、空欄=無制限）">
+                  <label className="filter-label" htmlFor="index-depth-input">階層:</label>
+                  <input
+                    id="index-depth-input"
+                    className="small-input depth-input"
+                    value={indexDepth}
+                    onChange={(event) => onIndexDepthChange(event.target.value)}
+                    placeholder="無制限"
+                    type="number"
+                    min={0}
+                    title="0=直下のみ、空欄=無制限"
+                  />
+                </div>
               </div>
               {showSearchTargetHint ? (
                 <div className="search-target-inline-hint">
@@ -149,21 +166,6 @@ export function SearchBar({
                   </button>
                 </div>
               ) : null}
-            </div>
-          </div>
-
-          <div className="filter-group depth-group">
-            <label className="filter-label">階層:</label>
-            <div className="depth-field">
-              <input
-                className="small-input depth-input"
-                value={indexDepth}
-                onChange={(event) => onIndexDepthChange(event.target.value)}
-                placeholder="0"
-                type="number"
-                min={0}
-              />
-              <span className="filter-hint">0=直下のみ</span>
             </div>
           </div>
         </div>

@@ -1,6 +1,10 @@
+"""
+検索APIリクエストおよびレスポンスのPydanticモデル定義。
+最大走査階層（index_depth）は未入力（None）を許容し、バリデーション上限を99999に引き上げる。
+"""
 from datetime import date, datetime
 from pathlib import PurePosixPath
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -58,7 +62,7 @@ class SearchQueryParams(BaseModel):
     search_all_enabled: bool = False
     skip_refresh: bool = False
     source_type: Literal["local", "web", "gantt"] = "local"
-    index_depth: int = Field(ge=0, le=128)
+    index_depth: Optional[int] = Field(default=None, ge=0, le=99999)
     refresh_window_minutes: int = Field(default=60, ge=0, le=1440)
     regex_enabled: bool = False
     search_target: Literal["all", "body", "filename", "folder", "filename_and_folder"] = "all"

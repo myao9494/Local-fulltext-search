@@ -1,3 +1,7 @@
+/**
+ * FastAPI バックエンドと通信するための API クライアント。
+ * 階層指定（index_depth）は未指定（無制限）を許容するため、パラメータをオプショナルとして扱う。
+ **/
 import type {
   AppSettings,
   FailedFileListResponse,
@@ -145,7 +149,7 @@ export async function setSearchTargetEnabled(payload: {
 export async function addSearchTarget(folderPath: string, indexDepth?: number): Promise<SearchTargetListResponse> {
   return request<SearchTargetListResponse>("/api/index/search-targets", {
     method: "POST",
-    body: JSON.stringify({ folder_path: folderPath, index_depth: indexDepth ?? 3 }),
+    body: JSON.stringify({ folder_path: folderPath, index_depth: indexDepth ?? undefined }),
   });
 }
 
@@ -190,7 +194,7 @@ export async function fetchSearchPage(params: {
   search_all_enabled?: boolean;
   skip_refresh?: boolean;
   source_type?: "local" | "web" | "gantt";
-  index_depth: number;
+  index_depth?: number;
   refresh_window_minutes: number;
   regex_enabled?: boolean;
   search_target?: "all" | "body" | "filename" | "folder" | "filename_and_folder";
@@ -223,7 +227,7 @@ export async function search(params: {
   search_all_enabled?: boolean;
   skip_refresh?: boolean;
   source_type?: "local" | "web" | "gantt";
-  index_depth: number;
+  index_depth?: number;
   refresh_window_minutes: number;
   regex_enabled?: boolean;
   search_target?: "all" | "body" | "filename" | "folder" | "filename_and_folder";
