@@ -1607,3 +1607,23 @@ def _serve_pages(pages: dict[str, str]):
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_relative_directory_depth_handling_slashes_and_cases() -> None:
+    """
+    _relative_directory_depth が末尾スラッシュの有無や大文字小文字の違いに影響されず、正しい階層差を返すことを検証する。
+    """
+    # 接続なしでインスタンス化
+    service = IndexService(connection=None)
+
+    # 標準的なパス（期待値: 1）
+    assert service._relative_directory_depth("/Users/mine/work", "/Users/mine/work/app") == 1
+    # 末尾スラッシュ付き親フォルダ（期待値: 1）
+    assert service._relative_directory_depth("/Users/mine/work/", "/Users/mine/work/app") == 1
+    # 大文字小文字の違い（期待値: 1）
+    assert service._relative_directory_depth("/Users/mine/WORK", "/Users/mine/work/app") == 1
+    # 末尾スラッシュ付き同一フォルダ（期待値: 0）
+    assert service._relative_directory_depth("/Users/mine/work/", "/Users/mine/work") == 0
+    # 全く同じパス（期待値: 0）
+    assert service._relative_directory_depth("/Users/mine/work", "/Users/mine/work") == 0
+

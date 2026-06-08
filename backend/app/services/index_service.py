@@ -427,13 +427,23 @@ class IndexService:
     def _relative_directory_depth(self, root_path: str, descendant_path: str) -> int:
         """
         ルートから子孫フォルダまでの相対ディレクトリ階層数を返す。
+        大文字小文字の差異や末尾スラッシュの二重化を防ぐため正規化して比較する。
         """
-        if root_path == descendant_path:
+        r_path = root_path.replace("\\", "/").rstrip("/")
+        d_path = descendant_path.replace("\\", "/").rstrip("/")
+
+        if not r_path:
+            r_path = "/"
+        if not d_path:
+            d_path = "/"
+
+        if r_path.lower() == d_path.lower():
             return 0
-        root_prefix = "/" if root_path == "/" else f"{root_path}/"
-        if not descendant_path.startswith(root_prefix):
+
+        root_prefix = r_path if r_path.endswith("/") else f"{r_path}/"
+        if not d_path.lower().startswith(root_prefix.lower()):
             return 0
-        relative_path = descendant_path[len(root_prefix):]
+        relative_path = d_path[len(root_prefix):]
         return len([part for part in relative_path.split("/") if part])
 
     def _resolve_enabled_target_covering_path(self, normalized_path: str, *, source_type: str = "local") -> str | None:
