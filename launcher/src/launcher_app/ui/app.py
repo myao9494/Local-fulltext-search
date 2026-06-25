@@ -298,17 +298,26 @@ class LauncherApp:
             self.hotkeys.reset()
         self.page.window.minimized = False
         self.page.window.opacity = 1
-        self._run_window_task(self._restore_window_and_query_focus)
+        self._run_window_task(self._restore_window_and_active_focus)
         self.page.update()
 
 
-    async def _restore_window_and_query_focus(self) -> None:
+    async def _restore_window_and_active_focus(self) -> None:
         """
-        Windows で再表示後の Enter 起動が失われないよう、前面化後に検索欄へフォーカスする。
+        Windows で再表示後の Enter 起動が失われないよう、前面化後に表示中の画面へフォーカスする。
         """
         await self.page.window.center()
         await self.page.window.to_front()
-        await self.query.focus()
+        if self.active_screen == "memo":
+            focus_result = self.memo_title_field.focus()
+            if inspect.isawaitable(focus_result):
+                await focus_result
+            self.memo_focused_control = "title"
+            return
+
+        focus_result = self.query.focus()
+        if inspect.isawaitable(focus_result):
+            await focus_result
         self._select_all_query_text()
 
     def _select_all_query_text(self) -> None:

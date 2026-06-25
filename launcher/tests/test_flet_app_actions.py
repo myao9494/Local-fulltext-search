@@ -415,6 +415,37 @@ def test_show_window_restores_focus_after_window_is_front() -> None:
     assert app.is_hidden is False
 
 
+def test_show_window_restores_memo_focus_when_memo_screen_is_active() -> None:
+    """
+    メモ画面を隠して再表示した場合は、非表示の検索欄ではなくメモのタスク名へ focus する。
+    """
+    calls: list[str] = []
+    page = StubPage()
+    page.window = AsyncWindow(calls)
+    app = LauncherApp(page, StubClient(), LauncherConfig())  # type: ignore[arg-type]
+    app.active_screen = "memo"
+
+    class NamedAsyncFocus:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def focus(self) -> None:
+            calls.append(self.name)
+
+    app.query = NamedAsyncFocus("query")
+    app.memo_title_field = NamedAsyncFocus("memo-title")
+
+    app._show_window()
+    coroutine = page.tasks[0]()
+    try:
+        coroutine.send(None)
+    except StopIteration:
+        pass
+
+    assert calls == ["center", "to_front", "memo-title"]
+    assert app.is_hidden is False
+
+
 def test_keyboard_accepts_windows_flet_arrow_and_enter_names(monkeypatch: Any) -> None:
     """
     Windows の Flet で揺れるキー名でも矢印選択と Enter 起動を処理する。
@@ -909,4 +940,3 @@ def test_memo_shift_enter_does_not_submit_task(monkeypatch: Any) -> None:
 
     # 送信されていないこと
     assert len(client.created_tasks) == 0
-

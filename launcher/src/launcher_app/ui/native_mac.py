@@ -111,6 +111,7 @@ class LauncherDelegate(AppKit.NSObject):
         self.search_field = None
         self.status_label = None
         self.results_stack = None
+        self.gui_button = None
         self.gantt_checkbox = None
         self.active_screen = "search"
         self.search_scroll = None
@@ -118,6 +119,10 @@ class LauncherDelegate(AppKit.NSObject):
         self.memo_text_view = None
         self.memo_parent_label = None
         self.memo_title_label = None
+        self.memo_title_field = None
+        self.memo_body_view = None
+        self.memo_submit_button = None
+        self.memo_cancel_button = None
         self.gantt_parent = config.gantt_parent
         self.include_gantt_tasks = False
         self.last_results_time = 0.0
@@ -537,7 +542,7 @@ class LauncherDelegate(AppKit.NSObject):
         self.panel.makeKeyWindow()
         self.panel.makeKeyAndOrderFront_(None)
         self.panel.orderFrontRegardless()
-        self.search_field.becomeFirstResponder()
+        self._focus_active_screen()
 
     @objc.python_method
     def hide_panel(self) -> None:
@@ -696,9 +701,17 @@ class LauncherDelegate(AppKit.NSObject):
         self.memo_submit_button.setHidden_(not is_memo)
         self.memo_cancel_button.setHidden_(not is_memo)
         self.status_label.setStringValue_("gantt メモ" if is_memo else f"Hotkey: {hotkey_spec_for_platform()}")
-        if is_memo:
+        self._focus_active_screen()
+
+    @objc.python_method
+    def _focus_active_screen(self) -> None:
+        """
+        現在表示中の画面に対応する入力欄へフォーカスを戻す。
+        """
+        if self.active_screen == "memo" and self.memo_title_field is not None:
             self.panel.makeFirstResponder_(self.memo_title_field)
-        else:
+            return
+        if self.search_field is not None:
             self.panel.makeFirstResponder_(self.search_field)
 
     @objc.python_method

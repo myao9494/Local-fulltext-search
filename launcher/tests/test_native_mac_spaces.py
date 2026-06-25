@@ -98,6 +98,60 @@ def test_begin_activity_starts_app_nap_prevention_once(monkeypatch) -> None:
     assert process_info.started == [(48, "Local Fulltext Search launcher hotkey monitor")]
 
 
+def test_show_panel_focuses_memo_title_when_memo_screen_is_active(monkeypatch) -> None:
+    """
+    メモ画面を隠して再表示した場合は、非表示の検索欄ではなくメモのタスク名へ focus する。
+    """
+    calls: list[str] = []
+
+    class FakePanel:
+        def __init__(self) -> None:
+            self.first_responder = None
+
+        def orderOut_(self, sender: object | None) -> None:
+            calls.append("order-out")
+
+        def setAlphaValue_(self, value: float) -> None:
+            calls.append(f"alpha:{value}")
+
+        def makeKeyWindow(self) -> None:
+            calls.append("key-window")
+
+        def makeKeyAndOrderFront_(self, sender: object | None) -> None:
+            calls.append("front")
+
+        def orderFrontRegardless(self) -> None:
+            calls.append("front-regardless")
+
+        def makeFirstResponder_(self, control: object) -> None:
+            self.first_responder = control
+            calls.append(f"first:{control}")
+
+    class FakeSearchField:
+        def becomeFirstResponder(self) -> None:
+            calls.append("search-become")
+
+    fake_ns_app = SimpleNamespace(activateIgnoringOtherApps_=lambda enabled: calls.append(f"activate:{enabled}"))
+    monkeypatch.setattr(native_mac, "AppKit", SimpleNamespace(NSApp=fake_ns_app))
+
+    panel = FakePanel()
+    delegate = SimpleNamespace(
+        panel=panel,
+        active_screen="memo",
+        search_field=FakeSearchField(),
+        memo_title_field="memo-title",
+        _prepare_panel_for_active_space=lambda: calls.append("prepare"),
+        _center_panel_on_mouse_screen=lambda: calls.append("center"),
+    )
+    delegate.show_panel = native_mac.LauncherDelegate.show_panel.__get__(delegate)
+    delegate._focus_active_screen = native_mac.LauncherDelegate._focus_active_screen.__get__(delegate)
+
+    delegate.show_panel()
+
+    assert panel.first_responder == "memo-title"
+    assert "search-become" not in calls
+
+
 def test_launcher_panel_key_down_submits_memo_on_focus(monkeypatch) -> None:
     """
     送信ボタンにフォーカスがある状態で Return キーが押された場合、gantt 追加処理が実行されることを検証する。
@@ -265,4 +319,3 @@ def test_launcher_panel_key_down_falls_back_for_other_keys(monkeypatch) -> None:
     assert delegate.submitted is False
     assert delegate.screen is None
     assert super_called == [True]
-
