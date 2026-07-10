@@ -143,6 +143,15 @@ def test_search_query_params_accepts_sort_options() -> None:
     assert params.sort_order == "asc"
 
 
+def test_search_query_params_defaults_to_default_sort() -> None:
+    """
+    未指定時は top・アクセス数・更新日時を優先する default を使う。
+    """
+    params = SearchQueryParams(q="alpha")
+
+    assert params.sort_by == "default"
+
+
 def test_search_query_params_accepts_search_target_mode() -> None:
     """
     検索種別は本文・ファイル名・フォルダ名の切り替え値を受け付ける。

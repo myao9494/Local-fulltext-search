@@ -43,6 +43,12 @@ class SearchResultItem(BaseModel):
     created_at: datetime
     mtime: datetime
     click_count: int
+    has_obsidian_top_tag: bool = False
+    filename_match_priority: bool = False
+    filename_match_level: int = 0
+    relevance_bucket: int = 0
+    utility_score: float = 0.0
+    query_click_score: float = 0.0
     snippet: str
     gantt_link: str | None = None
 
@@ -70,7 +76,7 @@ class SearchQueryParams(BaseModel):
     types: str | None = None
     exclude_keywords: str | None = None
     date_field: Literal["created", "modified"] = "created"
-    sort_by: Literal["created", "modified", "click_count"] = "click_count"
+    sort_by: Literal["default", "created", "modified", "click_count"] = "default"
     sort_order: Literal["asc", "desc"] = "desc"
     created_from: date | None = None
     created_to: date | None = None
@@ -128,6 +134,7 @@ class IndexedSearchRequest(BaseModel):
 
 class SearchClickRequest(BaseModel):
     file_id: int = Field(ge=1)
+    query: str = ""
 
 
 class SearchClickResponse(BaseModel):

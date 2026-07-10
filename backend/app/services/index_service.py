@@ -40,6 +40,7 @@ from app.extractors.text_extractor import (
     resolve_supported_extension,
     supports_content_extraction,
 )
+from app.extractors.obsidian_properties import extract_obsidian_title_and_aliases, has_obsidian_top_tag
 from app.models.indexing import (
     AppSettingsResponse,
     DEFAULT_EXCLUDE_KEYWORDS,
@@ -2072,6 +2073,13 @@ class IndexService:
         画像など本文を持たないファイルは files テーブルだけへ登録する。
         """
         indexed_at = datetime.now(UTC).isoformat()
+        has_top_tag = int(candidate.file_ext == ".md" and content is not None and has_obsidian_top_tag(content))
+        obsidian_title, obsidian_aliases = (
+            extract_obsidian_title_and_aliases(content)
+            if candidate.file_ext == ".md" and content is not None
+            else ("", ())
+        )
+        obsidian_aliases_text = "\n".join(obsidian_aliases)
         if candidate.existing_id is not None:
             file_id = candidate.existing_id
             self.connection.execute(
@@ -2079,6 +2087,8 @@ class IndexService:
                 UPDATE files
                 SET full_path = ?, file_name = ?, file_ext = ?,
                     created_at = ?, mtime = ?, size = ?, indexed_at = ?, last_error = NULL,
+                    has_obsidian_top_tag = ?,
+                    obsidian_title = ?, obsidian_aliases = ?,
                     source_type = 'local'
                 WHERE id = ?
                 """,
@@ -2090,6 +2100,9 @@ class IndexService:
                     candidate.mtime,
                     candidate.size,
                     indexed_at,
+                    has_top_tag,
+                    obsidian_title,
+                    obsidian_aliases_text,
                     file_id,
                 ),
             )
@@ -2100,8 +2113,9 @@ class IndexService:
                 """
                 INSERT INTO files(
                     full_path, normalized_path,
-                    file_name, file_ext, created_at, mtime, size, indexed_at, last_error, source_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'local')
+                    file_name, file_ext, created_at, mtime, size, indexed_at, last_error,
+                    has_obsidian_top_tag, obsidian_title, obsidian_aliases, source_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'local')
                 """,
                 (
                     candidate.normalized_path,
@@ -2112,6 +2126,9 @@ class IndexService:
                     candidate.mtime,
                     candidate.size,
                     indexed_at,
+                    has_top_tag,
+                    obsidian_title,
+                    obsidian_aliases_text,
                 ),
             )
             file_id = int(cursor.lastrowid)

@@ -9,6 +9,12 @@ export type SearchResult = {
   created_at: string;
   mtime: string;
   click_count: number;
+  has_obsidian_top_tag?: boolean;
+  filename_match_priority?: boolean;
+  filename_match_level?: number;
+  relevance_bucket?: number;
+  utility_score?: number;
+  query_click_score?: number;
   snippet: string;
   gantt_link?: string | null;
 };

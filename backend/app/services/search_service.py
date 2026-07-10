@@ -8,6 +8,7 @@ import re
 from sqlite3 import Connection
 import threading
 import time as time_module
+import unicodedata
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 
@@ -539,7 +540,7 @@ class SearchService:
             path_depth_limit=path_depth_limit,
         )
 
-    def record_click(self, file_id: int) -> int:
+    def record_click(self, file_id: int, query: str = "") -> int:
         """
         検索結果オープン時のアクセス数を 1 件加算して返す。
         """
@@ -555,8 +556,26 @@ class SearchService:
         row = cursor.fetchone()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="検索結果が見つかりません。")
+        normalized_query = self._normalize_query_for_history(query)
+        if normalized_query:
+            self.connection.execute(
+                """
+                INSERT INTO search_query_clicks(normalized_query, file_id, click_count, last_clicked_at)
+                VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+                ON CONFLICT(normalized_query, file_id) DO UPDATE SET
+                    click_count = click_count + 1,
+                    last_clicked_at = CURRENT_TIMESTAMP
+                """,
+                (normalized_query, file_id),
+            )
         self.connection.commit()
         return int(row["click_count"])
+
+    def _normalize_query_for_history(self, query: str) -> str:
+        """
+        検索履歴のキーをUnicode正規化し、空白と大文字小文字の差を吸収する。
+        """
+        return " ".join(unicodedata.normalize("NFKC", query).casefold().split())
 
     def _search_with_fts(
         self,
@@ -705,6 +724,29 @@ class SearchService:
                         )
                         query_values.append(f"%{escaped_term}%")
 
+                    for metadata_column, segment_type, match_rank in (
+                        ("obsidian_title", "obsidian_title", 3),
+                        ("obsidian_aliases", "obsidian_alias", 4),
+                    ):
+                        matched_queries.append(
+                            f"""
+                            SELECT
+                                scoped_files.id AS file_id,
+                                {term_index} AS term_index,
+                                {match_rank} AS match_rank,
+                                1000000.0 AS score,
+                                NULL AS snippet,
+                                '{segment_type}' AS segment_type,
+                                body_segments.content AS body_content
+                            FROM scoped_files
+                            LEFT JOIN file_segments AS body_segments
+                              ON body_segments.file_id = scoped_files.id
+                             AND body_segments.segment_type = 'body'
+                            WHERE lower(scoped_files.{metadata_column}) LIKE ? ESCAPE '\\'
+                            """
+                        )
+                        query_values.append(f"%{escaped_term}%")
+
         prep_elapsed = time_module.perf_counter() - fts_start - cte_elapsed
         logger.info("FTS: Query preparation time: %.3fs", prep_elapsed)
 
@@ -714,26 +756,57 @@ class SearchService:
             sort_order=params.sort_order,
             table_alias="scoped_files",
         )
+        paged_order_by_clause = self._build_paged_order_by_clause(
+            sort_by=params.sort_by,
+            sort_order=params.sort_order,
+            table_alias="paged_matches",
+        )
         highlight_terms = self._flatten_highlight_terms(expanded_include_terms)
 
         if matched_queries:
             matched_files_cte = f"""
                 {scoped_files_cte_sql},
+                query_affinity AS (
+                    SELECT
+                        file_id,
+                        (1.0 * click_count / (click_count + 2.0))
+                        * (1.0 / (1.0 + MAX(strftime('%s', 'now') - strftime('%s', last_clicked_at), 0.0) / 2592000.0))
+                        AS query_click_score
+                    FROM search_query_clicks
+                    WHERE normalized_query = ?
+                ),
                 matched_terms AS (
                     {" UNION ALL ".join(matched_queries)}
                 ),
-                matched_file_terms AS (
-                    SELECT
-                        file_id,
-                        term_index
-                    FROM matched_terms
-                    GROUP BY file_id, term_index
-                ),
                 matching_files AS (
-                    SELECT file_id
-                    FROM matched_file_terms
-                    GROUP BY file_id
-                    HAVING COUNT(*) = {len(expanded_include_terms)}
+                    SELECT
+                        matched_terms.file_id,
+                        CASE
+                            WHEN COUNT(DISTINCT CASE WHEN segment_type = 'filename' THEN term_index END) = {len(expanded_include_terms)}
+                                 AND lower(substr(scoped_files.file_name, 1, length(scoped_files.file_name) - length(scoped_files.file_ext))) = ?
+                            THEN 8
+                            WHEN COUNT(DISTINCT CASE WHEN segment_type = 'filename' THEN term_index END) = {len(expanded_include_terms)}
+                                 AND lower(scoped_files.file_name) LIKE ? ESCAPE '\\'
+                            THEN 7
+                            WHEN COUNT(DISTINCT CASE WHEN segment_type = 'filename' THEN term_index END) = {len(expanded_include_terms)}
+                            THEN 6
+                            WHEN COUNT(DISTINCT CASE WHEN segment_type = 'obsidian_title' THEN term_index END) = {len(expanded_include_terms)}
+                                 AND lower(scoped_files.obsidian_title) = ?
+                            THEN 5
+                            WHEN COUNT(DISTINCT CASE WHEN segment_type = 'obsidian_title' THEN term_index END) = {len(expanded_include_terms)}
+                            THEN 4
+                            WHEN COUNT(DISTINCT CASE WHEN segment_type = 'obsidian_alias' THEN term_index END) = {len(expanded_include_terms)}
+                            THEN 3
+                            WHEN COUNT(DISTINCT CASE WHEN segment_type = 'filename' THEN term_index END) > 0
+                            THEN 2
+                            WHEN COUNT(DISTINCT CASE WHEN segment_type IN ('obsidian_title', 'obsidian_alias') THEN term_index END) > 0
+                            THEN 1
+                            ELSE 0
+                        END AS filename_match_level
+                    FROM matched_terms
+                    JOIN scoped_files ON scoped_files.id = matched_terms.file_id
+                    GROUP BY matched_terms.file_id
+                    HAVING COUNT(DISTINCT term_index) = {len(expanded_include_terms)}
                 ),
                 ranked_matches AS (
                     SELECT
@@ -743,6 +816,7 @@ class SearchService:
                         matched_terms.snippet,
                         matched_terms.segment_type,
                         matched_terms.body_content,
+                        matching_files.filename_match_level,
                         ROW_NUMBER() OVER (
                             PARTITION BY matched_terms.file_id
                             ORDER BY matched_terms.match_rank, matched_terms.score, matched_terms.file_id
@@ -751,10 +825,25 @@ class SearchService:
                     JOIN matching_files ON matching_files.file_id = matched_terms.file_id
                 ),
                 filtered AS (
-                    SELECT * FROM ranked_matches WHERE rn = 1
+                    SELECT
+                        ranked_matches.*,
+                        11 - CAST(
+                            CUME_DIST() OVER (ORDER BY match_rank, score) * 10 + 0.999999
+                            AS INTEGER
+                        ) AS relevance_bucket
+                    FROM ranked_matches
+                    WHERE rn = 1
                 )
             """
-            all_query_values = [*scoped_file_values, *query_values]
+            filename_phrase = f"%{self._escape_like_pattern(normalized_query.lower())}%"
+            all_query_values = [
+                *scoped_file_values,
+                self._normalize_query_for_history(normalized_query),
+                *query_values,
+                normalized_query.lower(),
+                filename_phrase,
+                normalized_query.lower(),
+            ]
             # フォルダ検索が有効、または除外条件がある場合は、全件を一旦取得して Python 側で処理する必要がある
             should_fetch_all_files = (
                 search_folder
@@ -780,12 +869,18 @@ class SearchService:
                         scoped_files.click_count,
                         scoped_files.obsidian_click_count,
                         scoped_files.obsidian_rank_score,
+                        scoped_files.has_obsidian_top_tag,
                         scoped_files.source_type,
                         filtered.snippet,
                         filtered.segment_type,
-                        filtered.body_content
+                        filtered.body_content,
+                        filtered.filename_match_level,
+                        filtered.relevance_bucket,
+                        {self._build_utility_score_expression('scoped_files')} AS utility_score,
+                        COALESCE(query_affinity.query_click_score, 0.0) AS query_click_score
                     FROM filtered
                     JOIN scoped_files ON scoped_files.id = filtered.file_id
+                    LEFT JOIN query_affinity ON query_affinity.file_id = scoped_files.id
                     ORDER BY {order_by_clause}
                     """,
                     tuple(all_query_values),
@@ -856,14 +951,20 @@ class SearchService:
                             scoped_files.click_count,
                             scoped_files.obsidian_click_count,
                             scoped_files.obsidian_rank_score,
+                            scoped_files.has_obsidian_top_tag,
                             scoped_files.source_type,
                             filtered.snippet,
                             filtered.segment_type,
                             filtered.body_content,
+                            filtered.filename_match_level,
+                            filtered.relevance_bucket,
+                            {self._build_utility_score_expression('scoped_files')} AS utility_score,
+                            COALESCE(query_affinity.query_click_score, 0.0) AS query_click_score,
                             filtered.match_rank,
                             filtered.score
                         FROM filtered
                         JOIN scoped_files ON scoped_files.id = filtered.file_id
+                        LEFT JOIN query_affinity ON query_affinity.file_id = scoped_files.id
                         ORDER BY {order_by_clause}
                         LIMIT ? OFFSET ?
                     )
@@ -878,17 +979,19 @@ class SearchService:
                         paged_matches.click_count,
                         paged_matches.obsidian_click_count,
                         paged_matches.obsidian_rank_score,
+                        paged_matches.has_obsidian_top_tag,
                         paged_matches.source_type,
                         paged_matches.snippet,
                         paged_matches.segment_type,
                         paged_matches.body_content,
+                        paged_matches.filename_match_level,
+                        paged_matches.relevance_bucket,
+                        paged_matches.utility_score,
+                        paged_matches.query_click_score,
                         total_count.total
                     FROM total_count
-                    LEFT JOIN paged_matches ON 1 = 1
-                    ORDER BY paged_matches.match_rank,
-                             paged_matches.score,
-                             paged_matches.obsidian_rank_score DESC,
-                             paged_matches.mtime DESC
+                        LEFT JOIN paged_matches ON 1 = 1
+                    ORDER BY {paged_order_by_clause}
                     """,
                     tuple(paged_query_values),
                 ).fetchall()
@@ -1004,6 +1107,7 @@ class SearchService:
                 scoped_files.click_count,
                 scoped_files.obsidian_click_count,
                 scoped_files.obsidian_rank_score,
+                scoped_files.has_obsidian_top_tag,
                 scoped_files.source_type,
                 file_segments.content
             FROM scoped_files
@@ -1060,6 +1164,15 @@ class SearchService:
                         created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
                         mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
                         click_count=int(row["click_count"] or 0) + int(row["obsidian_click_count"] or 0),
+                        has_obsidian_top_tag=bool(row["has_obsidian_top_tag"]),
+                        filename_match_priority=file_name_match is not None,
+                        filename_match_level=2 if file_name_match is not None else 0,
+                        relevance_bucket=10,
+                        utility_score=self._calculate_utility_score(
+                            click_count=int(row["click_count"] or 0) + int(row["obsidian_click_count"] or 0),
+                            obsidian_rank_score=float(row["obsidian_rank_score"] or 0.0),
+                            mtime=float(row["mtime"]),
+                        ),
                         snippet=(
                             self._build_regex_snippet(
                                 content=content,
@@ -1685,6 +1798,9 @@ class SearchService:
                     files.click_count,
                     files.obsidian_click_count,
                     files.obsidian_rank_score,
+                    files.has_obsidian_top_tag,
+                    files.obsidian_title,
+                    files.obsidian_aliases,
                     files.source_type
                 FROM files
                 WHERE {where_clause}
@@ -1697,14 +1813,28 @@ class SearchService:
         """
         FTS 検索は一致品質を優先しつつ、同順位内で指定列へ並び替える。
         """
+        if sort_by == "default":
+            return f"filtered.filename_match_level DESC, {table_alias}.has_obsidian_top_tag DESC, query_click_score DESC, filtered.relevance_bucket DESC, {self._build_utility_score_expression(table_alias)} DESC, {table_alias}.mtime DESC, {table_alias}.id DESC"
         direction = "ASC" if sort_order == "asc" else "DESC"
         sort_column = self._resolve_sort_column(sort_by, table_alias=table_alias)
         return f"filtered.match_rank, filtered.score, {table_alias}.obsidian_rank_score DESC, {sort_column} {direction}, {table_alias}.id DESC"
+
+    def _build_paged_order_by_clause(self, *, sort_by: str, sort_order: str, table_alias: str) -> str:
+        """
+        ページング CTE の結果を、内部 LIMIT 適用時と同じ優先順位で返す。
+        """
+        if sort_by == "default":
+            return f"{table_alias}.filename_match_level DESC, {table_alias}.has_obsidian_top_tag DESC, {table_alias}.query_click_score DESC, {table_alias}.relevance_bucket DESC, {table_alias}.utility_score DESC, {table_alias}.mtime DESC, {table_alias}.file_id DESC"
+        direction = "ASC" if sort_order == "asc" else "DESC"
+        sort_column = self._resolve_sort_column(sort_by, table_alias=table_alias)
+        return f"{table_alias}.match_rank, {table_alias}.score, {table_alias}.obsidian_rank_score DESC, {sort_column} {direction}, {table_alias}.file_id DESC"
 
     def _build_combined_order_by_clause(self, *, sort_by: str, sort_order: str, table_alias: str) -> str:
         """
         ファイル結果とフォルダ結果をまとめた集合を、一致品質と指定列で並び替える。
         """
+        if sort_by == "default":
+            return f"{table_alias}.has_obsidian_top_tag DESC, {table_alias}.click_count DESC, {table_alias}.mtime DESC, {table_alias}.match_rank, {table_alias}.score, {table_alias}.file_id DESC"
         direction = "ASC" if sort_order == "asc" else "DESC"
         sort_column = self._resolve_sort_column(sort_by, table_alias=table_alias)
         return f"{table_alias}.match_rank, {table_alias}.score, {table_alias}.obsidian_rank_score DESC, {sort_column} {direction}, {table_alias}.file_id DESC"
@@ -1713,6 +1843,8 @@ class SearchService:
         """
         正規表現検索は DB 側で指定列順に走査し、結果の表示順と一致させる。
         """
+        if sort_by == "default":
+            return f"{table_alias}.has_obsidian_top_tag DESC, ({table_alias}.click_count + {table_alias}.obsidian_click_count) DESC, {table_alias}.mtime DESC, {table_alias}.id DESC"
         direction = "ASC" if sort_order == "asc" else "DESC"
         sort_column = self._resolve_sort_column(sort_by, table_alias=table_alias)
         return f"{table_alias}.obsidian_rank_score DESC, {sort_column} {direction}, {table_alias}.id DESC"
@@ -1726,6 +1858,26 @@ class SearchService:
         if sort_by == "click_count":
             return f"({table_alias}.click_count + {table_alias}.obsidian_click_count)"
         return f"{table_alias}.mtime"
+
+    def _build_utility_score_expression(self, table_alias: str) -> str:
+        """
+        アクセス数を飽和させ、Obsidian重要度と90日半減相当の更新鮮度を合成する。
+        """
+        clicks = f"({table_alias}.click_count + {table_alias}.obsidian_click_count)"
+        popularity = f"(1.0 * {clicks} / ({clicks} + 10.0))"
+        obsidian_importance = f"MIN(MAX({table_alias}.obsidian_rank_score / 1000.0, 0.0), 1.0)"
+        recency = f"(1.0 / (1.0 + MAX(strftime('%s', 'now') - {table_alias}.mtime, 0.0) / 7776000.0))"
+        return f"(0.55 * {popularity} + 0.25 * {obsidian_importance} + 0.20 * {recency})"
+
+    def _calculate_utility_score(self, *, click_count: int, obsidian_rank_score: float, mtime: float) -> float:
+        """
+        SQL版と同じ利用価値スコアを、正規表現検索などPython側の並び替え用に計算する。
+        """
+        popularity = click_count / (click_count + 10.0)
+        obsidian_importance = min(max(obsidian_rank_score / 1000.0, 0.0), 1.0)
+        age_seconds = max(time_module.time() - mtime, 0.0)
+        recency = 1.0 / (1.0 + age_seconds / (90 * 24 * 60 * 60))
+        return 0.55 * popularity + 0.25 * obsidian_importance + 0.20 * recency
 
     def _build_search_result_item(
         self,
@@ -1758,6 +1910,12 @@ class SearchService:
             created_at=datetime.fromtimestamp(float(row["created_at"]), tz=UTC),
             mtime=datetime.fromtimestamp(float(row["mtime"]), tz=UTC),
             click_count=int(row["click_count"] or 0) + int(row["obsidian_click_count"] or 0),
+            has_obsidian_top_tag=bool(row["has_obsidian_top_tag"]),
+            filename_match_priority=int(row["filename_match_level"] or 0) >= 2,
+            filename_match_level=int(row["filename_match_level"] or 0),
+            relevance_bucket=int(row["relevance_bucket"] or 0),
+            utility_score=float(row["utility_score"] or 0.0),
+            query_click_score=float(row["query_click_score"] or 0.0),
             snippet=(
                 self._resolve_snippet(
                     snippet=row["snippet"],
@@ -1782,6 +1940,21 @@ class SearchService:
         """
         Python 側で構築した検索結果を UI 指定の並び順で安定ソートする。
         """
+        if sort_by == "default":
+            return sorted(
+                items,
+                key=lambda item: (
+                    item.filename_match_level,
+                    item.has_obsidian_top_tag,
+                    item.query_click_score,
+                    item.relevance_bucket,
+                    item.utility_score,
+                    item.mtime.timestamp(),
+                    item.file_id,
+                ),
+                reverse=True,
+            )
+
         reverse = sort_order == "desc"
 
         def key(item: SearchResultItem) -> tuple[float, int]:

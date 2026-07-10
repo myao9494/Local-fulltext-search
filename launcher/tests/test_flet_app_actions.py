@@ -98,7 +98,7 @@ class StubClient:
         self.opened_gantt_task_ids: list[int] = []
         self.created_tasks: list[dict[str, Any]] = []
 
-    def record_click(self, file_id: int) -> int:
+    def record_click(self, file_id: int, query: str = "") -> int:
         self.clicked_file_ids.append(file_id)
         return 1
 

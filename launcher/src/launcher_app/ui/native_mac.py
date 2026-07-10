@@ -962,7 +962,8 @@ class LauncherDelegate(AppKit.NSObject):
                 return
             webbrowser.open(primary_web_url_for_item(item, self.web_base_url))
             if item.result_kind == "file" and item.source_type != "gantt" and item.file_id > 0:
-                self.client.record_click(item.file_id)
+                query = str(self.search_field.stringValue()).strip() if self.search_field is not None else ""
+                self.client.record_click(item.file_id, query)
             self.hide_panel()
         except Exception as error:
             self.status_label.setStringValue_(f"ファイルを開けませんでした: {error}")

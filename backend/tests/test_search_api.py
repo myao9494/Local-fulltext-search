@@ -38,8 +38,9 @@ class StubSearchService:
 
         return Response()
 
-    def record_click(self, file_id: int) -> int:
+    def record_click(self, file_id: int, query: str = "") -> int:
         self.last_clicked_file_id = file_id
+        self.last_clicked_query = query
         return 7
 
 
@@ -261,4 +262,3 @@ def test_search_with_body_accepts_none_and_large_index_depth() -> None:
     )
     assert service.last_search_params is not None
     assert service.last_search_params.index_depth == 99999
-

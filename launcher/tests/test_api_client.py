@@ -83,7 +83,7 @@ def test_search_posts_mac_defaults(monkeypatch) -> None:
         "skip_refresh": False,
         "refresh_window_minutes": 60,
         "search_target": "all",
-        "sort_by": "click_count",
+        "sort_by": "default",
         "sort_order": "desc",
         "limit": 8,
         "offset": 0,
@@ -149,7 +149,7 @@ def test_search_posts_gantt_include_for_all_platforms(monkeypatch) -> None:
         "source_type": "local",
         "refresh_window_minutes": 0,
         "search_target": "all",
-        "sort_by": "click_count",
+        "sort_by": "default",
         "sort_order": "desc",
         "limit": 8,
         "offset": 0,
@@ -169,7 +169,7 @@ def test_default_base_url_uses_project_backend_port() -> None:
 
 def test_record_click_posts_file_id() -> None:
     """
-    結果オープン時のアクセス数更新は file_id だけを POST する。
+    結果オープン時のアクセス数更新は file_id と検索語を POST する。
     """
     captured: dict[str, object] = {}
 
@@ -182,7 +182,7 @@ def test_record_click_posts_file_id() -> None:
 
     assert client.record_click(4) == 12
     assert captured["url"] == "http://127.0.0.1:8000/api/search/click"
-    assert captured["body"] == {"file_id": 4}
+    assert captured["body"] == {"file_id": 4, "query": ""}
 
 
 def test_create_gantt_task_posts_to_gantt_api() -> None:

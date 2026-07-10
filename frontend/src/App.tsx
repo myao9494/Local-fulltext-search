@@ -115,7 +115,7 @@ type SearchExecutionParams = {
   search_target?: SearchTarget;
   index_types?: string;
   date_field?: "created" | "modified";
-  sort_by?: "created" | "modified" | "click_count";
+  sort_by?: "default" | "created" | "modified" | "click_count";
   sort_order?: "asc" | "desc";
   created_from?: string;
   created_to?: string;
@@ -263,10 +263,26 @@ function sortSearchResults(
     sortBy,
     sortOrder,
   }: {
-    sortBy: "created" | "modified" | "click_count",
+    sortBy: "default" | "created" | "modified" | "click_count",
     sortOrder: "asc" | "desc",
   },
 ): SearchResult[] {
+  if (sortBy === "default") {
+    return [...items].sort((left, right) => {
+      const filenameDifference = (right.filename_match_level ?? 0) - (left.filename_match_level ?? 0);
+      if (filenameDifference !== 0) return filenameDifference;
+      const topDifference = Number(Boolean(right.has_obsidian_top_tag)) - Number(Boolean(left.has_obsidian_top_tag));
+      if (topDifference !== 0) return topDifference;
+      const queryClickDifference = (right.query_click_score ?? 0) - (left.query_click_score ?? 0);
+      if (queryClickDifference !== 0) return queryClickDifference;
+      const relevanceDifference = (right.relevance_bucket ?? 0) - (left.relevance_bucket ?? 0);
+      if (relevanceDifference !== 0) return relevanceDifference;
+      const utilityDifference = (right.utility_score ?? 0) - (left.utility_score ?? 0);
+      if (utilityDifference !== 0) return utilityDifference;
+      const modifiedDifference = new Date(right.mtime).getTime() - new Date(left.mtime).getTime();
+      return modifiedDifference !== 0 ? modifiedDifference : right.file_id - left.file_id;
+    });
+  }
   const direction = sortOrder === "asc" ? 1 : -1;
 
   return [...items].sort((left, right) => {
@@ -360,7 +376,7 @@ function App() {
   });
   const [searchTarget, setSearchTarget] = useState<SearchTarget>("all");
   const [dateField, setDateField] = useState<"created" | "modified">("modified");
-  const [sortBy, setSortBy] = useState<"created" | "modified" | "click_count">("click_count");
+  const [sortBy, setSortBy] = useState<"default" | "created" | "modified" | "click_count">("default");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
@@ -1046,7 +1062,7 @@ function App() {
    * 検索結果を開いた回数を記録し、次回以降のアクセス数順ソートへ反映する。
    */
   function handleResultOpen(fileId: number): void {
-    void recordSearchClick(fileId)
+    void recordSearchClick(fileId, query)
       .then((response) => {
         setResults((current) =>
           current.map((item) =>

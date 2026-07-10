@@ -201,7 +201,7 @@ export async function fetchSearchPage(params: {
   index_types?: string;
   types?: string;
   date_field?: "created" | "modified";
-  sort_by?: "created" | "modified" | "click_count";
+  sort_by?: "default" | "created" | "modified" | "click_count";
   sort_order?: "asc" | "desc";
   created_from?: string;
   created_to?: string;
@@ -234,7 +234,7 @@ export async function search(params: {
   index_types?: string;
   types?: string;
   date_field?: "created" | "modified";
-  sort_by?: "created" | "modified" | "click_count";
+  sort_by?: "default" | "created" | "modified" | "click_count";
   sort_order?: "asc" | "desc";
   created_from?: string;
   created_to?: string;
@@ -247,11 +247,11 @@ export async function search(params: {
   return response;
 }
 
-export async function recordSearchClick(fileId: number): Promise<{ file_id: number; click_count: number }> {
+export async function recordSearchClick(fileId: number, query = ""): Promise<{ file_id: number; click_count: number }> {
   return request<{ file_id: number; click_count: number }>("/api/search/click", {
     method: "POST",
     keepalive: true,
-    body: JSON.stringify({ file_id: fileId }),
+    body: JSON.stringify({ file_id: fileId, query }),
   });
 }
 

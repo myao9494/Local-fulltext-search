@@ -65,7 +65,7 @@ class LauncherApiClient:
                 "source_type": "local",
                 "refresh_window_minutes": 0,
                 "search_target": "all",
-                "sort_by": "click_count",
+                "sort_by": "default",
                 "sort_order": "desc",
                 "limit": limit,
                 "offset": 0,
@@ -82,7 +82,7 @@ class LauncherApiClient:
                 "skip_refresh": False,        # 更新を許可
                 "refresh_window_minutes": 60,
                 "search_target": "all",
-                "sort_by": "click_count",
+                "sort_by": "default",
                 "sort_order": "desc",
                 "limit": limit,
                 "offset": 0,
@@ -107,11 +107,11 @@ class LauncherApiClient:
             items=[_parse_search_item(item) for item in response.get("items", [])],
         )
 
-    def record_click(self, file_id: int) -> int:
+    def record_click(self, file_id: int, query: str = "") -> int:
         """
         選択された結果のアクセス数をバックエンドへ記録する。
         """
-        response = self._request_json("/api/search/click", {"file_id": file_id})
+        response = self._request_json("/api/search/click", {"file_id": file_id, "query": query})
         return int(response.get("click_count", 0))
 
     def open_location(self, path: str) -> None:

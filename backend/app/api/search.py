@@ -35,7 +35,7 @@ def search(
     types: str | None = None,
     exclude_keywords: str | None = None,
     date_field: str = Query(default="created"),
-    sort_by: str = Query(default="click_count"),
+    sort_by: str = Query(default="default"),
     sort_order: str = Query(default="desc"),
     created_from: date | None = None,
     created_to: date | None = None,
@@ -93,7 +93,7 @@ def record_search_click(
     payload: SearchClickRequest,
     service: SearchService = Depends(get_search_service),
 ) -> SearchClickResponse:
-    return SearchClickResponse(file_id=payload.file_id, click_count=service.record_click(payload.file_id))
+    return SearchClickResponse(file_id=payload.file_id, click_count=service.record_click(payload.file_id, payload.query))
 
 
 @router.post("/gantt/tasks/{task_id}/open-input")

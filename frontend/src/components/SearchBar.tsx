@@ -13,7 +13,7 @@ type SearchBarProps = {
   includeGanttTasks: boolean;
   searchTarget: "all" | "body" | "filename" | "folder" | "filename_and_folder";
   dateField: "created" | "modified";
-  sortBy: "created" | "modified" | "click_count";
+  sortBy: "default" | "created" | "modified" | "click_count";
   sortOrder: "asc" | "desc";
   createdFrom: string;
   createdTo: string;
@@ -32,7 +32,7 @@ type SearchBarProps = {
   onIncludeGanttTasksChange: (value: boolean) => void;
   onSearchTargetChange: (value: "all" | "body" | "filename" | "folder" | "filename_and_folder") => void;
   onDateFieldChange: (value: "created" | "modified") => void;
-  onSortByChange: (value: "created" | "modified" | "click_count") => void;
+  onSortByChange: (value: "default" | "created" | "modified" | "click_count") => void;
   onSortOrderChange: (value: "asc" | "desc") => void;
   onCreatedFromChange: (value: string) => void;
   onCreatedToChange: (value: string) => void;
@@ -329,9 +329,10 @@ export function SearchBar({
               id="sort-by-select"
               className="small-input date-field-select"
               value={sortBy}
-              onChange={(event) => onSortByChange(event.target.value as "created" | "modified" | "click_count")}
+              onChange={(event) => onSortByChange(event.target.value as "default" | "created" | "modified" | "click_count")}
               aria-label="並び替え"
             >
+              <option value="default">default</option>
               <option value="modified">編集日順</option>
               <option value="created">作成日順</option>
               <option value="click_count">アクセス数順</option>
@@ -339,6 +340,7 @@ export function SearchBar({
             <select
               className="small-input date-field-select"
               value={sortOrder}
+              disabled={sortBy === "default"}
               onChange={(event) => onSortOrderChange(event.target.value as "asc" | "desc")}
               aria-label="並び順"
             >

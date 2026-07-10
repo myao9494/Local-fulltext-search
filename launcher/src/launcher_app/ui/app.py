@@ -799,7 +799,9 @@ class LauncherApp:
                 return
             webbrowser.open(open_url)
             if item.result_kind == "file" and item.source_type != "gantt" and item.file_id > 0:
-                self.client.record_click(item.file_id)
+                query_control = getattr(self, "query", None)
+                query = str(getattr(query_control, "value", "") or "").strip()
+                self.client.record_click(item.file_id, query)
             self._hide_window()
         except (OSError, LauncherApiError) as error:
             self.status.value = f"ファイルを開けませんでした: {error}"

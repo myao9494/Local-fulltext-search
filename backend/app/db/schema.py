@@ -1,5 +1,7 @@
 from sqlite3 import Connection
 
+from app.extractors.obsidian_properties import extract_obsidian_title_and_aliases, has_obsidian_top_tag
+
 
 SCHEMA_STATEMENTS: list[str] = [
     """
@@ -31,10 +33,23 @@ SCHEMA_STATEMENTS: list[str] = [
         click_count INTEGER NOT NULL DEFAULT 0,
         obsidian_click_count INTEGER NOT NULL DEFAULT 0,
         obsidian_rank_score REAL NOT NULL DEFAULT 0.0,
+        has_obsidian_top_tag INTEGER NOT NULL DEFAULT 0,
+        obsidian_title TEXT NOT NULL DEFAULT '',
+        obsidian_aliases TEXT NOT NULL DEFAULT '',
         size INTEGER NOT NULL,
         indexed_at TEXT NOT NULL,
         last_error TEXT,
         source_type TEXT NOT NULL DEFAULT 'local'
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS search_query_clicks (
+        normalized_query TEXT NOT NULL,
+        file_id INTEGER NOT NULL,
+        click_count INTEGER NOT NULL DEFAULT 0,
+        last_clicked_at TEXT NOT NULL,
+        PRIMARY KEY(normalized_query, file_id),
+        FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE
     );
     """,
     """
@@ -231,6 +246,18 @@ def _apply_non_destructive_migrations(connection: Connection) -> None:
         connection.execute("ALTER TABLE files ADD COLUMN obsidian_click_count INTEGER NOT NULL DEFAULT 0;")
     if "obsidian_rank_score" not in file_columns:
         connection.execute("ALTER TABLE files ADD COLUMN obsidian_rank_score REAL NOT NULL DEFAULT 0.0;")
+    if "has_obsidian_top_tag" not in file_columns:
+        connection.execute("ALTER TABLE files ADD COLUMN has_obsidian_top_tag INTEGER NOT NULL DEFAULT 0;")
+        _backfill_obsidian_top_tags(connection)
+    metadata_columns_added = False
+    if "obsidian_title" not in file_columns:
+        connection.execute("ALTER TABLE files ADD COLUMN obsidian_title TEXT NOT NULL DEFAULT '';")
+        metadata_columns_added = True
+    if "obsidian_aliases" not in file_columns:
+        connection.execute("ALTER TABLE files ADD COLUMN obsidian_aliases TEXT NOT NULL DEFAULT '';")
+        metadata_columns_added = True
+    if metadata_columns_added:
+        _backfill_obsidian_metadata(connection)
     if "source_type" not in file_columns:
         connection.execute("ALTER TABLE files ADD COLUMN source_type TEXT NOT NULL DEFAULT 'local';")
     _rebuild_files_name_fts(connection)
@@ -278,6 +305,9 @@ def _needs_schema_reset(connection: Connection) -> bool:
         "click_count",
         "obsidian_click_count",
         "obsidian_rank_score",
+        "has_obsidian_top_tag",
+        "obsidian_title",
+        "obsidian_aliases",
         "size",
         "indexed_at",
         "last_error",
@@ -317,9 +347,11 @@ def _needs_schema_reset(connection: Connection) -> bool:
     scheduler_logs_columns = _get_columns(connection, "scheduler_logs")
     scheduler_daily_runs_columns = _get_columns(connection, "scheduler_daily_runs")
     legacy_target_columns = expected_target_columns - {"source_type"}
-    legacy_file_columns = expected_file_columns - {"click_count", "obsidian_click_count", "obsidian_rank_score", "source_type"}
-    legacy_file_columns_with_clicks = expected_file_columns - {"obsidian_rank_score", "source_type"}
-    legacy_file_columns_without_rank = expected_file_columns - {"obsidian_rank_score"}
+    legacy_file_columns = expected_file_columns - {"click_count", "obsidian_click_count", "obsidian_rank_score", "has_obsidian_top_tag", "obsidian_title", "obsidian_aliases", "source_type"}
+    legacy_file_columns_with_clicks = expected_file_columns - {"obsidian_rank_score", "has_obsidian_top_tag", "obsidian_title", "obsidian_aliases", "source_type"}
+    legacy_file_columns_without_rank = expected_file_columns - {"obsidian_rank_score", "has_obsidian_top_tag", "obsidian_title", "obsidian_aliases"}
+    legacy_file_columns_without_top_tag = expected_file_columns - {"has_obsidian_top_tag", "obsidian_title", "obsidian_aliases"}
+    legacy_file_columns_without_metadata = expected_file_columns - {"obsidian_title", "obsidian_aliases"}
     return (
         (target_columns != expected_target_columns and target_columns != legacy_target_columns)
         or (
@@ -327,6 +359,8 @@ def _needs_schema_reset(connection: Connection) -> bool:
             and file_columns != legacy_file_columns
             and file_columns != legacy_file_columns_with_clicks
             and file_columns != legacy_file_columns_without_rank
+            and file_columns != legacy_file_columns_without_top_tag
+            and file_columns != legacy_file_columns_without_metadata
         )
         or index_run_columns != expected_index_run_columns
         or failed_file_columns != expected_failed_file_columns
@@ -347,6 +381,7 @@ def _drop_managed_schema_objects(connection: Connection) -> None:
     connection.execute("DROP TABLE IF EXISTS files_name_fts;")
     connection.execute("DROP TABLE IF EXISTS file_segments_fts;")
     connection.execute("DROP TABLE IF EXISTS file_segments;")
+    connection.execute("DROP TABLE IF EXISTS search_query_clicks;")
     connection.execute("DROP TABLE IF EXISTS files;")
     connection.execute("DROP TABLE IF EXISTS failed_files;")
     connection.execute("DROP TABLE IF EXISTS scheduler_logs;")
@@ -362,6 +397,45 @@ def _drop_managed_schema_objects(connection: Connection) -> None:
 def _get_columns(connection: Connection, table_name: str) -> set[str]:
     rows = connection.execute(f"PRAGMA table_info({table_name});").fetchall()
     return {str(row[1]) for row in rows}
+
+
+def _backfill_obsidian_top_tags(connection: Connection) -> None:
+    """
+    既存インデックスの Markdown 本文を走査し、top タグの順位フラグを移行時に補完する。
+    """
+    rows = connection.execute(
+        """
+        SELECT files.id, file_segments.content
+        FROM files
+        JOIN file_segments ON file_segments.file_id = files.id
+        WHERE files.file_ext = '.md' AND file_segments.segment_type = 'body'
+        """
+    )
+    updates = [(int(row["id"]),) for row in rows if has_obsidian_top_tag(str(row["content"]))]
+    if updates:
+        connection.executemany("UPDATE files SET has_obsidian_top_tag = 1 WHERE id = ?", updates)
+
+
+def _backfill_obsidian_metadata(connection: Connection) -> None:
+    """
+    既存Markdown本文からObsidianのtitle・aliasesを移行時に補完する。
+    """
+    rows = connection.execute(
+        """
+        SELECT files.id, file_segments.content
+        FROM files JOIN file_segments ON file_segments.file_id = files.id
+        WHERE files.file_ext = '.md' AND file_segments.segment_type = 'body'
+        """
+    )
+    updates = []
+    for row in rows:
+        title, aliases = extract_obsidian_title_and_aliases(str(row["content"]))
+        updates.append((title, "\n".join(aliases), int(row["id"])))
+    if updates:
+        connection.executemany(
+            "UPDATE files SET obsidian_title = ?, obsidian_aliases = ? WHERE id = ?",
+            updates,
+        )
 
 
 def _rebuild_files_name_fts(connection: Connection) -> None:

@@ -37,6 +37,194 @@ def test_search_handles_special_characters_without_fts_errors(tmp_path: Path) ->
     assert [item.file_name for item in result.items] == ["symbols.md"]
 
 
+def test_search_prioritizes_obsidian_markdown_with_top_tag(tmp_path: Path) -> None:
+    """
+    default 並び替えでは top タグ、アクセス数、更新日時の順に優先する。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "vault"
+    target.mkdir()
+    (target / "regular.md").write_text("---\ntags: [work]\n---\nalpha", encoding="utf-8")
+    (target / "priority.md").write_text("---\ntag:\n  - top\n  - work\n---\nalpha", encoding="utf-8")
+
+    result = service.search(
+        SearchQueryParams(q="alpha", full_path=str(target), index_depth=5, refresh_window_minutes=60, sort_by="default")
+    )
+
+    assert [item.file_name for item in result.items] == ["priority.md", "regular.md"]
+
+
+def test_click_count_sort_does_not_force_top_tag_to_the_front(tmp_path: Path) -> None:
+    """
+    top タグの優先は default 限定とし、アクセス数順では純粋なアクセス数を優先する。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+    timestamp = datetime(2026, 7, 1, tzinfo=UTC)
+    _insert_indexed_markdown(
+        connection=connection, file_name="top.md", full_path=str(tmp_path / "top.md"),
+        created_at=timestamp, mtime=timestamp, body="alpha", click_count=1,
+        has_obsidian_top_tag=True,
+    )
+    _insert_indexed_markdown(
+        connection=connection, file_name="popular.md", full_path=str(tmp_path / "popular.md"),
+        created_at=timestamp, mtime=timestamp, body="alpha", click_count=10,
+    )
+
+    result = service.search(SearchQueryParams(q="alpha", search_all_enabled=True, sort_by="click_count"))
+
+    assert [item.file_name for item in result.items] == ["popular.md", "top.md"]
+
+
+def test_default_sort_uses_utility_score_then_newest_mtime(tmp_path: Path) -> None:
+    """
+    関連度が同じ結果同士は、飽和アクセス数と更新鮮度を合成した利用価値で並べる。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+    old = datetime(2026, 6, 1, tzinfo=UTC)
+    new = datetime(2026, 7, 1, tzinfo=UTC)
+    _insert_indexed_markdown(
+        connection=connection, file_name="new.md", full_path=str(tmp_path / "new.md"),
+        created_at=new, mtime=new, body="alpha", click_count=5,
+    )
+    _insert_indexed_markdown(
+        connection=connection, file_name="earlier.md", full_path=str(tmp_path / "earlier.md"),
+        created_at=old, mtime=old, body="alpha", click_count=5,
+    )
+    _insert_indexed_markdown(
+        connection=connection, file_name="popular.md", full_path=str(tmp_path / "popular.md"),
+        created_at=old, mtime=old, body="alpha", click_count=6,
+    )
+
+    result = service.search(SearchQueryParams(q="alpha", search_all_enabled=True, sort_by="default"))
+
+    assert result.total == 3
+    assert [item.file_name for item in result.items] == ["new.md", "popular.md", "earlier.md"]
+
+
+def test_default_sort_prioritizes_full_filename_match_before_top_tag(tmp_path: Path) -> None:
+    """
+    default では全検索語にファイル名一致する結果を、本文一致だけの top ノートより優先する。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+    timestamp = datetime(2026, 7, 1, tzinfo=UTC)
+    _insert_indexed_markdown(
+        connection=connection, file_name="priority.md", full_path=str(tmp_path / "priority.md"),
+        created_at=timestamp, mtime=timestamp, body="alpha beta", click_count=100,
+        has_obsidian_top_tag=True,
+    )
+    _insert_indexed_markdown(
+        connection=connection, file_name="alpha-beta.md", full_path=str(tmp_path / "alpha-beta.md"),
+        created_at=timestamp, mtime=timestamp, body="unrelated", click_count=0,
+    )
+
+    result = service.search(SearchQueryParams(q="alpha beta", search_all_enabled=True, sort_by="default"))
+
+    assert [item.file_name for item in result.items] == ["alpha-beta.md", "priority.md"]
+
+
+def test_default_sort_uses_filename_match_levels(tmp_path: Path) -> None:
+    """
+    default のファイル名順位は、完全一致・連続一致・全語一致・一部一致の順にする。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+    timestamp = datetime(2026, 7, 1, tzinfo=UTC)
+    cases = [
+        ("alpha beta.md", "unrelated"),
+        ("memo-alpha beta-2026.md", "unrelated"),
+        ("alpha-notes-beta.md", "unrelated"),
+        ("alpha-only.md", "beta appears in body"),
+    ]
+    for file_name, body in cases:
+        _insert_indexed_markdown(
+            connection=connection, file_name=file_name, full_path=str(tmp_path / file_name),
+            created_at=timestamp, mtime=timestamp, body=body, click_count=0,
+        )
+
+    result = service.search(SearchQueryParams(q="alpha beta", search_all_enabled=True, sort_by="default"))
+
+    assert [item.file_name for item in result.items] == [file_name for file_name, _ in cases]
+    assert [item.filename_match_level for item in result.items] == [8, 7, 6, 2]
+
+
+def test_default_sort_searches_obsidian_title_and_aliases_as_names(tmp_path: Path) -> None:
+    """
+    Obsidianのtitle・aliases一致は本文一致より上位の名前一致として扱う。
+    """
+    service = SearchService(connection=_create_connection(tmp_path))
+    target = tmp_path / "vault"
+    target.mkdir()
+    (target / "title-note.md").write_text("---\ntitle: Monthly Report\n---\nunrelated", encoding="utf-8")
+    (target / "alias-note.md").write_text("---\naliases: [月報, 売上月報]\n---\nunrelated", encoding="utf-8")
+    (target / "body-note.md").write_text("Monthly Report 月報", encoding="utf-8")
+
+    title_result = service.search(SearchQueryParams(q="Monthly Report", full_path=str(target), index_depth=5))
+    alias_result = service.search(SearchQueryParams(q="月報", full_path=str(target), index_depth=5))
+
+    assert title_result.items[0].file_name == "title-note.md"
+    assert alias_result.items[0].file_name == "alias-note.md"
+
+
+def test_default_sort_learns_query_specific_clicks(tmp_path: Path) -> None:
+    """
+    同じ検索語から選ばれたファイルは、次回の同一検索で同条件の結果より上にする。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+    timestamp = datetime(2026, 7, 1, tzinfo=UTC)
+    first_id = _insert_indexed_markdown(
+        connection=connection, file_name="first.md", full_path=str(tmp_path / "first.md"),
+        created_at=timestamp, mtime=timestamp, body="alpha", click_count=0,
+    )
+    second_id = _insert_indexed_markdown(
+        connection=connection, file_name="second.md", full_path=str(tmp_path / "second.md"),
+        created_at=timestamp, mtime=timestamp, body="alpha", click_count=0,
+    )
+    service.record_click(first_id, " ＡＬＰＨＡ ")
+
+    result = service.search(SearchQueryParams(q="alpha", search_all_enabled=True, sort_by="default"))
+
+    assert result.items[0].file_id == first_id
+    assert result.items[0].query_click_score > result.items[1].query_click_score
+    stored = connection.execute(
+        "SELECT normalized_query, file_id FROM search_query_clicks"
+    ).fetchone()
+    assert tuple(stored) == ("alpha", first_id)
+
+
+def test_default_sort_relevance_bucket_precedes_utility_score(tmp_path: Path) -> None:
+    """
+    本文の関連度が明確に高い文書は、アクセス数だけが多い低関連文書より上にする。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    service.index_service.ensure_fresh_target = lambda **_: None
+    timestamp = datetime(2026, 7, 1, tzinfo=UTC)
+    _insert_indexed_markdown(
+        connection=connection, file_name="focused.md", full_path=str(tmp_path / "focused.md"),
+        created_at=timestamp, mtime=timestamp, body="alpha beta", click_count=0,
+    )
+    _insert_indexed_markdown(
+        connection=connection, file_name="noisy.md", full_path=str(tmp_path / "noisy.md"),
+        created_at=timestamp, mtime=timestamp,
+        body=f"alpha {'unrelated ' * 200} beta", click_count=1000,
+    )
+
+    result = service.search(SearchQueryParams(q="alpha beta", search_all_enabled=True, sort_by="default"))
+
+    assert [item.file_name for item in result.items] == ["focused.md", "noisy.md"]
+    assert result.items[0].relevance_bucket > result.items[1].relevance_bucket
+    assert result.items[0].utility_score < result.items[1].utility_score
+
+
 def test_search_defaults_to_local_source_and_web_is_opt_in(tmp_path: Path) -> None:
     """
     Web ページのインデックスは、source_type=web を明示した検索だけに出る。
@@ -2472,6 +2660,7 @@ def _insert_indexed_markdown(
     click_count: int,
     obsidian_click_count: int = 0,
     obsidian_rank_score: float = 0.0,
+    has_obsidian_top_tag: bool = False,
     source_type: str = "local",
 ) -> int:
     """
@@ -2487,8 +2676,8 @@ def _insert_indexed_markdown(
         INSERT INTO files(
             full_path, normalized_path, file_name, file_ext,
             created_at, mtime, size, indexed_at, last_error,
-            click_count, obsidian_click_count, obsidian_rank_score, source_type
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+            click_count, obsidian_click_count, obsidian_rank_score, has_obsidian_top_tag, source_type
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
         """,
         (
             full_path,
@@ -2502,6 +2691,7 @@ def _insert_indexed_markdown(
             click_count,
             obsidian_click_count,
             obsidian_rank_score,
+            int(has_obsidian_top_tag),
             source_type,
         ),
     )
