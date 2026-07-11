@@ -167,18 +167,24 @@ class SchedulerService:
         self.connection.commit()
 
         backend_dir = Path(__file__).resolve().parents[2]
-        if process_factory is None and platform.system() == "Windows":
-            process = subprocess.Popen(
-                [sys.executable, "-m", "app.services.scheduler_worker", run_token],
-                cwd=str(backend_dir),
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-        else:
-            factory = process_factory or subprocess.Popen
-            process = factory(
-                [sys.executable, "-m", "app.services.scheduler_worker", run_token],
-                cwd=str(backend_dir),
-            )
+        try:
+            if process_factory is None and platform.system() == "Windows":
+                process = subprocess.Popen(
+                    [sys.executable, "-m", "app.services.scheduler_worker", run_token],
+                    cwd=str(backend_dir),
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+            else:
+                factory = process_factory or subprocess.Popen
+                process = factory(
+                    [sys.executable, "-m", "app.services.scheduler_worker", run_token],
+                    cwd=str(backend_dir),
+                )
+        except (OSError, subprocess.SubprocessError) as error:
+            message = f"スケジューラーワーカーを起動できませんでした: {error}"
+            self.finish_run(last_error=message)
+            self.append_log(level="error", message=message)
+            return False
         self.connection.execute(
             """
             UPDATE scheduler_runtime

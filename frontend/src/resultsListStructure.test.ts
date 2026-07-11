@@ -61,6 +61,7 @@ test("検索結果には親フォルダを開くリンクを含める", () => {
   assert.match(source, /getFolderPath\(item\.full_path\)/);
   assert.match(source, /getWebAppBaseUrl\(\)/);
   assert.match(source, /const fullPathUrl = `\$\{webAppBaseUrl\}\/api\/fullpath\?path=\$\{encodeURIComponent\(item\.full_path\)\}`/);
+  assert.match(source, /replace\(\/\\\/\+\$\/, ""\)/);
   assert.match(source, /const folderUrl = `\$\{webAppBaseUrl\}\/\?path=\$\{encodeURIComponent\(item\.result_kind === "folder" \? item\.full_path : folderPath\)\}`/);
   assert.match(source, /result-folder-link/);
   assert.match(source, /フォルダを開く/);

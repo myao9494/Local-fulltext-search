@@ -14,7 +14,7 @@ def test_default_config_values() -> None:
     config = LauncherConfig()
 
     assert config.api_base_url == "http://127.0.0.1:8079"
-    assert config.web_base_url == "http://localhost:8001"
+    assert config.web_base_url == "http://127.0.0.1:8001"
     assert config.gantt_api_base_url == "http://localhost:8000/api"
     assert config.gantt_parent == 0
     assert config.search_limit == 8

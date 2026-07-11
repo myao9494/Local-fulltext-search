@@ -109,7 +109,7 @@ type SearchExecutionParams = {
   search_all_enabled?: boolean;
   skip_refresh?: boolean;
   source_type?: SearchSource;
-  index_depth: number;
+  index_depth?: number;
   refresh_window_minutes: number;
   regex_enabled?: boolean;
   search_target?: SearchTarget;

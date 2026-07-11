@@ -18,12 +18,14 @@ from app.api.files import router as files_router
 from app.api.folders import router as folders_router
 from app.api.index import router as index_router
 from app.api.launcher import router as launcher_router
+from app.api.open_hub import router as open_hub_router
 from app.api.search import router as search_router
 from app.config import BACKEND_DIR, settings
 from app.db.connection import get_connection
 from app.db.schema import initialize_schema
 from app.services.scheduler_service import SchedulerMonitor
 from app.services.launcher_service import LauncherManager
+from app.services.open_hub_service import OpenHubManager
 
 
 def configure_logging() -> QueueListener:
@@ -58,6 +60,7 @@ async def lifespan(app: FastAPI):
     log_listener = configure_logging()
     scheduler_monitor = None
     launcher_manager = LauncherManager()
+    open_hub_manager = OpenHubManager()
     try:
         startup_connection = get_connection()
         try:
@@ -68,11 +71,14 @@ async def lifespan(app: FastAPI):
         scheduler_monitor.start()
         app.state.scheduler_monitor = scheduler_monitor
         app.state.launcher_manager = launcher_manager
+        app.state.open_hub_manager = open_hub_manager
         app.state.log_listener = log_listener
+        open_hub_manager.autostart_if_enabled()
         launcher_manager.autostart_if_enabled()
         yield
     finally:
         launcher_manager.stop()
+        open_hub_manager.stop()
         if scheduler_monitor is not None:
             scheduler_monitor.stop()
         log_listener.stop()
@@ -92,6 +98,7 @@ def create_app() -> FastAPI:
     app.include_router(folders_router)
     app.include_router(index_router)
     app.include_router(launcher_router)
+    app.include_router(open_hub_router)
     app.include_router(search_router)
 
     @app.get("/api/health")

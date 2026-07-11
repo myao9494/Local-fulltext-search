@@ -1028,7 +1028,7 @@ class LauncherDelegate(AppKit.NSObject):
         """
         GUIへのリンクを既定ブラウザで開く。
         """
-        webbrowser.open("http://127.0.0.1:8079/")
+        webbrowser.open(f"{self.config.web_base_url.rstrip('/')}/")
         self.hide_panel()
 
 

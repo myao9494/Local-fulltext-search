@@ -63,6 +63,25 @@ def test_try_start_due_schedule_launches_worker_process_once(tmp_path: Path) -> 
     assert captured["command"][2] == "app.services.scheduler_worker"
 
 
+def test_try_start_due_schedule_records_worker_spawn_failure(tmp_path: Path) -> None:
+    """
+    子プロセス生成に失敗した場合はlaunchingに固着せず、失敗状態で自動再試行を止める。
+    """
+    connection = _create_connection(tmp_path)
+    service = SchedulerService(connection)
+    service.schedule_indexing(paths=[str(tmp_path)], start_at=datetime.now(UTC) - timedelta(seconds=1))
+
+    def failing_popen(command, cwd):
+        raise OSError("worker unavailable")
+
+    assert service.try_start_due_schedule(process_factory=failing_popen) is False
+    settings = service.get_scheduler_settings()
+    assert settings.status == "failed"
+    assert settings.is_enabled is False
+    assert settings.last_error is not None
+    assert "worker unavailable" in settings.last_error
+
+
 def test_run_scheduled_indexing_indexes_each_folder_and_writes_completion_logs(tmp_path: Path, monkeypatch) -> None:
     """
     子プロセス実行では対象フォルダを順次インデックスし、完了ログをフォルダ単位で残す。

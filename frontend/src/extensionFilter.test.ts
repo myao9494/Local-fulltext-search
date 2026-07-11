@@ -11,6 +11,8 @@ test("拡張子フィルターは複合拡張子を完全一致で扱う", () =>
   const items = [
     {
       file_id: 1,
+      result_kind: "file" as const,
+      source_type: "local" as const,
       target_path: "/tmp/docs",
       file_name: "memo.md",
       full_path: "/tmp/docs/memo.md",
@@ -22,6 +24,8 @@ test("拡張子フィルターは複合拡張子を完全一致で扱う", () =>
     },
     {
       file_id: 2,
+      result_kind: "file" as const,
+      source_type: "local" as const,
       target_path: "/tmp/docs",
       file_name: "board.excalidraw.md",
       full_path: "/tmp/docs/board.excalidraw.md",

@@ -151,8 +151,9 @@ cd /path/to/Local-fulltext-search
 
 - Backend bind: `0.0.0.0:8079`
 - Frontend build: `frontend/dist` を生成
-- App URL: `http://127.0.0.1:8079/` または `http://<host>:8079/`
-- 起動前に `8079` を使用中なら停止してから起動
+- Web/Open URL: `http://127.0.0.1:8001/`
+- Search/API URL: `http://127.0.0.1:8079/`
+- 起動前に `8079` と `8001` を使用中なら停止してから起動
 
 この方法は開発用です。  
 `start_dev.sh` は `npm install` / `npm run build` を使うため、Node.js / npm が必要です。ランチャー自動起動に必要な Python 依存も `backend/.venv` にインストールします。
@@ -163,10 +164,7 @@ cd /path/to/Local-fulltext-search
 BACKEND_HOST=0.0.0.0 BACKEND_PORT=8079 ./start_dev.sh
 ```
 
-同一オリジン配信のため、フロントエンドはバックエンドと同じ URL から配布されます。  
-別端末で動かす場合は、その端末から到達できる `BACKEND_HOST` または実ホスト名 / IP でアクセスします。
-
-注意: 現行フロントエンドの検索結果リンクは、ファイル結果を `http://localhost:8001/api/fullpath?path=...`、フォルダ結果を `http://localhost:8001/?path=...` として組み立てます。ランチャーも未指定時の `LAUNCHER_WEB_BASE_URL` は `http://localhost:8001` です。
+Web UIと検索結果を開く入口は8001のOpenハブ、検索・設定・click・保存場所表示は8079のSearch/APIが担当します。OpenハブはWeb UIの相対API要求を内部で8079へ中継します。ランチャーは検索時に`LAUNCHER_API_BASE_URL`、primary open時に`LAUNCHER_WEB_BASE_URL`を使います。既定値はDNSを使わない`127.0.0.1`です。詳細は[`docs/open_hub.md`](docs/open_hub.md)を参照してください。
 
 ## 配布運用
 

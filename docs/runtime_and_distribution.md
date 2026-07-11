@@ -45,6 +45,7 @@ Node.js / npm は、フロントエンドを再ビルドするときだけ必要
 - `frontend/node_modules` がなければ `npm install` する
 - `frontend/dist/` を再ビルドする
 - バックエンドを `0.0.0.0:8079` で起動する
+- Open/UIハブを `127.0.0.1:8001` で子プロセス起動する
 
 ### 2. `python run.py`
 
@@ -64,8 +65,10 @@ Node.js / npm は、フロントエンドを再ビルドするときだけ必要
 
 - `frontend/dist/` が存在すれば FastAPI からそのまま配信する
 - 既定では `127.0.0.1:8079` で起動する
+- 8001のOpen/UIハブを別プロセスで自動起動し、Web UIとprimary openの入口にする
 - 必要なら `SEARCH_APP_HOST` と `SEARCH_APP_PORT` で上書きできる
-- `backend/run.py` は既定で `SEARCH_APP_LAUNCHER_AUTOSTART=1` を設定し、ランチャーを子プロセスとして起動する
+- `backend/run.py` は既定で `SEARCH_APP_LAUNCHER_AUTOSTART=1` を設定し、ランチャーを子プロセスとして起動する。Windowsでは発行済みWPF通常版、WPF single-file版、Python/Flet版の順に選ぶ
+- WPF版EXEを標準の `launcher/windows/publish/` 以外へ置く場合は、`SEARCH_APP_WPF_LAUNCHER_PATH` に絶対パスを指定する
 
 ## 配布先での手順
 
@@ -86,11 +89,14 @@ cd backend
 
 既定のアクセス先:
 
-- `http://127.0.0.1:8079/`
+- Web/Open: `http://127.0.0.1:8001/`
+- Search/API: `http://127.0.0.1:8079/`
 
-注意: 現行コードでは、Webフロントの検索結果リンクは `http://localhost:8001` を直接組み立て、ランチャーの `LAUNCHER_WEB_BASE_URL` 既定値も `http://localhost:8001` です。配布先で 8079 だけを使う場合は、ランチャー側は起動環境で `LAUNCHER_WEB_BASE_URL` を上書きし、フロントエンド側はリンク生成を合わせて再ビルドする必要があります。
+ランチャーは`LAUNCHER_API_BASE_URL=http://127.0.0.1:8079`で検索し、`LAUNCHER_WEB_BASE_URL=http://127.0.0.1:8001`で結果を開く。DNS無し環境と別端末の固定IP例、Open契約、障害切り分けは[`open_hub.md`](open_hub.md)を参照する。
 
 ## Windows ランチャーの完全オフライン起動
+
+発行済みWPF版がある場合、Flet Viewとランチャー用Python依存は不要である。`start_windows.bat` はバックエンドへランチャー起動を委ねるため、Web画面/APIからWPFプロセスの状態確認・停止・再起動ができる。WPF版がない場合だけ、以下のFlet View準備が必要になる。
 
 Windows の Flet ランチャーは、画面表示用に Flet View という実行ファイル一式を必要とします。Flet は通常、このファイルを初回起動時にネットワークから取得します。完全オフライン環境では取得できないため、配布前に次のどちらかをリポジトリへ入れてください。
 
@@ -113,7 +119,7 @@ python run.py
 
 外部アプリから特定フォルダと検索語を渡して開く場合:
 
-- `http://127.0.0.1:8079/?q=見積&full_path=%2FUsers%2Fmine%2FDocuments&index_depth=2`
+- `http://127.0.0.1:8001/?q=見積&full_path=%2FUsers%2Fmine%2FDocuments&index_depth=2`
 - `q` と `full_path` の両方があると初回表示時に自動検索する
 - `search_all=1` を付けると、`full_path` が空でも初回に全 DB 検索を実行できる
 - `index_depth` を省略した場合は `1`
@@ -141,8 +147,8 @@ $env:SEARCH_APP_PORT="8079"
 
 `backend/run.py` の既定値:
 
-- Host: `127.0.0.1`
-- Port: `8079`
+- Search/API: `127.0.0.1:8079`
+- Open/UIハブ: `127.0.0.1:8001`
 - DB 保存先: 起動ディレクトリに依存せず `backend/data/search.db`
 
 ## 保存されるファイル

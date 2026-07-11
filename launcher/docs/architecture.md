@@ -29,8 +29,9 @@ graph LR
         Log[launcher.log]
     end
 
-    subgraph "Backend (Existing)"
-        API[FastAPI / Search Endpoint]
+    subgraph "Local Services"
+        HUB[Open/UI Hub :8001]
+        API[Search/API :8079]
         DB[(SQLite / FTS5)]
     end
 
@@ -40,7 +41,9 @@ graph LR
     UI -->|Search Query| Client
     Client -->|HTTP/JSON| API
     API --> DB
-    UI -->|Open Web-compatible URL| Browser[Default Browser / LAUNCHER_WEB_BASE_URL]
+    UI -->|Primary Open URL| Browser[Default Browser]
+    Browser -->|file / folder contract| HUB
+    HUB -->|Relative API proxy| API
     UI -->|Open Location| API
     LM -->|Spawn / Stop / Restart| UI
     LM -->|Tail Logs| Log
@@ -64,7 +67,9 @@ macOS では Flet の最小化・復帰が Spaces と相性が悪いため、PyO
 - アクセス数更新: `POST /api/search/click`
 - 保存場所表示: `POST /api/files/open-location`
 - ランチャー管理: `GET /api/launcher/status`, `POST /api/launcher/start`, `POST /api/launcher/stop`, `POST /api/launcher/restart`
-- 検索結果を開く: `LAUNCHER_WEB_BASE_URL` を基準に、ファイルは `/api/fullpath?path=...`、フォルダは `/?path=...` を既定ブラウザで開く。既定値は `http://localhost:8001`。
+- 検索結果を開く: `LAUNCHER_WEB_BASE_URL`（Open/UIハブ、既定`http://127.0.0.1:8001`）を基準に、ファイルは`/api/fullpath?path=...`、フォルダは`/?path=...`を既定ブラウザで開く。検索・click・保存場所表示に使う8079とは責務を分離する。
+- Windowsではバックエンドの `LauncherManager` がWPF通常版、WPF single-file版、Python/Flet版の順に選択して子プロセスとして管理する。WPF版はWin32低レベルキーボードフックでShiftの2回押下を検出し、検索UIのHWNDだけを表示ごとに再生成する。
+- WPF版はmacOSネイティブ版と同じganttメモ・gantt検索・パスコピー・保存場所・フォルダ・ganttリンク・GUI導線を持つ。OS別性能仕様により、WPF版のgantt未選択検索は `/api/search/indexed` を使う。
 
 検索のプラットフォーム別挙動は次の通りです。
 

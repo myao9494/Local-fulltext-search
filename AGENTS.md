@@ -62,8 +62,8 @@
 ## デスクトップランチャー (Flet / PyObjC)
 - **フォルダ**: `launcher/` にソースコードとドキュメントを分離して管理。
 - **UI**: macOS では PyObjC / Cocoa `NSPanel`。その他 OS では Flet をフォールバック使用。
-- **ホットキー**: `Command + Option` (Mac) / `Windows + Alt` (Win) によるグローバル表示切り替え。
-- **設定**: `LAUNCHER_API_BASE_URL`（API接続先、既定 `http://127.0.0.1:8079`）、`LAUNCHER_WEB_BASE_URL`（検索結果クリック時のWebフロント URL、既定 `http://localhost:8001`）、`LAUNCHER_SEARCH_LIMIT`、`LAUNCHER_REQUEST_TIMEOUT` を環境変数で設定可能。
+- **ホットキー**: `Command + Option` (Mac) / `Windows + Alt` (Windows Flet) / `Windows + Alt + Space` (Windows WPF) によるグローバル表示切り替え。
+- **設定**: `LAUNCHER_API_BASE_URL`（Search/API接続先、既定 `http://127.0.0.1:8079`）、`LAUNCHER_WEB_BASE_URL`（Open/UIハブ、既定 `http://127.0.0.1:8001`）、`LAUNCHER_SEARCH_LIMIT`、`LAUNCHER_REQUEST_TIMEOUT` を環境変数で設定可能。
 - **挙動**: 
   - macOS 版はマウスカーソルのあるディスプレイに表示。Flet 版は Flet の `window.center()` で中央表示。
   - フォーカス喪失時（blur）に自動非表示。
@@ -85,6 +85,21 @@
     - 詳細は `docs/gantt_launcher_ui.md` 参照。
 
 - **詳細は `launcher/docs/spec.md` 参照。**
+
+## Open/UIハブ
+- **8001**: 検索結果を開く固定入口とWeb UIを提供するOpen/UIハブ。ローカルファイルは`/api/fullpath?path=...`でOS既定アプリを起動し、フォルダは`/?path=...`で検索UIを表示する。
+- **8079**: 検索・設定・click記録・`open-location`などのSearch/API面。primary openの入口にはしない。
+- ランチャーとWebクライアントは同じOpenハブbaseとpath規則を使い、DNS無し環境では`127.0.0.1`または固定IPだけを差し替える。
+- `backend/run.py`は8001ハブを別プロセスで自動起動する。詳細は`docs/open_hub.md`参照。
+
+### Windows WPF ランチャー
+- **フォルダ**: `launcher/windows/`。Windows x64 / .NET 8 WPFで、外部NuGet依存なし。
+- **配布**: self-containedフォルダ版を第一候補とし、self-contained single-file版も発行する。会社PC側のSDK・ランタイム・インストーラーは不要。
+- **ホットキー**: Windows標準APIによる `Shift` の2回押下（400ms以内、間に他キーを挟まない）で表示・非表示を切り替える。入力は遮断せず、`RegisterHotKey` は使用しない。
+- **仮想デスクトップ**: 非表示時に検索ウィンドウを破棄し、次回表示時にHWNDを再生成して、呼び出した仮想デスクトップへ表示する。
+- **フォールバック**: 発行済みEXEがない場合だけ既存Python/Flet版を起動する。
+- **macOS版準拠**: WPF版もgantt検索、Tabでのganttメモ画面、タスク名・メモ・送信・キャンセル、共有parent、パスコピー、保存場所、フォルダ、ganttリンク、GUIボタン、上下キー循環選択を提供する。Windowsの検索性能仕様に従い、gantt未選択時は既存インデックスのみを検索する。
+- **再表示**: 仮想デスクトップ移動のためUIウィンドウを再生成しても検索文字列は保持し、検索欄へ復元して全選択する。WPF初期版は半透明パネルを使用し、DWM/Acrylic背景ブラーは未実装。
 
 ## ウェブページ全文検索
 - **目的**: 指定したベースURL階層下の全ページをクロール・本文抽出し、ローカルファイルと同様に全文検索可能にする。

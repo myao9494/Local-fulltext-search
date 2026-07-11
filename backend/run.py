@@ -1,6 +1,7 @@
 import os
 
 os.environ.setdefault("SEARCH_APP_LAUNCHER_AUTOSTART", "1")
+os.environ.setdefault("SEARCH_APP_OPEN_HUB_AUTOSTART", "1")
 
 import uvicorn
 

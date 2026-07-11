@@ -15,7 +15,7 @@ class LauncherConfig:
     """
 
     api_base_url: str = "http://127.0.0.1:8079"
-    web_base_url: str = "http://localhost:8001"
+    web_base_url: str = "http://127.0.0.1:8001"
     gantt_api_base_url: str = "http://localhost:8000/api"
     gantt_parent: int = 0
     search_limit: int = 8

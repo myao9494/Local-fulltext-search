@@ -63,7 +63,7 @@ function fallbackCopyTextToClipboard(text: string): boolean {
  * 検索結果の遷移先は OS や起動元にかかわらず Web フロントの 8001 番を正とする。
  */
 function getWebAppBaseUrl(): string {
-  return "http://localhost:8001";
+  return ((import.meta as ImportMeta & { env?: { VITE_OPEN_HUB_BASE_URL?: string } }).env?.VITE_OPEN_HUB_BASE_URL ?? "http://127.0.0.1:8001").replace(/\/+$/, "");
 }
 
 /**

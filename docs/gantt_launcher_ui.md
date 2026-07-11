@@ -32,16 +32,16 @@
 
 | コントロール名 | 種別 | 仕様・挙動 |
 | :--- | :--- | :--- |
-| **名前入力欄** (`memo_title_field`) | テキスト入力欄 (Flet: `TextField` / Cocoa: `NSTextField`) | - プレースホルダー: `タスク名を入力...`<br>- メモ画面遷移時に自動フォーカスされる<br>- Return/Enterキー押下時は送信されず改行（または入力維持）される |
-| **メモ入力欄** (`memo_body_field`) | テキストエリア (Flet: `TextField` / Cocoa: `NSTextView`) | - マルチライン入力<br>- プレースホルダー: `メモを入力...`<br>- Return/Enterキー押下時は改行される（送信はされない） |
-| **送信ボタン** (`memo_submit_button`) | ボタン (Flet: `TextButton` / Cocoa: `NSButton`) | - クリックまたはフォーカス状態で `Enter` / `Return` キー押下時にタスクを作成して API 送信<br>- 送信成功時は入力値をクリアし、「タスク名」入力欄へフォーカスを戻してランチャーウィンドウを開いたままにする（連続してタスクを追加可能） |
-| **キャンセルボタン** (`memo_cancel_button`)| ボタン (Flet: `TextButton` / Cocoa: `NSButton`) | - クリックまたはフォーカス状態で `Enter` / `Return` キー押下時に検索画面へ戻る |
+| **名前入力欄** (`memo_title_field`) | テキスト入力欄 (WPF: `TextBox` / Flet: `TextField` / Cocoa: `NSTextField`) | - プレースホルダー: `タスク名を入力...`<br>- メモ画面遷移時に自動フォーカスされる<br>- Return/Enterキー押下時は送信されず改行（または入力維持）される |
+| **メモ入力欄** (`memo_body_field`) | テキストエリア (WPF: `TextBox` / Flet: `TextField` / Cocoa: `NSTextView`) | - マルチライン入力<br>- プレースホルダー: `メモを入力...`<br>- Return/Enterキー押下時は改行される（送信はされない） |
+| **送信ボタン** (`memo_submit_button`) | ボタン (WPF: `Button` / Flet: `TextButton` / Cocoa: `NSButton`) | - クリックまたはフォーカス状態で `Enter` / `Return` キー押下時にタスクを作成して API 送信<br>- 送信成功時は入力値をクリアし、「タスク名」入力欄へフォーカスを戻してランチャーウィンドウを開いたままにする（連続してタスクを追加可能） |
+| **キャンセルボタン** (`memo_cancel_button`)| ボタン (WPF: `Button` / Flet: `TextButton` / Cocoa: `NSButton`) | - クリックまたはフォーカス状態で `Enter` / `Return` キー押下時に検索画面へ戻る |
 
 ---
 
 ## 2. キーボード操作（フォーカス遷移）仕様
 
-Windows (Flet) および macOS (Cocoa / PyObjC) の双方で、統一されたキーボード操作を提供します。
+Windows (WPF / Flet) および macOS (Cocoa / PyObjC) で、統一されたキーボード操作を提供します。
 
 ### フォーカス巡回ルール
 

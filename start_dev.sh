@@ -6,6 +6,7 @@ BACKEND_DIR="${ROOT_DIR}/backend"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
 RUN_DIR="${ROOT_DIR}/.run"
 BACKEND_PORT="${BACKEND_PORT:-8079}"
+OPEN_HUB_PORT="${OPEN_HUB_PORT:-8001}"
 BACKEND_HOST="${BACKEND_HOST:-0.0.0.0}"
 
 mkdir -p "${RUN_DIR}"
@@ -53,7 +54,8 @@ build_frontend() {
   echo "Building frontend for backend delivery"
   (
     cd "${FRONTEND_DIR}"
-    VITE_API_BASE_URL="${VITE_API_BASE_URL:-}" npm run build > "${RUN_DIR}/frontend-build.log" 2>&1
+    VITE_API_BASE_URL="${VITE_API_BASE_URL:-}" VITE_OPEN_HUB_BASE_URL="${VITE_OPEN_HUB_BASE_URL:-http://127.0.0.1:${OPEN_HUB_PORT}}" \
+      npm run build > "${RUN_DIR}/frontend-build.log" 2>&1
   )
 }
 
@@ -68,6 +70,7 @@ start_backend() {
 }
 
 kill_port "${BACKEND_PORT}"
+kill_port "${OPEN_HUB_PORT}"
 ensure_backend_env
 ensure_frontend_env
 build_frontend
@@ -75,5 +78,7 @@ start_backend
 
 echo "Backend log: ${RUN_DIR}/backend.log"
 echo "Frontend build log: ${RUN_DIR}/frontend-build.log"
-echo "App URL: http://${BACKEND_HOST}:${BACKEND_PORT}"
-echo "Health check: http://${BACKEND_HOST}:${BACKEND_PORT}/api/health"
+echo "Web/Open URL: http://127.0.0.1:${OPEN_HUB_PORT}"
+echo "Search/API URL: http://${BACKEND_HOST}:${BACKEND_PORT}"
+echo "API health: http://127.0.0.1:${BACKEND_PORT}/api/health"
+echo "Open hub health: http://127.0.0.1:${OPEN_HUB_PORT}/_open_hub/health"
