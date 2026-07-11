@@ -235,6 +235,21 @@ def test_select_and_open_uses_web_url(monkeypatch: Any) -> None:
     assert app.is_hidden is True
 
 
+def test_select_and_open_runs_python_file_with_system_default(monkeypatch: Any) -> None:
+    """py結果は8001のOpenハブでなくOSの関連付けへ渡す。"""
+    opened_paths: list[str] = []
+    opened_urls: list[str] = []
+    app = LauncherApp(StubPage(), StubClient(), LauncherConfig(web_base_url="http://localhost:8001"))  # type: ignore[arg-type]
+    item = make_item(full_path="C:/scripts/start.py")
+    monkeypatch.setattr("launcher_app.ui.app.open_with_system_file_launcher", lambda path: opened_paths.append(path))
+    monkeypatch.setattr("webbrowser.open", lambda url: opened_urls.append(url))
+
+    app._select_and_open(item)
+
+    assert opened_paths == ["C:/scripts/start.py"]
+    assert opened_urls == []
+
+
 def test_reveal_selected_uses_backend_open_location() -> None:
     """
     Flet 版も保存場所表示はバックエンド API に合わせる。
@@ -690,6 +705,7 @@ def test_tab_switches_to_memo_screen_and_enter_creates_gantt_task(monkeypatch: A
     app.status = StubStatus()
     app.memo_status = StubStatus()
     app.query = StubValueControl()
+    app.extension_filter = StubValueControl()
     app.memo_title_field = StubValueControl("AI テストタスク")
     app.memo_body_field = StubValueControl("API ガイドから作成したメモ")
     app.memo_submit_button = StubValueControl()
@@ -730,13 +746,13 @@ def test_tab_switches_to_memo_screen_and_enter_creates_gantt_task(monkeypatch: A
     assert app.memo_submit_button.focus_count == 1
 
     app.memo_focused_control = "submit"
-    app._on_keyboard(type("Event", (), {"key": "Tab"})()) # submit -> cancel
+    app._on_keyboard(type("Event", (), {"key": "Tab"})()) # submit -> search
     while app.page.tasks:
         app.page.tasks.pop(0)()
-    assert app.memo_cancel_button.focus_count == 1
+    assert app.active_screen == "search"
+    assert app.query.focus_count == 1
 
-    app.memo_focused_control = "cancel"
-    app._on_keyboard(type("Event", (), {"key": "Tab", "shift": True})()) # cancel -> submit (Shift+Tab)
+    app._on_keyboard(type("Event", (), {"key": "Tab", "shift": True})()) # search -> submit (Shift+Tab)
     while app.page.tasks:
         app.page.tasks.pop(0)()
     assert app.memo_submit_button.focus_count == 2
@@ -759,7 +775,7 @@ def test_tab_switches_to_memo_screen_and_enter_creates_gantt_task(monkeypatch: A
     # 送信成功時にキューされた focus タスクを消費
     while app.page.tasks:
         app.page.tasks.pop(0)()
-    assert app.memo_title_field.focus_count == 2
+    assert app.memo_title_field.focus_count == 3
 
 
 

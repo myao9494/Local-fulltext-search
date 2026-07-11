@@ -450,6 +450,8 @@ function App() {
   const [isSavingIndexExtensions, setIsSavingIndexExtensions] = useState(false);
   const [isStartingScheduler, setIsStartingScheduler] = useState(false);
   const [isLauncherActionRunning, setIsLauncherActionRunning] = useState(false);
+  const [launcherHotkey, setLauncherHotkey] = useState<"command_option" | "double_shift">("command_option");
+  const [isSavingLauncherHotkey, setIsSavingLauncherHotkey] = useState(false);
   const [hasLoadedAppSettings, setHasLoadedAppSettings] = useState(false);
   const ruleHistoryRef = useRef<RuleSnapshot[]>([]);
   const ruleHistoryIndexRef = useRef(-1);
@@ -600,6 +602,7 @@ function App() {
       setObsidianSidebarExplorerDataPathDraft(appSettings.obsidian_sidebar_explorer_data_path.trim());
       setSavedGanttParent(normalizeGanttParent(appSettings.gantt_parent));
       setGanttParentDraft(String(normalizeGanttParent(appSettings.gantt_parent)));
+      setLauncherHotkey(appSettings.launcher_hotkey ?? "command_option");
       setSavedCustomContentExtensions(loadedCustomContentExtensions);
       setCustomContentExtensions(loadedCustomContentExtensions);
       setSavedCustomFilenameExtensions(loadedCustomFilenameExtensions);
@@ -1465,6 +1468,25 @@ function App() {
       setErrorMessage(error instanceof Error ? error.message : "Web取得方式の保存に失敗しました。");
     } finally {
       setIsSavingWebFetchMode(false);
+    }
+  }
+
+  /** ランチャー再起動時に読むグローバルショートカットを保存する。 */
+  async function handleChangeLauncherHotkey(nextHotkey: "command_option" | "double_shift"): Promise<void> {
+    const previousHotkey = launcherHotkey;
+    setLauncherHotkey(nextHotkey);
+    setIsSavingLauncherHotkey(true);
+    try {
+      const savedSettings = await updateAppSettings({ launcher_hotkey: nextHotkey });
+      setLauncherHotkey(savedSettings.launcher_hotkey);
+      setErrorMessage("");
+      setNoticeMessage("ショートカットを保存しました。ランチャーを再起動すると反映されます。");
+    } catch (error) {
+      setLauncherHotkey(previousHotkey);
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "ショートカットの保存に失敗しました。");
+    } finally {
+      setIsSavingLauncherHotkey(false);
     }
   }
 
@@ -2713,6 +2735,21 @@ function App() {
                 <div>終了コード: {launcherState?.returncode ?? "-"}</div>
                 <div>自動起動: {launcherState?.autostart ? "有効" : "無効"}</div>
                 <div>ログ: {launcherState?.log_path ?? "-"}</div>
+              </div>
+
+              <div className="scheduler-card launcher-actions-card">
+                <label htmlFor="launcher-hotkey">表示・非表示のショートカット</label>
+                <select
+                  id="launcher-hotkey"
+                  className="settings-select"
+                  value={launcherHotkey}
+                  onChange={(event) => void handleChangeLauncherHotkey(event.target.value as "command_option" | "double_shift")}
+                  disabled={isSavingLauncherHotkey}
+                >
+                  <option value="command_option">Command + Option（Windows: Windows + Alt）</option>
+                  <option value="double_shift">Shift を2回</option>
+                </select>
+                <div className="form-help">保存後、ランチャーを再起動すると反映されます。</div>
               </div>
 
               <div className="scheduler-card launcher-actions-card">

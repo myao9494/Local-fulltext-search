@@ -172,6 +172,7 @@ class AppSettingsResponse(BaseModel):
     synonym_groups: str
     obsidian_sidebar_explorer_data_path: str
     gantt_parent: int = 0
+    launcher_hotkey: Literal["command_option", "double_shift"] = "command_option"
     index_selected_extensions: str
     custom_content_extensions: str
     custom_filename_extensions: str
@@ -189,6 +190,7 @@ class AppSettingsUpdateRequest(BaseModel):
     synonym_groups: str | None = None
     obsidian_sidebar_explorer_data_path: str | None = None
     gantt_parent: int | None = None
+    launcher_hotkey: Literal["command_option", "double_shift"] | None = None
     index_selected_extensions: str | None = None
     custom_content_extensions: str | None = None
     custom_filename_extensions: str | None = None

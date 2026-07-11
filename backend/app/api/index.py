@@ -140,6 +140,7 @@ def update_app_settings(
         synonym_groups=payload.synonym_groups,
         obsidian_sidebar_explorer_data_path=payload.obsidian_sidebar_explorer_data_path,
         gantt_parent=payload.gantt_parent,
+        launcher_hotkey=payload.launcher_hotkey,
         index_selected_extensions=payload.index_selected_extensions,
         custom_content_extensions=payload.custom_content_extensions,
         custom_filename_extensions=payload.custom_filename_extensions,

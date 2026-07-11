@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { openFileLocation } from "../api/client";
+import { catppuccinIconForResult } from "../fileIcon";
 import type { SearchResult } from "../types";
 
 type ResultsListProps = {
@@ -245,6 +246,12 @@ function ResultCard({
               }
             }}
           >
+            <img
+              className="result-file-icon"
+              src={`/icons/catppuccin/${catppuccinIconForResult(item)}`}
+              alt=""
+              aria-hidden="true"
+            />
             {item.file_name}
           </a>
         </h3>

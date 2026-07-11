@@ -15,6 +15,24 @@ internal sealed record SearchItem(
     public bool IsGantt => SourceType == "gantt";
     public bool IsLocal => !IsGantt;
     public bool HasGanttLink => !string.IsNullOrWhiteSpace(GanttLink);
+    public string IconPath => $"Assets/catppuccin/{CatppuccinIconName()}.png";
+
+    /// <summary>検索結果の種別・拡張子から同梱 Catppuccin PNG 名を返す。</summary>
+    private string CatppuccinIconName()
+    {
+        if (IsGantt) return "task";
+        if (SourceType == "web") return "html";
+        if (ResultKind == "folder") return "folder";
+        return Path.GetExtension(FileName).ToLowerInvariant() switch
+        {
+            ".md" or ".markdown" => "markdown", ".pdf" => "pdf", ".json" => "json", ".xml" => "xml",
+            ".txt" => "txt", ".csv" => "csv", ".yaml" or ".yml" => "yaml", ".zip" => "zip",
+            ".html" or ".htm" => "html", ".js" or ".jsx" => "javascript", ".ts" or ".tsx" => "typescript", ".py" => "python",
+            ".excalidraw" => "excalidraw", ".dio" or ".drawio" => "drawio", ".epub" => "epub",
+            ".png" or ".jpg" or ".jpeg" or ".gif" or ".svg" or ".webp" => "image",
+            ".mp3" or ".wav" or ".m4a" => "audio", ".mp4" or ".mov" or ".avi" => "video", _ => "file",
+        };
+    }
 }
 
 internal sealed record GanttTaskRequest(

@@ -4,15 +4,17 @@
 本アプリケーションは、ローカル全文検索システムのバックエンドを利用し、デスクトップ上でいつでも呼び出し可能な高速検索インターフェース（ランチャー）を提供します。MacのSpotlightやRaycastのような操作感を目指します。
 
 ## 2. コア機能
-- **グローバルホットキー**: `Command + Option` (Mac)、`Windows + Alt` (Windows Flet)、または `Shift` の2回押下 (Windows WPF) で表示/非表示を切り替える。
+- **グローバルホットキー**: ランチャータブで `Command + Option`（Windowsでは `Windows + Alt`）または `Shift` の2回押下を選択し、ランチャー再起動後に表示/非表示へ反映する。
 - **SpotlightスタイルUI**: 画面中央にフローティング表示される、枠のないスタイリッシュな検索バー。
 - **リアルタイム検索**: 入力と同時にバックエンドへ問い合わせを行い、結果を動的に表示。
 - **結果アクション（全ネイティブランチャー）**:
     - 検索結果タイトル相当のクリック: `LAUNCHER_WEB_BASE_URL` を基準に、ファイルは `/api/fullpath?path=...`、フォルダは `/?path=...` を開く。
     - `Finderで開く`: Web アプリと同じ `/api/files/open-location` を使い、ファイルの場合は親フォルダ、フォルダの場合はそのフォルダを開く。
     - `フォルダを開く`: `LAUNCHER_WEB_BASE_URL` を基準に `/?path=...` を開く。
-- **gantt メモ追加（Flet/PyObjC/WPF版）**:
-    - ランチャー表示中に `Tab` を押すと検索画面とメモ画面を切り替える。
+- **検索欄・gantt メモ・ファイル起動（Flet/PyObjC/WPF版）**:
+    - 検索欄の右側に拡張子フィルタを置く。カンマまたは空白区切りで入力し、空欄なら全拡張子を対象にする。
+    - `Tab` / `Shift + Tab` は「検索欄 → 拡張子欄 → ganttのタスク名 → メモ → 送信 → 検索欄」の順を循環する。キャンセルはクリック操作のみとする。
+    - `.py`、`.bat`、`.exe`、`.lnk` の検索結果を開くときは、8001 のOpenハブを経由せずOSの既定の関連付けで起動する。起動時の current directory は対象ファイルの親フォルダとする。
     - メモ画面では 1 行目を `text`、2 行目以降を `memo` として `LAUNCHER_GANTT_API_BASE_URL/tasks` へ POST する。
     - `start_date` は当日 00:00:00、`end_date` は翌日 00:00:00、`progress` は `0.1`、`kind_task` は `1` とする。
     - 名前欄とメモ欄の`Enter`は入力を継続し、送信しない。送信は送信ボタンのクリック、または送信ボタンへフォーカスした状態の`Enter`だけで行う。
@@ -136,7 +138,7 @@ Windowsでは `launcher/windows/` のWPF版を優先する。ホットキーはS
 配布物はself-containedフォルダ版を標準、single-file版を携帯版とする。発行方法は
 `launcher/windows/README.md` を参照する。
 
-WPF版はmacOSネイティブ版の操作仕様に合わせ、gantt検索チェック、Tabでのメモ画面切替、名前・メモ・送信・キャンセル、共有parent取得、結果のパスコピー・保存場所・フォルダ・ganttリンク、GUIボタン、上下キー循環選択を提供する。Windowsの性能仕様に従い、gantt未選択時は `/api/search/indexed`、gantt選択時は `/api/search` を使用する。
+WPF版はmacOSネイティブ版の操作仕様に合わせ、拡張子フィルタ、gantt検索、名前・メモ・送信・キャンセル、共有parent取得、結果のパスコピー・保存場所・フォルダ・ganttリンク、GUIボタン、上下キー循環選択を提供する。`Tab` / `Shift + Tab` は「検索欄 → 拡張子欄 → タスク名 → メモ → 送信 → 検索欄」を循環し、送信から検索欄へ移る際は検索画面を表示する。`.py`、`.bat`、`.exe`、`.lnk` は8001を経由せず、親フォルダを current directory として直接起動する。Windowsの性能仕様に従い、gantt未選択時は `/api/search/indexed`、gantt選択時は `/api/search` を使用する。
 
 検索UIのHWNDは表示する仮想デスクトップに合わせて再生成するが、検索文字列はアプリプロセス側に退避して復元し、再表示時に全選択する。WPF初期版の背景は半透明パネルであり、Windows DWM/Acrylicによる背景ブラーは未実装とする。
 

@@ -124,6 +124,24 @@ def test_search_posts_windows_defaults(monkeypatch) -> None:
     assert response.items[0].file_name == "a.md"
 
 
+def test_search_sends_extension_filter_to_existing_index_endpoint(monkeypatch) -> None:
+    """
+    ランチャーの拡張子欄は Windows の既存インデックス検索にも渡す。
+    """
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request: Request, timeout: float) -> StubResponse:
+        captured["body"] = json.loads((request.data or b"{}").decode("utf-8"))
+        return _stub_search_response()
+
+    client = LauncherApiClient(urlopen=fake_urlopen)
+
+    client.search("alpha", types=".py, bat")
+
+    assert captured["body"] == {"q": "alpha", "folder_path": "", "limit": 8, "offset": 0, "types": ".py, bat"}
+
+
 def test_search_posts_gantt_include_for_all_platforms(monkeypatch) -> None:
     """
     gantt 選択時は Windows でも通常検索に gantt 追加フラグを指定する。

@@ -49,6 +49,7 @@ class StubIndexService:
         self.saved_synonym_groups = "スマートフォン,スマホ,モバイル"
         self.saved_obsidian_sidebar_explorer_data_path = ""
         self.saved_gantt_parent = 3
+        self.saved_launcher_hotkey = "command_option"
         self.saved_index_selected_extensions = ".md\n.json"
         self.saved_custom_content_extensions = ".py\n.dat"
         self.saved_custom_filename_extensions = ".CAE"
@@ -139,6 +140,7 @@ class StubIndexService:
                 index_selected_extensions: str,
                 custom_content_extensions: str,
                 custom_filename_extensions: str,
+                launcher_hotkey: str = "command_option",
             ) -> None:
                 self.exclude_keywords = exclude_keywords
                 self.web_exclude_keywords = web_exclude_keywords
@@ -147,6 +149,7 @@ class StubIndexService:
                 self.synonym_groups = synonym_groups
                 self.obsidian_sidebar_explorer_data_path = obsidian_sidebar_explorer_data_path
                 self.gantt_parent = gantt_parent
+                self.launcher_hotkey = launcher_hotkey
                 self.index_selected_extensions = index_selected_extensions
                 self.custom_content_extensions = custom_content_extensions
                 self.custom_filename_extensions = custom_filename_extensions
@@ -160,6 +163,7 @@ class StubIndexService:
                     "synonym_groups": self.synonym_groups,
                     "obsidian_sidebar_explorer_data_path": self.obsidian_sidebar_explorer_data_path,
                     "gantt_parent": self.gantt_parent,
+                    "launcher_hotkey": self.launcher_hotkey,
                     "index_selected_extensions": self.index_selected_extensions,
                     "custom_content_extensions": self.custom_content_extensions,
                     "custom_filename_extensions": self.custom_filename_extensions,
@@ -176,6 +180,7 @@ class StubIndexService:
             self.saved_index_selected_extensions,
             self.saved_custom_content_extensions,
             self.saved_custom_filename_extensions,
+            self.saved_launcher_hotkey,
         )
 
     def update_app_settings(
@@ -188,6 +193,7 @@ class StubIndexService:
         synonym_groups: str | None = None,
         obsidian_sidebar_explorer_data_path: str | None = None,
         gantt_parent: int | None = None,
+        launcher_hotkey: str | None = None,
         index_selected_extensions: str | None = None,
         custom_content_extensions: str | None = None,
         custom_filename_extensions: str | None = None,
@@ -206,6 +212,8 @@ class StubIndexService:
             self.saved_obsidian_sidebar_explorer_data_path = obsidian_sidebar_explorer_data_path
         if gantt_parent is not None:
             self.saved_gantt_parent = gantt_parent
+        if launcher_hotkey is not None:
+            self.saved_launcher_hotkey = launcher_hotkey
         if index_selected_extensions is not None:
             self.saved_index_selected_extensions = index_selected_extensions
         if custom_content_extensions is not None:
@@ -397,6 +405,7 @@ def test_get_app_settings_endpoint_returns_saved_settings() -> None:
     assert payload["hidden_indexed_targets"] == "obsidian\nAgent_Skills"
     assert payload["synonym_groups"] == "スマートフォン,スマホ,モバイル"
     assert payload["gantt_parent"] == 3
+    assert payload["launcher_hotkey"] == "command_option"
     assert payload["index_selected_extensions"] == ".md\n.json"
     assert payload["custom_content_extensions"] == ".py\n.dat"
     assert payload["custom_filename_extensions"] == ".CAE"
@@ -415,7 +424,8 @@ def test_update_app_settings_endpoint_returns_updated_settings() -> None:
             web_fetch_mode="edge",
             hidden_indexed_targets="obsidian\nAgent_Skills\nnotes",
             synonym_groups="スマートフォン,スマホ,モバイル\nノートPC,ラップトップ",
-            gantt_parent=12,
+                gantt_parent=12,
+                launcher_hotkey="double_shift",
             index_selected_extensions=".md\n.py",
             custom_content_extensions=".py\n.dat",
             custom_filename_extensions=".cae",
@@ -434,6 +444,7 @@ def test_update_app_settings_endpoint_returns_updated_settings() -> None:
     assert payload["synonym_groups"] == "スマートフォン,スマホ,モバイル\nノートPC,ラップトップ"
     assert service.saved_synonym_groups == "スマートフォン,スマホ,モバイル\nノートPC,ラップトップ"
     assert payload["gantt_parent"] == 12
+    assert payload["launcher_hotkey"] == "double_shift"
     assert service.saved_gantt_parent == 12
     assert payload["index_selected_extensions"] == ".md\n.py"
     assert payload["custom_content_extensions"] == ".py\n.dat"

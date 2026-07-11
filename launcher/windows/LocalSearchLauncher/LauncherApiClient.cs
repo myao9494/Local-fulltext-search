@@ -21,12 +21,12 @@ internal sealed class LauncherApiClient : IDisposable
         _ganttHttp = new HttpClient(new HttpClientHandler { UseProxy = false }) { BaseAddress = new Uri(ganttBase.TrimEnd('/') + "/"), Timeout = TimeSpan.FromSeconds(timeout) };
     }
 
-    public async Task<SearchResponse> SearchAsync(string query, int limit, bool includeGanttTasks, CancellationToken token)
+    public async Task<SearchResponse> SearchAsync(string query, int limit, bool includeGanttTasks, string types, CancellationToken token)
     {
         var endpoint = includeGanttTasks ? "api/search" : "api/search/indexed";
         object payload = includeGanttTasks
-            ? new { q = query, full_path = "", search_all_enabled = true, skip_refresh = true, source_type = "local", refresh_window_minutes = 0, search_target = "all", sort_by = "default", sort_order = "desc", limit, offset = 0, include_snippets = true, include_gantt_tasks = true }
-            : new { q = query, folder_path = "", limit, offset = 0 };
+            ? new { q = query, full_path = "", search_all_enabled = true, skip_refresh = true, source_type = "local", refresh_window_minutes = 0, search_target = "all", sort_by = "default", sort_order = "desc", limit, offset = 0, include_snippets = true, include_gantt_tasks = true, types }
+            : new { q = query, folder_path = "", limit, offset = 0, types };
         using var response = await _http.PostAsJsonAsync(endpoint, payload, _json, token);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<SearchResponse>(_json, token) ?? new SearchResponse(0, [], false);
@@ -63,6 +63,18 @@ internal sealed class LauncherApiClient : IDisposable
             JsonValueKind.String when int.TryParse(value.GetString(), out var number) && number >= 0 => number,
             _ => fallback,
         };
+    }
+
+    /// <summary>再起動時に保存済みのホットキー方式を取得する。</summary>
+    public async Task<string> GetLauncherHotkeyAsync(string fallback = "command_option")
+    {
+        using var response = await _http.GetAsync("api/index/settings");
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        if (!document.RootElement.TryGetProperty("launcher_hotkey", out var value) || value.ValueKind != JsonValueKind.String)
+            return fallback;
+        var hotkey = value.GetString();
+        return hotkey is "command_option" or "double_shift" ? hotkey : fallback;
     }
 
     public async Task CreateGanttTaskAsync(GanttTaskRequest task)

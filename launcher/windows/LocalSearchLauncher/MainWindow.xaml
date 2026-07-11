@@ -7,16 +7,20 @@
   <Border.Effect><DropShadowEffect BlurRadius="32" ShadowDepth="8" Opacity="0.55" Color="#000000"/></Border.Effect>
   <Grid>
    <Grid x:Name="SearchView"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-    <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+    <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="145"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
      <TextBox x:Name="QueryBox" FontFamily="Inter, Segoe UI" FontSize="21" Foreground="#F8FAFC" Background="#CC1E293B" BorderBrush="#3B82F6" BorderThickness="1" Padding="14,10" TextChanged="QueryBox_TextChanged"/>
-     <Button Grid.Column="1" Content="GUI" Margin="10,0,0,0" Padding="16,8" Click="OpenGui_Click"/>
-     <CheckBox x:Name="GanttCheck" Grid.Column="2" Content="gantt" Foreground="#E2E8F0" VerticalAlignment="Center" Margin="14,0,4,0" Click="GanttCheck_Click"/>
+     <TextBox x:Name="ExtensionBox" Grid.Column="1" Margin="10,0,0,0" FontFamily="Inter, Segoe UI" FontSize="14" Foreground="#F8FAFC" Background="#CC1E293B" BorderBrush="#3B82F6" BorderThickness="1" Padding="10,10" ToolTip="拡張子（カンマまたは空白区切り）" TextChanged="QueryBox_TextChanged"/>
+     <Button Grid.Column="2" Content="GUI" Margin="10,0,0,0" Padding="16,8" Click="OpenGui_Click"/>
+     <CheckBox x:Name="GanttCheck" Grid.Column="3" Content="gantt" Foreground="#E2E8F0" VerticalAlignment="Center" Margin="14,0,4,0" Click="GanttCheck_Click"/>
     </Grid>
     <ListBox x:Name="Results" Grid.Row="1" Margin="0,14,0,10" Background="Transparent" BorderThickness="0" Foreground="#E2E8F0" FontFamily="Inter, Segoe UI" FontSize="15" MouseDoubleClick="Results_MouseDoubleClick">
      <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Margin" Value="0,2"/></Style></ListBox.ItemContainerStyle>
      <ListBox.ItemTemplate><DataTemplate><Border Padding="12,9" Background="#991E293B" CornerRadius="9">
       <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-       <TextBlock Text="{Binding FileName}" FontWeight="SemiBold" Foreground="#F8FAFC"/>
+       <StackPanel Orientation="Horizontal">
+        <Image Source="{Binding IconPath}" Width="20" Height="20" Margin="0,0,8,0"/>
+        <TextBlock Text="{Binding FileName}" FontWeight="SemiBold" Foreground="#F8FAFC" VerticalAlignment="Center"/>
+       </StackPanel>
        <TextBlock Grid.Row="1" Text="{Binding FullPath}" Foreground="#60A5FA" FontSize="11" TextTrimming="CharacterEllipsis"/>
        <TextBlock Grid.Row="2" Text="{Binding PlainSnippet}" Foreground="#94A3B8" FontSize="12" TextTrimming="CharacterEllipsis" MaxHeight="40"/>
        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,7,0,0">

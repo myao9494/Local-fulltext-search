@@ -531,6 +531,7 @@ class IndexService:
             synonym_groups=self._read_persisted_synonym_groups(),
             obsidian_sidebar_explorer_data_path=self._read_persisted_obsidian_sidebar_explorer_data_path(),
             gantt_parent=self._read_persisted_gantt_parent(),
+            launcher_hotkey=self._read_persisted_launcher_hotkey(),
             index_selected_extensions=self._read_persisted_index_selected_extensions(
                 custom_content_extensions=custom_content_extensions,
                 custom_filename_extensions=custom_filename_extensions,
@@ -557,6 +558,7 @@ class IndexService:
         synonym_groups: str | None = None,
         obsidian_sidebar_explorer_data_path: str | None = None,
         gantt_parent: int | None = None,
+        launcher_hotkey: str | None = None,
         index_selected_extensions: str | None = None,
         custom_content_extensions: str | None = None,
         custom_filename_extensions: str | None = None,
@@ -594,6 +596,11 @@ class IndexService:
         normalized_gantt_parent = (
             self._normalize_gantt_parent(gantt_parent) if gantt_parent is not None else current.gantt_parent
         )
+        normalized_launcher_hotkey = (
+            self._normalize_launcher_hotkey(launcher_hotkey)
+            if launcher_hotkey is not None
+            else current.launcher_hotkey
+        )
         normalized_custom_content_extensions = (
             self._normalize_extension_entries(custom_content_extensions)
             if custom_content_extensions is not None
@@ -629,6 +636,7 @@ class IndexService:
         self._write_persisted_synonym_groups(normalized_synonym_groups)
         self._write_persisted_obsidian_sidebar_explorer_data_path(normalized_obsidian_sidebar_explorer_data_path)
         self._write_persisted_gantt_parent(normalized_gantt_parent)
+        self._write_persisted_launcher_hotkey(normalized_launcher_hotkey)
         self._write_persisted_custom_content_extensions(normalized_custom_content_extensions)
         self._write_persisted_custom_filename_extensions(normalized_custom_filename_extensions)
         self._write_persisted_index_selected_extensions(normalized_index_selected_extensions)
@@ -640,6 +648,7 @@ class IndexService:
             synonym_groups=normalized_synonym_groups,
             obsidian_sidebar_explorer_data_path=normalized_obsidian_sidebar_explorer_data_path,
             gantt_parent=normalized_gantt_parent,
+            launcher_hotkey=normalized_launcher_hotkey,
             index_selected_extensions=normalized_index_selected_extensions,
             custom_content_extensions=normalized_custom_content_extensions,
             custom_filename_extensions=normalized_custom_filename_extensions,
@@ -844,6 +853,28 @@ class IndexService:
         path = settings.gantt_parent_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(self._normalize_gantt_parent(value)), encoding="utf-8")
+
+    def _normalize_launcher_hotkey(self, value: object) -> str:
+        """ランチャーで選べる2種類のグローバルショートカットだけを保存する。"""
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"command_option", "double_shift"}:
+            raise ValueError("launcher_hotkey must be command_option or double_shift.")
+        return normalized
+
+    def _read_persisted_launcher_hotkey(self) -> str:
+        """未設定・壊れた設定は従来互換の Command + Option に戻す。"""
+        path = settings.launcher_hotkey_path
+        try:
+            return self._normalize_launcher_hotkey(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            self._write_persisted_launcher_hotkey("command_option")
+            return "command_option"
+
+    def _write_persisted_launcher_hotkey(self, value: object) -> None:
+        """選択済みショートカットをランチャー再起動後も使えるよう保存する。"""
+        path = settings.launcher_hotkey_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._normalize_launcher_hotkey(value), encoding="utf-8")
 
     def _read_persisted_custom_content_extensions(self) -> str:
         """

@@ -8,6 +8,8 @@ from launcher_app.ui.urls import (
     folder_web_url_for_item,
     full_path_web_url,
     primary_web_url_for_item,
+    uses_system_file_launcher,
+    open_with_system_file_launcher,
 )
 
 
@@ -72,3 +74,23 @@ def test_full_path_url_encodes_japanese_paths() -> None:
     assert full_path_web_url("/tmp/明和高校.md") == (
         "http://127.0.0.1:8001/api/fullpath?path=%2Ftmp%2F%E6%98%8E%E5%92%8C%E9%AB%98%E6%A0%A1.md"
     )
+
+
+def test_python_and_batch_results_bypass_the_open_hub() -> None:
+    """スクリプト・実行ファイル・ショートカットは8001のOpenハブでなくOSに渡す。"""
+    assert uses_system_file_launcher("C:/scripts/start.PY") is True
+    assert uses_system_file_launcher("C:/scripts/start.bat") is True
+    assert uses_system_file_launcher("C:/tools/app.exe") is True
+    assert uses_system_file_launcher("C:/shortcuts/app.lnk") is True
+    assert uses_system_file_launcher("C:/docs/readme.md") is False
+
+
+def test_windows_script_launcher_uses_parent_as_current_directory(monkeypatch) -> None:
+    """Windowsの関連付け起動ではスクリプトの親フォルダをcurrent dirにする。"""
+    started: list[tuple[list[str], dict[str, object]]] = []
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    monkeypatch.setattr("subprocess.Popen", lambda command, **kwargs: started.append((command, kwargs)))
+
+    open_with_system_file_launcher("C:/work/scripts/job.bat")
+
+    assert started == [(["cmd", "/c", "start", "", "/d", "C:/work/scripts", "C:/work/scripts/job.bat"], {})]

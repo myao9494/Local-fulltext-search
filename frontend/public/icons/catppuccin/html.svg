@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="16px" viewBox="0 0 16 16" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>html</title>
+    <g id="html" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd" stroke-linecap="round" stroke-linejoin="round">
+        <polygon id="Path" stroke="#FE640B" points="1.5 1.5 14.5 1.5 13 13 8 15 3 13"></polygon>
+        <polyline id="Path" stroke="#4C4F69" points="11 4.5 5 4.5 5.25237601 7.5 10.75 7.5 10.5 10.5 8 11.5 5.5 10.5 5.42 9.5"></polyline>
+    </g>
+</svg>

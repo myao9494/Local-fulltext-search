@@ -121,6 +121,7 @@ class IndexedSearchRequest(BaseModel):
     folder_path: str
     limit: int = Field(default=20, ge=1, le=1000)
     offset: int = Field(default=0, ge=0)
+    types: str | None = None
 
     @field_validator("folder_path")
     @classmethod

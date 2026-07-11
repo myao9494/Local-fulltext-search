@@ -24,6 +24,7 @@ from PyObjCTools import AppHelper
 
 from launcher_app.api.client import LauncherApiClient
 from launcher_app.config import LauncherConfig
+from launcher_app.file_icons import catppuccin_icon_path
 from launcher_app.gantt_task import build_gantt_task_payload, normalize_parent_id
 from launcher_app.models import SearchResultItem
 from launcher_app.services.hotkeys import hotkey_spec_for_platform
@@ -32,6 +33,8 @@ from launcher_app.ui.urls import (
     folder_web_url_for_item,
     full_path_web_url,
     primary_web_url_for_item,
+    open_with_system_file_launcher,
+    uses_system_file_launcher,
 )
 from launcher_app.utils import strip_html
 
@@ -65,13 +68,17 @@ class LauncherPanel(AppKit.NSPanel):
 
     def keyDown_(self, event: Any) -> None:
         """
-        送信ボタンやキャンセルボタンにフォーカスがある状態で Return キーが押された場合に、アクションを実行する。
+        ボタンへフォーカスがある状態のReturnとTabをランチャー操作として処理する。
         """
         chars = event.characters()
-        if chars == "\r" or chars == "\n":
-            delegate = self.delegate()
-            if delegate is not None:
-                first_responder = self.firstResponder()
+        delegate = self.delegate()
+        if delegate is not None:
+            first_responder = self.firstResponder()
+            if chars == "\t" and first_responder == delegate.memo_submit_button:
+                # 送信の次は検索画面を表示して、検索欄から循環を再開する。
+                delegate._switch_screen("search")
+                return
+            if chars == "\r" or chars == "\n":
                 if first_responder == delegate.memo_submit_button:
                     delegate._submit_memo()
                     return
@@ -107,8 +114,16 @@ class LauncherDelegate(AppKit.NSObject):
         self.power_notifications_registered = False
         self.activity_token = None
         self.hotkey_activated = False
+        self.hotkey_mode = "command_option"
+        self.shift_down = False
+        self.first_shift_released_at = 0.0
+        try:
+            self.hotkey_mode = str(client.get_app_settings().get("launcher_hotkey", "command_option"))
+        except Exception:
+            pass
         self.panel = None
         self.search_field = None
+        self.extension_filter = None
         self.status_label = None
         self.results_stack = None
         self.gui_button = None
@@ -138,7 +153,7 @@ class LauncherDelegate(AppKit.NSObject):
         self._build_panel()
         self._start_hotkey_monitor()
         self._start_power_state_monitor()
-        self.status_label.setStringValue_(f"Hotkey: {hotkey_spec_for_platform()}")
+        self.status_label.setStringValue_(f"Hotkey: {hotkey_spec_for_platform(mode=self.hotkey_mode)}")
         self.show_panel()
 
     def controlTextDidChange_(self, notification: Any) -> None:
@@ -156,7 +171,7 @@ class LauncherDelegate(AppKit.NSObject):
         
         if not query:
             self.results = []
-            self.status_label.setStringValue_(f"Hotkey: {hotkey_spec_for_platform()}")
+            self.status_label.setStringValue_(f"Hotkey: {hotkey_spec_for_platform(mode=self.hotkey_mode)}")
             self.last_results_time = time.time()
             self._render_results()
             return
@@ -181,7 +196,11 @@ class LauncherDelegate(AppKit.NSObject):
                 self._open_selected()
                 return True
             elif selector == "insertTab:":
+                self.panel.makeFirstResponder_(self.extension_filter)
+                return True
+            elif selector == "insertBacktab:":
                 self._switch_screen("memo")
+                self.panel.makeFirstResponder_(self.memo_submit_button)
                 return True
             elif selector == "cancelOperation:":
                 self.hide_panel()
@@ -191,7 +210,8 @@ class LauncherDelegate(AppKit.NSObject):
                 self.panel.makeFirstResponder_(self.memo_body_view)
                 return True
             elif selector == "insertBacktab:":
-                self.panel.makeFirstResponder_(self.memo_cancel_button)
+                self._switch_screen("search")
+                self.panel.makeFirstResponder_(self.extension_filter)
                 return True
             elif selector == "insertNewline:":
                 # タイトル欄でのEnterでは送信しない。
@@ -200,6 +220,13 @@ class LauncherDelegate(AppKit.NSObject):
                 return True
             elif selector == "cancelOperation:":
                 self._switch_screen("search")
+                return True
+        elif control == self.extension_filter:
+            if selector == "insertTab:":
+                self._switch_screen("memo")
+                return True
+            elif selector == "insertBacktab:":
+                self.panel.makeFirstResponder_(self.search_field)
                 return True
         return False
 
@@ -481,6 +508,19 @@ class LauncherDelegate(AppKit.NSObject):
         """
         修飾キーの bit flag から Command + Option の押下状態を判定する。
         """
+        if getattr(self, "hotkey_mode", "command_option") == "double_shift":
+            shift_active = bool(flags & AppKit.NSEventModifierFlagShift)
+            if shift_active and not self.shift_down:
+                self.shift_down = True
+            elif not shift_active and self.shift_down:
+                self.shift_down = False
+                now = time.monotonic()
+                if self.first_shift_released_at and now - self.first_shift_released_at <= 0.4:
+                    self.first_shift_released_at = 0.0
+                    AppHelper.callAfter(self.toggle_panel)
+                else:
+                    self.first_shift_released_at = now
+            return
         required = AppKit.NSEventModifierFlagCommand | AppKit.NSEventModifierFlagOption
         active = (flags & required) == required
         if active and not self.hotkey_activated:
@@ -589,13 +629,22 @@ class LauncherDelegate(AppKit.NSObject):
         content.layer().setBorderWidth_(1.0)
         self.panel.setContentView_(content)
 
-        self.search_field = AppKit.NSSearchField.alloc().initWithFrame_(AppKit.NSMakeRect(34, PANEL_HEIGHT - 80, PANEL_WIDTH - 68, 36))
+        self.search_field = AppKit.NSSearchField.alloc().initWithFrame_(AppKit.NSMakeRect(34, PANEL_HEIGHT - 80, PANEL_WIDTH - 218, 36))
         self.search_field.setDelegate_(self)
         self.search_field.setPlaceholderString_("検索語を入力")
         self.search_field.setFont_(AppKit.NSFont.systemFontOfSize_weight_(20, AppKit.NSFontWeightRegular))
         self.search_field.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.9, 0.94, 1.0, 1.0))
         self.search_field.setDrawsBackground_(False)
         content.addSubview_(self.search_field)
+
+        self.extension_filter = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(PANEL_WIDTH - 174, PANEL_HEIGHT - 80, 140, 36))
+        self.extension_filter.setDelegate_(self)
+        self.extension_filter.setPlaceholderString_(".md, .py")
+        self.extension_filter.setToolTip_("拡張子（カンマまたは空白区切り）")
+        self.extension_filter.setFont_(AppKit.NSFont.systemFontOfSize_(15))
+        self.extension_filter.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.9, 0.94, 1.0, 1.0))
+        self.extension_filter.setDrawsBackground_(False)
+        content.addSubview_(self.extension_filter)
 
         self.gui_button = AppKit.NSButton.buttonWithTitle_target_action_("Web GUI", self, "openGuiUrl:")
         self.gui_button.setFrame_(AppKit.NSMakeRect(34, PANEL_HEIGHT - 36, 80, 24))
@@ -674,10 +723,11 @@ class LauncherDelegate(AppKit.NSObject):
         # Cocoa 標準のフォーカス移動チェーンの構築
         self.memo_title_field.setNextKeyView_(self.memo_body_view)
         self.memo_body_view.setNextKeyView_(self.memo_submit_button)
-        self.memo_submit_button.setNextKeyView_(self.memo_cancel_button)
-        self.memo_cancel_button.setNextKeyView_(self.memo_title_field)
+        self.memo_submit_button.setNextKeyView_(self.search_field)
+        self.search_field.setNextKeyView_(self.extension_filter)
+        self.extension_filter.setNextKeyView_(self.memo_title_field)
 
-        self.status_label = AppKit.NSTextField.labelWithString_(f"Hotkey: {hotkey_spec_for_platform()}")
+        self.status_label = AppKit.NSTextField.labelWithString_(f"Hotkey: {hotkey_spec_for_platform(mode=self.hotkey_mode)}")
         self.status_label.setFrame_(AppKit.NSMakeRect(34, 22, PANEL_WIDTH - 68, 20))
         self.status_label.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(0.58, 0.64, 0.73, 1.0))
         self.status_label.setFont_(AppKit.NSFont.boldSystemFontOfSize_(13))
@@ -691,6 +741,7 @@ class LauncherDelegate(AppKit.NSObject):
         self.active_screen = "memo" if screen == "memo" else "search"
         is_memo = self.active_screen == "memo"
         self.search_field.setHidden_(is_memo)
+        self.extension_filter.setHidden_(is_memo)
         self.gui_button.setHidden_(is_memo)
         self.gantt_checkbox.setHidden_(is_memo)
         self.search_scroll.setHidden_(is_memo)
@@ -700,7 +751,7 @@ class LauncherDelegate(AppKit.NSObject):
         self.memo_title_field.setHidden_(not is_memo)
         self.memo_submit_button.setHidden_(not is_memo)
         self.memo_cancel_button.setHidden_(not is_memo)
-        self.status_label.setStringValue_("gantt メモ" if is_memo else f"Hotkey: {hotkey_spec_for_platform()}")
+        self.status_label.setStringValue_("gantt メモ" if is_memo else f"Hotkey: {hotkey_spec_for_platform(mode=self.hotkey_mode)}")
         self._focus_active_screen()
 
     @objc.python_method
@@ -783,7 +834,7 @@ class LauncherDelegate(AppKit.NSObject):
         バックグラウンド検索を実行し、結果更新はメインスレッドへ戻す。
         """
         try:
-            response = self.client.search(query, limit=self.config.search_limit, include_gantt_tasks=self.include_gantt_tasks)
+            response = self.client.search(query, limit=self.config.search_limit, include_gantt_tasks=self.include_gantt_tasks, types=str(self.extension_filter.stringValue()).strip())
         except Exception as error:
             AppHelper.callAfter(self._show_search_error, sequence, str(error))
         else:
@@ -856,8 +907,7 @@ class LauncherDelegate(AppKit.NSObject):
         card.layer().setBorderColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*border).CGColor())
         
         subviews = card.subviews()
-        # 新しいサブビュー順序:
-        # 0: title, 1: path, 2: snippet, 3: invisible_button, 4: copy, 5: finder, 6: folder
+        # サブビュー順序: 0: title, 1: path, 2: snippet, 以降はアイコンと操作ボタン。
         if len(subviews) > 1:
             # Title
             title_color = (1.0, 1.0, 1.0, 1.0) if selected else (0.38, 0.80, 0.98, 1.0) # 選択時は白、非選択時は水色(リンク風)
@@ -883,7 +933,7 @@ class LauncherDelegate(AppKit.NSObject):
         card.layer().setBorderWidth_(1.0)
 
         title_label = AppKit.NSTextField.labelWithString_(item.file_name)
-        title_label.setFrame_(AppKit.NSMakeRect(16, 6, PANEL_WIDTH - 340, 20))
+        title_label.setFrame_(AppKit.NSMakeRect(44, 6, PANEL_WIDTH - 368, 20))
         title_color = (1.0, 1.0, 1.0, 1.0) if selected else (0.38, 0.80, 0.98, 1.0) # 水色でリンクっぽく
         title_label.setTextColor_(AppKit.NSColor.colorWithCalibratedRed_green_blue_alpha_(*title_color))
         title_label.setFont_(AppKit.NSFont.boldSystemFontOfSize_(14))
@@ -906,6 +956,14 @@ class LauncherDelegate(AppKit.NSObject):
         snippet_label.setLineBreakMode_(AppKit.NSLineBreakByTruncatingTail)
         snippet_label.setMaximumNumberOfLines_(1)
         card.addSubview_(snippet_label)
+
+        # タイトル左に同梱 Catppuccin SVG を表示し、拡張子ごとの識別性を高める。
+        icon = AppKit.NSImage.alloc().initWithContentsOfFile_(str(catppuccin_icon_path(item)))
+        if icon is not None:
+            icon_view = AppKit.NSImageView.alloc().initWithFrame_(AppKit.NSMakeRect(16, 7, 20, 20))
+            icon_view.setImage_(icon)
+            icon_view.setImageScaling_(AppKit.NSImageScaleProportionallyUpOrDown)
+            card.addSubview_(icon_view)
 
         # クリック全体を覆う透明ボタンを前面（テキストの上）に配置
         invisible_button = AppKit.NSButton.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, PANEL_WIDTH - 320, 64))
@@ -960,7 +1018,10 @@ class LauncherDelegate(AppKit.NSObject):
                 self.client.open_gantt_task_input(abs(item.file_id))
                 self.hide_panel()
                 return
-            webbrowser.open(primary_web_url_for_item(item, self.web_base_url))
+            if uses_system_file_launcher(item.full_path):
+                open_with_system_file_launcher(item.full_path)
+            else:
+                webbrowser.open(primary_web_url_for_item(item, self.web_base_url))
             if item.result_kind == "file" and item.source_type != "gantt" and item.file_id > 0:
                 query = str(self.search_field.stringValue()).strip() if self.search_field is not None else ""
                 self.client.record_click(item.file_id, query)
@@ -1070,7 +1131,7 @@ def run_native_mac_app(config: LauncherConfig | None = None) -> None:
     delegate._build_panel()
     delegate._start_hotkey_monitor()
     delegate._start_power_state_monitor()
-    delegate.status_label.setStringValue_(f"Hotkey: {hotkey_spec_for_platform()}")
+    delegate.status_label.setStringValue_(f"Hotkey: {hotkey_spec_for_platform(mode=delegate.hotkey_mode)}")
     app.setDelegate_(delegate)
     delegate.show_panel()
     AppHelper.runEventLoop()

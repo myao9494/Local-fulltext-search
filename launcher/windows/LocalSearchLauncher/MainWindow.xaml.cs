@@ -70,7 +70,7 @@ public partial class MainWindow : Window
         {
             Status.Text = "検索中…";
             var limit = ReadNonNegativeInt("LAUNCHER_SEARCH_LIMIT", 8);
-            var response = await _api.SearchAsync(query, Math.Max(1, limit), GanttCheck.IsChecked == true, _searchCancellation.Token);
+            var response = await _api.SearchAsync(query, Math.Max(1, limit), GanttCheck.IsChecked == true, ExtensionBox.Text.Trim(), _searchCancellation.Token);
             Results.ItemsSource = response.Items;
             Results.SelectedIndex = response.Items.Count > 0 ? 0 : -1;
             Status.Text = $"{response.Total} 件　Enterで開く　Tabでganttメモ";
@@ -91,8 +91,12 @@ public partial class MainWindow : Window
             if (_memoActive) SwitchView(false); else _hide();
             return;
         }
-        if (!_memoActive && e.Key == Key.Tab && QueryBox.IsKeyboardFocusWithin)
-        { e.Handled = true; SwitchView(true); return; }
+        if (e.Key == Key.Tab)
+        {
+            e.Handled = true;
+            MoveTabFocus(Keyboard.Modifiers.HasFlag(ModifierKeys.Shift));
+            return;
+        }
         if (!_memoActive && e.Key is Key.Down or Key.Up)
         { e.Handled = true; MoveSelection(e.Key == Key.Down ? 1 : -1); return; }
         if (!_memoActive && e.Key == Key.Enter && (QueryBox.IsKeyboardFocusWithin || Results.IsKeyboardFocusWithin))
@@ -120,7 +124,8 @@ public partial class MainWindow : Window
             else
             {
                 var clickTask = _api.RecordClickAsync(item, QueryBox.Text.Trim());
-                OpenUrl(PrimaryUrl(item));
+                if (UsesSystemFileLauncher(item.FullPath)) OpenFileWithSystemDefault(item.FullPath);
+                else OpenUrl(PrimaryUrl(item));
                 try { await clickTask; } catch { }
             }
             _hide();
@@ -160,6 +165,33 @@ public partial class MainWindow : Window
         FocusActiveView();
     }
 
+    /// <summary>検索欄、拡張子欄、ganttメモ主要入力をTab/Shift+Tabで循環する。</summary>
+    private void MoveTabFocus(bool backwards)
+    {
+        if (!_memoActive)
+        {
+            if (backwards && ExtensionBox.IsKeyboardFocusWithin) QueryBox.Focus();
+            else if (backwards) { SwitchView(true); MemoSubmit.Focus(); }
+            else if (QueryBox.IsKeyboardFocusWithin) ExtensionBox.Focus();
+            else SwitchView(true);
+            return;
+        }
+        if (MemoTitle.IsKeyboardFocusWithin)
+        {
+            if (backwards) { SwitchView(false); ExtensionBox.Focus(); }
+            else MemoBody.Focus();
+        }
+        else if (MemoBody.IsKeyboardFocusWithin)
+        {
+            if (backwards) MemoTitle.Focus(); else MemoSubmit.Focus();
+        }
+        else if (MemoSubmit.IsKeyboardFocusWithin)
+        {
+            if (backwards) MemoBody.Focus(); else { SwitchView(false); QueryBox.Focus(); }
+        }
+        else MemoTitle.Focus();
+    }
+
     private async Task RefreshParentAsync()
     {
         try { _ganttParent = await _api.GetGanttParentAsync(_ganttParent); }
@@ -191,6 +223,13 @@ public partial class MainWindow : Window
     private static string WebBase() => LauncherUrls.OpenHubBase();
     private static string ApiBase() => (Environment.GetEnvironmentVariable("LAUNCHER_API_BASE_URL") ?? "http://127.0.0.1:8079").TrimEnd('/');
     private static void OpenUrl(string url) => Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+    private static bool UsesSystemFileLauncher(string path) => new[] { ".py", ".bat", ".exe", ".lnk" }.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
+    /// <summary>スクリプト・実行ファイル・ショートカットを親フォルダをcurrent dirとして起動する。</summary>
+    private static void OpenFileWithSystemDefault(string path) => Process.Start(new ProcessStartInfo(path)
+    {
+        UseShellExecute = true,
+        WorkingDirectory = Path.GetDirectoryName(path) ?? Environment.CurrentDirectory,
+    });
     private bool TryOpenUrl(string url)
     {
         try { OpenUrl(url); return true; }

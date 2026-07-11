@@ -9,10 +9,12 @@ import time
 from typing import Any
 
 
-def hotkey_spec_for_platform(system_name: str | None = None) -> str:
+def hotkey_spec_for_platform(system_name: str | None = None, mode: str = "command_option") -> str:
     """
     OS ごとの仕様に合う表示用ホットキー名を返す。
     """
+    if mode == "double_shift":
+        return "Shift × 2"
     name = system_name or platform.system()
     if name == "Darwin":
         return "Command + Option"
@@ -120,6 +122,7 @@ class GlobalHotkeyController:
         modifier_state_verifier: Callable[[frozenset[str]], bool] | None = None,
         on_enter: Callable[[], None] | None = None,
         enter_enabled: Callable[[], bool] | None = None,
+        mode: str = "command_option",
     ) -> None:
         self.on_activate = on_activate
         self.hotkey = hotkey or hotkey_spec_for_platform()
@@ -128,6 +131,9 @@ class GlobalHotkeyController:
         self.modifier_state_verifier = modifier_state_verifier or _required_modifiers_are_physically_down
         self.on_enter = on_enter
         self.enter_enabled = enter_enabled or (lambda: True)
+        self.mode = mode
+        self._shift_down = False
+        self._first_shift_released_at = 0.0
         self._pressed_modifiers: set[str] = set()
         self._enter_pressed = False
         self._listener: Any | None = None
@@ -169,6 +175,12 @@ class GlobalHotkeyController:
         pynput のキー押下イベントを修飾キー名と Enter へ正規化して発火判定する。
         """
         modifier_name = _modifier_name(key)
+        if self.mode == "double_shift":
+            if modifier_name == "shift" and not self._shift_down:
+                self._shift_down = True
+            elif modifier_name is None:
+                self._first_shift_released_at = 0.0
+            return
         if modifier_name is not None:
             self._pressed_modifiers.add(modifier_name)
         if _is_enter_key(key):
@@ -185,6 +197,16 @@ class GlobalHotkeyController:
         pynput のキー解除イベントを修飾キー名へ正規化して状態を戻す。
         """
         modifier_name = _modifier_name(key)
+        if self.mode == "double_shift":
+            if modifier_name == "shift" and self._shift_down:
+                self._shift_down = False
+                now = time.monotonic()
+                if self._first_shift_released_at and now - self._first_shift_released_at <= 0.4:
+                    self._first_shift_released_at = 0.0
+                    self.on_activate()
+                else:
+                    self._first_shift_released_at = now
+            return
         if modifier_name is not None:
             self._pressed_modifiers.discard(modifier_name)
         if _is_enter_key(key):

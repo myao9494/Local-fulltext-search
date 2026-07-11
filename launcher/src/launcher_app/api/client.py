@@ -49,11 +49,12 @@ class LauncherApiClient:
         self.timeout = timeout
         self._urlopen = urlopen
 
-    def search(self, query: str, *, limit: int = 8, include_gantt_tasks: bool = False) -> SearchResponse:
+    def search(self, query: str, *, limit: int = 8, include_gantt_tasks: bool = False, types: str = "") -> SearchResponse:
         """
         gantt 選択時は通常検索に gantt タスク結果も追加する。
         """
         is_mac = platform.system() == "Darwin"
+        normalized_types = types.strip()
         
         if include_gantt_tasks and not is_mac:
             endpoint = "/api/search"
@@ -100,6 +101,8 @@ class LauncherApiClient:
                 "offset": 0,
             }
 
+        if normalized_types:
+            payload["types"] = normalized_types
         response = self._request_json(endpoint, payload)
         return SearchResponse(
             total=int(response.get("total", 0)),

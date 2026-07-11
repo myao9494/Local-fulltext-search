@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="16px" viewBox="0 0 16 16" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>javascript</title>
+    <g id="javascript" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <path d="M4.5,11 C4.5,11.8284271 5.17157288,12.5 6,12.5 C6.82842712,12.5 7.5,11.8284271 7.5,11 L7.5,7" id="Path" stroke="#DF8E1D"></path>
+        <path d="M12.5,8.75 C12.5,8.05964406 11.9627417,7.5 11.3,7.5 L10.7,7.5 C10.0372583,7.5 9.5,8.05964406 9.5,8.75 C9.5,9.44035594 10.0372583,10 10.7,10 L11.3,10 C11.9627417,10 12.5,10.5596441 12.5,11.25 C12.5,11.9403559 11.9627417,12.5 11.3,12.5 L10.7,12.5 C10.0372583,12.5 9.5,11.9403559 9.5,11.25" id="Path" stroke="#DF8E1D" stroke-linecap="round" stroke-linejoin="round"></path>
+        <rect id="Path" stroke="#DF8E1D" x="1.5" y="1.5" width="13" height="13" rx="2.5"></rect>
+    </g>
+</svg>

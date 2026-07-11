@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="16px" viewBox="0 0 16 16" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>csv</title>
+    <g id="csv" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <path d="M1.5,3.5 C1.5,2.95527281 1.98168958,2.5 2.57575055,2.5 L6.5,2.5 L8.04481152,3.495888 L13.4241124,3.495888 C14.0183104,3.495888 14.5,3.93742481 14.5,4.482152 L14.410377,13.518362 C14.410377,14.0630892 13.9286874,14.504626 13.3346264,14.504626 L2.57575055,14.504626 C1.98168958,14.504626 1.5,14.0630892 1.5,13.518362 L1.5,3.5 Z" id="Path" stroke="#40A02B"></path>
+        <path d="M3.5,7.5 L3.5,11.5 M6.5,7.5 L6.5,11.5 M9.5,7.5 L9.5,11.5 M12.5,7.5 L12.5,11.5 M3.5,11.5 L12.5,11.5 M3.5,9.5 L12.5,9.5 M3.5,7.5 L12.5,7.5" id="Shape" stroke="#40A02B" stroke-linecap="round" stroke-linejoin="round"></path>
+    </g>
+</svg>

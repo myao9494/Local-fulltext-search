@@ -3,9 +3,30 @@
 """
 
 import os
+import platform
+import subprocess
 from urllib.parse import quote
 
 from launcher_app.models import SearchResultItem
+
+SYSTEM_LAUNCH_EXTENSIONS = frozenset({".py", ".bat", ".exe", ".lnk"})
+
+
+def uses_system_file_launcher(path: str) -> bool:
+    """スクリプト・実行ファイル・ショートカットはOpenハブを経由せずOSで起動する。"""
+    return os.path.splitext(path)[1].lower() in SYSTEM_LAUNCH_EXTENSIONS
+
+
+def open_with_system_file_launcher(path: str) -> None:
+    """指定スクリプトを親フォルダをcurrent dirとしてOS既定の関連付けで起動する。"""
+    working_directory = os.path.dirname(path) or os.getcwd()
+    if platform.system() == "Windows":
+        # start の /d は関連付け先（Python等）の current dir を明示できる。
+        subprocess.Popen(["cmd", "/c", "start", "", "/d", working_directory, path])
+    elif platform.system() == "Darwin":
+        subprocess.Popen(["open", path], cwd=working_directory)
+    else:
+        subprocess.Popen(["xdg-open", path], cwd=working_directory)
 
 
 def folder_path_for_item(item: SearchResultItem) -> str:

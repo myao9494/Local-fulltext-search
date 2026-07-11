@@ -16,13 +16,15 @@ import threading
 import time
 from typing import Any
 import webbrowser
+from pathlib import Path
 
 from launcher_app.api.client import LauncherApiClient, LauncherApiError
 from launcher_app.config import LauncherConfig
+from launcher_app.file_icons import catppuccin_icon_name
 from launcher_app.gantt_task import build_gantt_task_payload, normalize_parent_id
 from launcher_app.models import SearchResultItem
 from launcher_app.services.hotkeys import GlobalHotkeyController, hotkey_spec_for_platform
-from launcher_app.ui.urls import folder_path_for_item, folder_web_url_for_item, primary_web_url_for_item
+from launcher_app.ui.urls import folder_path_for_item, folder_web_url_for_item, open_with_system_file_launcher, primary_web_url_for_item, uses_system_file_launcher
 from launcher_app.utils import strip_html
 
 logger = logging.getLogger(__name__)
@@ -45,7 +47,10 @@ def run_app(config: LauncherConfig | None = None) -> None:
         gantt_api_base_url=app_config.gantt_api_base_url,
         timeout=app_config.request_timeout,
     )
-    ft.app(target=lambda page: LauncherApp(page, client, app_config).build())
+    ft.app(
+        target=lambda page: LauncherApp(page, client, app_config).build(),
+        assets_dir=str(Path(__file__).parent.parent / "assets"),
+    )
 
 
 class LauncherApp:
@@ -73,6 +78,11 @@ class LauncherApp:
         self.gantt_parent = config.gantt_parent
         self._suppress_render_focus = False
         self._query_focused = False
+        self._extension_filter_focused = False
+        try:
+            self.hotkey_mode = str(client.get_app_settings().get("launcher_hotkey", "command_option"))
+        except LauncherApiError:
+            self.hotkey_mode = "command_option"
         self._arrow_navigated = False
 
     def build(self) -> None:
@@ -97,6 +107,18 @@ class LauncherApp:
             on_focus=lambda event: self._set_query_focus(True),
             on_blur=lambda event: self._set_query_focus(False),
             on_submit=self._on_query_submit,
+        )
+        self.extension_filter = ft.TextField(
+            width=130,
+            border=ft.InputBorder.NONE,
+            hint_text=".md, .py",
+            tooltip="拡張子（カンマまたは空白区切り）",
+            text_style=ft.TextStyle(size=15, color="#e5eefc", font_family="Inter"),
+            hint_style=ft.TextStyle(size=14, color="#64748b", font_family="Inter"),
+            cursor_color="#60a5fa",
+            on_change=self._on_extension_filter_change,
+            on_focus=lambda event: self._set_extension_filter_focus(True),
+            on_blur=lambda event: self._set_extension_filter_focus(False),
         )
         self.status = ft.Text("", color="#94a3b8", size=12)
         self.memo_status = ft.Text("", color="#94a3b8", size=12)
@@ -182,6 +204,7 @@ class LauncherApp:
                     controls=[
                         ft.Icon(ft.Icons.SEARCH_ROUNDED, color="#60a5fa", size=30),
                         ft.Container(expand=True, content=self.query),
+                        self.extension_filter,
                         self.gantt_toggle,
                         self.clear_button,
                         self.gui_button,
@@ -266,9 +289,10 @@ class LauncherApp:
             self.toggle_window,
             on_enter=self._handle_global_enter_fallback,
             enter_enabled=self._global_enter_enabled,
+            mode=self.hotkey_mode,
         )
         if self.hotkeys.start():
-            self.status.value = f"Hotkey: {hotkey_spec_for_platform()}"
+            self.status.value = f"Hotkey: {hotkey_spec_for_platform(mode=self.hotkey_mode)}"
         else:
             self.status.value = "pynput が未導入のため、ウィンドウ表示中のキー操作のみ有効です。"
         self.page.update()
@@ -397,6 +421,10 @@ class LauncherApp:
         self.search_timer.daemon = True
         self.search_timer.start()
 
+    def _on_extension_filter_change(self, event: Any) -> None:
+        """拡張子フィルタ変更時は現在の検索語で再検索する。"""
+        self._on_query_change(type("Event", (), {"control": self.query})())
+
     def _clear_search(self) -> None:
         """
         検索語・結果・選択状態を初期化して入力欄へフォーカスを戻す。
@@ -417,7 +445,12 @@ class LauncherApp:
         バックグラウンドで API 検索を実行し、UI 更新はメインスレッドへ戻す。
         """
         try:
-            response = self.client.search(query, limit=self.config.search_limit, include_gantt_tasks=self.include_gantt_tasks)
+            extension_filter = getattr(self, "extension_filter", None)
+            types = str(getattr(extension_filter, "value", "") or "").strip()
+            search_options: dict[str, Any] = {"limit": self.config.search_limit, "include_gantt_tasks": self.include_gantt_tasks}
+            if types:
+                search_options["types"] = types
+            response = self.client.search(query, **search_options)
         except Exception as error:
             logger.exception("Launcher search failed: query=%r api_base_url=%s", query, self.config.api_base_url)
             if sequence != self.search_sequence:
@@ -487,7 +520,7 @@ class LauncherApp:
                 spacing=12,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 controls=[
-                    ft.Icon(self._icon_for_item(item), color="#bfdbfe" if selected else "#94a3b8", size=22),
+                    ft.Image(src=f"catppuccin/{catppuccin_icon_name(item)}", width=22, height=22, fit=ft.ImageFit.CONTAIN),
                     ft.Column(
                         expand=True,
                         spacing=2,
@@ -533,13 +566,7 @@ class LauncherApp:
             else:
                 self._hide_window()
         elif key == "Tab":
-            if self.active_screen == "memo":
-                if getattr(event, "shift", False):
-                    self._focus_previous_memo_control()
-                else:
-                    self._focus_next_memo_control()
-            else:
-                self._switch_screen("memo")
+            self._move_tab_focus(backward=bool(getattr(event, "shift", False)))
         elif key == "Arrow Down":
             self._move_selection(1)
         elif key == "Arrow Up":
@@ -566,6 +593,10 @@ class LauncherApp:
         検索欄が IME の Enter 確定対象か判定するため、フォーカス状態を保持する。
         """
         self._query_focused = focused
+
+    def _set_extension_filter_focus(self, focused: bool) -> None:
+        """拡張子欄のTab循環位置を保持する。"""
+        self._extension_filter_focused = focused
 
     def _on_query_submit(self, event: Any) -> None:
         """
@@ -628,22 +659,41 @@ class LauncherApp:
         elif self.memo_focused_control == "body":
             self._run_window_task(self.memo_submit_button.focus)
         elif self.memo_focused_control == "submit":
-            self._run_window_task(self.memo_cancel_button.focus)
-        elif self.memo_focused_control == "cancel":
-            self._run_window_task(self.memo_title_field.focus)
+            self._switch_screen("search")
 
     def _focus_previous_memo_control(self) -> None:
         """
         gantt メモ画面で前のコントロールへフォーカスを戻す。
         """
         if self.memo_focused_control == "title":
-            self._run_window_task(self.memo_cancel_button.focus)
+            self._switch_screen("search")
+            self._run_window_task(self.extension_filter.focus)
         elif self.memo_focused_control == "body":
             self._run_window_task(self.memo_title_field.focus)
         elif self.memo_focused_control == "submit":
             self._run_window_task(self.memo_body_field.focus)
         elif self.memo_focused_control == "cancel":
             self._run_window_task(self.memo_submit_button.focus)
+
+    def _move_tab_focus(self, *, backward: bool) -> None:
+        """検索欄、拡張子欄、ganttメモ主要入力を指定順で循環させる。"""
+        if self.active_screen == "search":
+            if backward:
+                if self._extension_filter_focused:
+                    self._run_window_task(self.query.focus)
+                else:
+                    self._switch_screen("memo")
+                    self.memo_focused_control = "submit"
+                    self._run_window_task(self.memo_submit_button.focus)
+            elif self._query_focused:
+                self._run_window_task(self.extension_filter.focus)
+            else:
+                self._switch_screen("memo")
+            return
+        if backward:
+            self._focus_previous_memo_control()
+        else:
+            self._focus_next_memo_control()
 
     def _submit_memo(self) -> None:
         """
@@ -797,7 +847,10 @@ class LauncherApp:
             open_url = primary_web_url_for_item(item, self.config.web_base_url)
             if self._is_duplicate_open_request(open_url):
                 return
-            webbrowser.open(open_url)
+            if uses_system_file_launcher(item.full_path):
+                open_with_system_file_launcher(item.full_path)
+            else:
+                webbrowser.open(open_url)
             if item.result_kind == "file" and item.source_type != "gantt" and item.file_id > 0:
                 query_control = getattr(self, "query", None)
                 query = str(getattr(query_control, "value", "") or "").strip()
@@ -933,18 +986,6 @@ class LauncherApp:
 
         return platform.system()
 
-
-
-    @staticmethod
-    def _icon_for_item(item: SearchResultItem) -> Any:
-        """
-        結果種別に合う Flet アイコンを返す。
-        """
-        import flet as ft
-
-        if item.result_kind == "folder":
-            return ft.Icons.FOLDER_ROUNDED
-        return ft.Icons.DESCRIPTION_ROUNDED
 
 
 def _log_task_error(future: Any) -> None:

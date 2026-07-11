@@ -716,8 +716,19 @@ h1, h2, h3 {
 }
 
 .result-file-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   color: inherit;
   text-decoration: none;
+}
+
+/* Catppuccin の種別アイコンをファイル名と同じベースラインで表示する。 */
+.result-file-icon {
+  width: 1.28em;
+  height: 1.28em;
+  flex: 0 0 auto;
+  object-fit: contain;
 }
 
 .result-file-link:hover {

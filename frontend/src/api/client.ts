@@ -102,6 +102,7 @@ export async function updateAppSettings(payload: {
   synonym_groups?: string;
   obsidian_sidebar_explorer_data_path?: string;
   gantt_parent?: number;
+  launcher_hotkey?: "command_option" | "double_shift";
   index_selected_extensions?: string;
   custom_content_extensions?: string;
   custom_filename_extensions?: string;

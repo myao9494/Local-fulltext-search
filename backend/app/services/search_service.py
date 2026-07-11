@@ -502,6 +502,7 @@ class SearchService:
             refresh_window_minutes=0,
             limit=params.limit,
             offset=params.offset,
+            types=params.types,
         )
         return self._execute_search(
             params=search_params,

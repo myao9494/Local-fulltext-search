@@ -12,4 +12,7 @@
     <AssemblyName>LocalSearchLauncher</AssemblyName>
     <RootNamespace>LocalSearchLauncher</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <Content Include="Assets\\catppuccin\\*.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

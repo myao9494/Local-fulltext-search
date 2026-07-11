@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="16px" height="16px" viewBox="0 0 16 16" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>audio</title>
+    <g id="audio" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <circle id="Oval" stroke="#D20F39" cx="8" cy="8" r="6.5"></circle>
+        <path d="M8.49965835,9.96766326 C8.48245335,9.15416718 7.81762114,8.5 7,8.5 C6.17157288,8.5 5.5,9.17157288 5.5,10 C5.5,10.8284271 6.17157288,11.5 7,11.5 C7.82842712,11.5 8.5,10.8284271 8.5,10 L8.5,4.5 L11,6" id="Path" stroke="#D20F39" stroke-linecap="round" stroke-linejoin="round"></path>
+    </g>
+</svg>
