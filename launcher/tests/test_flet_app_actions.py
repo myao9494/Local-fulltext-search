@@ -336,16 +336,16 @@ def test_open_folder_url_uses_web_folder_link(monkeypatch: Any) -> None:
     assert opened_urls == ["http://localhost:8001/?path=C%3A%2Fdocs"]
 
 
-def test_open_gui_uses_configured_open_hub(monkeypatch: Any) -> None:
-    """GUIボタンも8079ではなく設定済みOpen/UIハブを開く。"""
+def test_open_gui_uses_search_web_app(monkeypatch: Any) -> None:
+    """GUIボタンは外部Openハブではなく8079の検索Web画面を開く。"""
     opened_urls: list[str] = []
-    app = LauncherApp(StubPage(), StubClient(), LauncherConfig(web_base_url="http://127.0.0.1:8001"))  # type: ignore[arg-type]
+    app = LauncherApp(StubPage(), StubClient(), LauncherConfig(api_base_url="http://127.0.0.1:8079"))  # type: ignore[arg-type]
     app._hide_window = lambda: None  # type: ignore[method-assign]
     monkeypatch.setattr("webbrowser.open", lambda url: opened_urls.append(url))
 
     app._open_gui_url()
 
-    assert opened_urls == ["http://127.0.0.1:8001/"]
+    assert opened_urls == ["http://127.0.0.1:8079/"]
 
 
 def test_move_selection_scrolls_to_selected_result() -> None:

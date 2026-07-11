@@ -892,9 +892,9 @@ class LauncherApp:
 
     def _open_gui_url(self) -> None:
         """
-        Open/UIハブの Web GUI を既定ブラウザで開く。
+        8079の検索 Web GUI を既定ブラウザで開く。
         """
-        webbrowser.open(f"{self.config.web_base_url.rstrip('/')}/")
+        webbrowser.open(f"{self.config.api_base_url.rstrip('/')}/")
         self._hide_window()
 
     def _on_gantt_toggle_change(self, event: Any) -> None:

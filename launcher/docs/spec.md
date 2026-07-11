@@ -62,6 +62,7 @@ launcher/
     - **macOS**: `/api/search` を使い、登録済みフォルダを検索時に順次更新する (`skip_refresh=false`, `search_all_enabled=false`)。
     - **その他 OS**: `/api/search/indexed` を使い、更新チェックをスキップして既存インデックスのみから高速に検索する。
 - 検索結果タイトル相当のクリックは `LAUNCHER_WEB_BASE_URL` を基準に、ファイルでは `/api/fullpath?path=...`、フォルダでは `/?path=...` を既定ブラウザで開く。
+- `GUI`ボタンは外部8001ではなく、`LAUNCHER_API_BASE_URL`を基準に8079の検索Web画面を開く。
 - ファイル結果を開いた場合は Web アプリと同じく `/api/search/click` でアクセス数を更新する。
 - `Finderで開く` / `保存場所` は Web アプリと同じく `/api/files/open-location` を呼ぶ。フォルダ、パスコピー、ganttリンク、ganttメモ関連UIはFlet/PyObjC/WPF版で提供する。
 - macOS では `NSWindowCollectionBehaviorCanJoinAllSpaces` により、アクティブな仮想デスクトップ上へ表示する。
@@ -104,7 +105,7 @@ python run.py
 
 環境変数:
 - `LAUNCHER_API_BASE_URL`: 接続先 API。既定値は `http://127.0.0.1:8079`。
-- `LAUNCHER_WEB_BASE_URL`: primary openに使うOpen/UIハブURL。既定値は `http://127.0.0.1:8001`。互換性のため変数名は維持する。
+- `LAUNCHER_WEB_BASE_URL`: primary openに使う外部アプリの既存OpenハブURL。既定値は `http://127.0.0.1:8001`。このリポジトリは8001を起動・停止・再実装しない。
 - `LAUNCHER_GANTT_API_BASE_URL`: メモ画面からタスクを作成する gantt API。既定値は `http://localhost:8000/api`。
 - `LAUNCHER_GANTT_PARENT`: Web 共有設定の取得に失敗した場合だけ使う gantt parent ID のフォールバック。既定値は `0`。
 - `LAUNCHER_SEARCH_LIMIT`: ランチャーに表示する検索結果数。既定値は `8`。
@@ -112,7 +113,6 @@ python run.py
 - `SEARCH_APP_LAUNCHER_AUTOSTART`: バックエンド起動時にランチャーも起動するか。`backend/run.py` と `start_dev.sh` では既定で `1`。
 - `SEARCH_APP_WPF_LAUNCHER_PATH`: Windows WPF版EXEを標準の発行先以外へ配置する場合の絶対パス。指定された実在ファイルを最優先する。
 - `SEARCH_APP_LAUNCHER_LOG_NAME`: ランチャーログファイル名。既定値は `launcher.log`。
-- `SEARCH_APP_OPEN_HUB_HOST` / `SEARCH_APP_OPEN_HUB_PORT`: Open/UIハブのbind。既定値は`127.0.0.1:8001`。
 
 通信・ログ:
 - ランチャーから `LAUNCHER_API_BASE_URL` へのローカル HTTP 通信では、会社環境の `HTTP_PROXY` / `HTTPS_PROXY` による誤転送を避けるためプロキシを使用しない。

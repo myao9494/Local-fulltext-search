@@ -86,11 +86,11 @@
 
 - **詳細は `launcher/docs/spec.md` 参照。**
 
-## Open/UIハブ
-- **8001**: 検索結果を開く固定入口とWeb UIを提供するOpen/UIハブ。ローカルファイルは`/api/fullpath?path=...`でOS既定アプリを起動し、フォルダは`/?path=...`で検索UIを表示する。
+## 外部Open/UIハブ
+- **8001**: 別の必要アプリが提供する既存Openハブ。このリポジトリでは実装・起動・停止・監視・プロキシを行わない。
 - **8079**: 検索・設定・click記録・`open-location`などのSearch/API面。primary openの入口にはしない。
-- ランチャーとWebクライアントは同じOpenハブbaseとpath規則を使い、DNS無し環境では`127.0.0.1`または固定IPだけを差し替える。
-- `backend/run.py`は8001ハブを別プロセスで自動起動する。詳細は`docs/open_hub.md`参照。
+- ランチャーとWebクライアントは外部8001の既存`/api/fullpath?path=...`と`/?path=...`へ従来どおり送る。8001停止時は接続エラーでよく、8079へフォールバックしない。
+- DNS無し環境では`127.0.0.1`または固定IPだけを差し替える。詳細は`docs/open_hub.md`参照。
 
 ### Windows WPF ランチャー
 - **フォルダ**: `launcher/windows/`。Windows x64 / .NET 8 WPFで、外部NuGet依存なし。

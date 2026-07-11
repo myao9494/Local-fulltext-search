@@ -149,7 +149,7 @@ public partial class MainWindow : Window
     { if ((sender as FrameworkElement)?.DataContext is SearchItem item) TryOpenUrl(FolderUrl(item)); }
     private void OpenGanttLink_Click(object sender, RoutedEventArgs e)
     { if ((sender as FrameworkElement)?.DataContext is SearchItem { GanttLink: not null } item) TryOpenUrl(item.GanttLink); }
-    private void OpenGui_Click(object sender, RoutedEventArgs e) { if (TryOpenUrl($"{WebBase()}/")) _hide(); }
+    private void OpenGui_Click(object sender, RoutedEventArgs e) { if (TryOpenUrl($"{ApiBase()}/")) _hide(); }
 
     private void SwitchView(bool memo)
     {
@@ -189,6 +189,7 @@ public partial class MainWindow : Window
     private string FolderUrl(SearchItem item) => $"{WebBase()}/?path={Uri.EscapeDataString(item.ResultKind == "folder" ? item.FullPath : ParentPath(item.FullPath))}";
     private static string ParentPath(string path) => Path.GetDirectoryName(path) ?? path;
     private static string WebBase() => LauncherUrls.OpenHubBase();
+    private static string ApiBase() => (Environment.GetEnvironmentVariable("LAUNCHER_API_BASE_URL") ?? "http://127.0.0.1:8079").TrimEnd('/');
     private static void OpenUrl(string url) => Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
     private bool TryOpenUrl(string url)
     {

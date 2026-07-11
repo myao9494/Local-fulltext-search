@@ -45,7 +45,7 @@ Node.js / npm は、フロントエンドを再ビルドするときだけ必要
 - `frontend/node_modules` がなければ `npm install` する
 - `frontend/dist/` を再ビルドする
 - バックエンドを `0.0.0.0:8079` で起動する
-- Open/UIハブを `127.0.0.1:8001` で子プロセス起動する
+- 外部Openハブの8001は起動・停止しない
 
 ### 2. `python run.py`
 
@@ -65,7 +65,7 @@ Node.js / npm は、フロントエンドを再ビルドするときだけ必要
 
 - `frontend/dist/` が存在すれば FastAPI からそのまま配信する
 - 既定では `127.0.0.1:8079` で起動する
-- 8001のOpen/UIハブを別プロセスで自動起動し、Web UIとprimary openの入口にする
+- primary openは別アプリが提供する既存8001へ送り、このプロセスからは管理しない
 - 必要なら `SEARCH_APP_HOST` と `SEARCH_APP_PORT` で上書きできる
 - `backend/run.py` は既定で `SEARCH_APP_LAUNCHER_AUTOSTART=1` を設定し、ランチャーを子プロセスとして起動する。Windowsでは発行済みWPF通常版、WPF single-file版、Python/Flet版の順に選ぶ
 - WPF版EXEを標準の `launcher/windows/publish/` 以外へ置く場合は、`SEARCH_APP_WPF_LAUNCHER_PATH` に絶対パスを指定する
@@ -89,10 +89,10 @@ cd backend
 
 既定のアクセス先:
 
-- Web/Open: `http://127.0.0.1:8001/`
-- Search/API: `http://127.0.0.1:8079/`
+- Web/Search API: `http://127.0.0.1:8079/`
+- 外部Openハブ（別アプリ）: `http://127.0.0.1:8001/`
 
-ランチャーは`LAUNCHER_API_BASE_URL=http://127.0.0.1:8079`で検索し、`LAUNCHER_WEB_BASE_URL=http://127.0.0.1:8001`で結果を開く。DNS無し環境と別端末の固定IP例、Open契約、障害切り分けは[`open_hub.md`](open_hub.md)を参照する。
+ランチャーは`LAUNCHER_API_BASE_URL=http://127.0.0.1:8079`で検索し、`LAUNCHER_WEB_BASE_URL=http://127.0.0.1:8001`で外部Openハブへ結果を送る。8001は別アプリが事前に起動している前提であり、このリポジトリの起動スクリプトは8001を停止・起動しない。詳細は[`open_hub.md`](open_hub.md)を参照する。
 
 ## Windows ランチャーの完全オフライン起動
 
@@ -119,7 +119,7 @@ python run.py
 
 外部アプリから特定フォルダと検索語を渡して開く場合:
 
-- `http://127.0.0.1:8001/?q=見積&full_path=%2FUsers%2Fmine%2FDocuments&index_depth=2`
+- `http://127.0.0.1:8079/?q=見積&full_path=%2FUsers%2Fmine%2FDocuments&index_depth=2`
 - `q` と `full_path` の両方があると初回表示時に自動検索する
 - `search_all=1` を付けると、`full_path` が空でも初回に全 DB 検索を実行できる
 - `index_depth` を省略した場合は `1`
@@ -147,8 +147,8 @@ $env:SEARCH_APP_PORT="8079"
 
 `backend/run.py` の既定値:
 
-- Search/API: `127.0.0.1:8079`
-- Open/UIハブ: `127.0.0.1:8001`
+- Web/Search API: `127.0.0.1:8079`
+- 外部Openハブ: `127.0.0.1:8001`（別アプリが管理。本リポジトリはポート操作しない）
 - DB 保存先: 起動ディレクトリに依存せず `backend/data/search.db`
 
 ## 保存されるファイル

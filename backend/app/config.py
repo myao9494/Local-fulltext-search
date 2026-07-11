@@ -38,10 +38,6 @@ class Settings(BaseModel):
     frontend_dist_dir: Path = Path(os.getenv("SEARCH_APP_FRONTEND_DIST_DIR", str(PROJECT_ROOT_DIR / "frontend" / "dist")))
     launcher_autostart: bool = os.getenv("SEARCH_APP_LAUNCHER_AUTOSTART", "0").strip().lower() in {"1", "true", "yes", "on"}
     launcher_log_name: str = os.getenv("SEARCH_APP_LAUNCHER_LOG_NAME", "launcher.log")
-    open_hub_host: str = os.getenv("SEARCH_APP_OPEN_HUB_HOST", "127.0.0.1")
-    open_hub_port: int = int(os.getenv("SEARCH_APP_OPEN_HUB_PORT", "8001"))
-    open_hub_autostart: bool = os.getenv("SEARCH_APP_OPEN_HUB_AUTOSTART", "0").strip().lower() in {"1", "true", "yes", "on"}
-    open_hub_log_name: str = os.getenv("SEARCH_APP_OPEN_HUB_LOG_NAME", "open_hub.log")
     gantt_api_base_url: str = os.getenv("SEARCH_APP_GANTT_API_BASE_URL", "http://localhost:8000/api")
 
     @field_validator("data_dir", "frontend_dist_dir", mode="before")
@@ -72,7 +68,6 @@ class Settings(BaseModel):
         "custom_content_extensions_name",
         "custom_filename_extensions_name",
         "launcher_log_name",
-        "open_hub_log_name",
     )
     @classmethod
     def _validate_file_name(cls, value: str) -> str:
@@ -144,10 +139,5 @@ class Settings(BaseModel):
     @property
     def launcher_log_path(self) -> Path:
         return (BACKEND_DIR / self.launcher_log_name).resolve()
-
-    @property
-    def open_hub_log_path(self) -> Path:
-        return (BACKEND_DIR / self.open_hub_log_name).resolve()
-
 
 settings = Settings()

@@ -60,7 +60,7 @@ function fallbackCopyTextToClipboard(text: string): boolean {
 
 /**
  * 検索結果クリック時に使う Web アプリ側のベース URL を返す。
- * 検索結果の遷移先は OS や起動元にかかわらず Web フロントの 8001 番を正とする。
+ * ローカル検索結果の遷移先は、別アプリが提供する既存8001 Openハブを正とする。
  */
 function getWebAppBaseUrl(): string {
   return ((import.meta as ImportMeta & { env?: { VITE_OPEN_HUB_BASE_URL?: string } }).env?.VITE_OPEN_HUB_BASE_URL ?? "http://127.0.0.1:8001").replace(/\/+$/, "");

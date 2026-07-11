@@ -21,7 +21,7 @@ var state = new LauncherWindowState("query", "title", "body", true, true);
 Assert(state.MemoActive && state.IncludeGantt && state.MemoTitle == "title", "ウィンドウ再生成用の入力状態を保持する");
 
 Environment.SetEnvironmentVariable("LAUNCHER_WEB_BASE_URL", "http://127.0.0.1:8123/");
-Assert(LauncherUrls.OpenHubBase() == "http://127.0.0.1:8123", "GUIと結果openは同じ設定済みOpenハブを使う");
+Assert(LauncherUrls.OpenHubBase() == "http://127.0.0.1:8123", "結果openは設定済みの外部Openハブを使う");
 Environment.SetEnvironmentVariable("LAUNCHER_WEB_BASE_URL", null);
 
 Console.WriteLine("LocalSearchLauncher tests passed");

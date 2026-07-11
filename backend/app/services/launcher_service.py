@@ -49,7 +49,7 @@ class LauncherManager:
         existing_pythonpath = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = f"{self.launcher_src}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else str(self.launcher_src)
         env.setdefault("LAUNCHER_API_BASE_URL", f"http://127.0.0.1:{settings.bind_port}")
-        env.setdefault("LAUNCHER_WEB_BASE_URL", f"http://127.0.0.1:{settings.open_hub_port}")
+        env.setdefault("LAUNCHER_WEB_BASE_URL", "http://127.0.0.1:8001")
         self.wpf_executable = self._wpf_resolver()
         command = (
             [str(self.wpf_executable)]
