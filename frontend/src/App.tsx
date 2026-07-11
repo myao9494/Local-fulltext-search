@@ -100,7 +100,7 @@ const DEFAULT_EXCLUDE_KEYWORDS = [
 const DEFAULT_SYNONYM_GROUPS = "";
 const DEFAULT_SEARCH_FILTER_TEXT = "";
 
-type PageView = "search" | "indexed-targets" | "search-targets" | "scheduler" | "launcher" | "indexed-web-targets";
+type PageView = "search" | "indexed-targets" | "search-targets" | "scheduler" | "launcher" | "indexed-web-targets" | "rule-management";
 type SearchSource = "local" | "web";
 type SearchTarget = "all" | "body" | "filename" | "folder" | "filename_and_folder";
 type SearchExecutionParams = {
@@ -127,6 +127,12 @@ type PendingAutoRefresh = {
   baselineLastFinishedAt: string | null;
   hasObservedRunning: boolean;
 };
+type RuleSnapshot = {
+  excludeKeywords: string;
+  synonymGroups: string;
+};
+type RuleKind = "exclude" | "synonym";
+type RuleContextMenu = { kind: RuleKind; item: string; x: number; y: number };
 
 /**
  * datetime-local 入出力用に ISO 文字列をローカル日時へ丸める。
@@ -347,6 +353,10 @@ function App() {
   const [searchSource, setSearchSource] = useState<SearchSource>("local");
   const [includeGanttTasks, setIncludeGanttTasks] = useState(false);
   const [isRegexEnabled, setIsRegexEnabled] = useState(() => localStorage.getItem("regex_enabled") === "true");
+  const [uiZoom, setUiZoom] = useState(() => {
+    const saved = Number(localStorage.getItem("ui_zoom") ?? "100");
+    return Number.isFinite(saved) ? Math.min(125, Math.max(75, saved)) : 100;
+  });
   const [refreshWindowMinutes, setRefreshWindowMinutes] = useState(() => localStorage.getItem("refresh_window_minutes") ?? "60");
   const [savedExcludeKeywords, setSavedExcludeKeywords] = useState(DEFAULT_EXCLUDE_KEYWORDS);
   const [excludeKeywordsDraft, setExcludeKeywordsDraft] = useState(DEFAULT_EXCLUDE_KEYWORDS);
@@ -355,6 +365,20 @@ function App() {
   const [savedHiddenIndexedTargets, setSavedHiddenIndexedTargets] = useState("");
   const [savedSynonymGroups, setSavedSynonymGroups] = useState(DEFAULT_SYNONYM_GROUPS);
   const [synonymGroupsDraft, setSynonymGroupsDraft] = useState(DEFAULT_SYNONYM_GROUPS);
+  const [excludeRuleFilterText, setExcludeRuleFilterText] = useState("");
+  const [synonymRuleFilterText, setSynonymRuleFilterText] = useState("");
+  const [newExcludeKeyword, setNewExcludeKeyword] = useState("");
+  const [newSynonymGroup, setNewSynonymGroup] = useState("");
+  const [editingExcludeKeyword, setEditingExcludeKeyword] = useState<string | null>(null);
+  const [editingExcludeKeywordValue, setEditingExcludeKeywordValue] = useState("");
+  const [editingSynonymGroup, setEditingSynonymGroup] = useState<string | null>(null);
+  const [editingSynonymGroupValue, setEditingSynonymGroupValue] = useState("");
+  const [ruleContextMenu, setRuleContextMenu] = useState<RuleContextMenu | null>(null);
+  const [draggedRule, setDraggedRule] = useState<{ kind: RuleKind; item: string } | null>(null);
+  const [isRuleAddModalOpen, setIsRuleAddModalOpen] = useState(false);
+  const [ruleAddKind, setRuleAddKind] = useState<RuleKind>("exclude");
+  const [activeRuleKind, setActiveRuleKind] = useState<RuleKind>("exclude");
+  const [selectedRuleItem, setSelectedRuleItem] = useState<{ kind: RuleKind; item: string } | null>(null);
   const [savedObsidianSidebarExplorerDataPath, setSavedObsidianSidebarExplorerDataPath] = useState("");
   const [obsidianSidebarExplorerDataPathDraft, setObsidianSidebarExplorerDataPathDraft] = useState("");
   const [savedGanttParent, setSavedGanttParent] = useState(0);
@@ -425,6 +449,8 @@ function App() {
   const [isStartingScheduler, setIsStartingScheduler] = useState(false);
   const [isLauncherActionRunning, setIsLauncherActionRunning] = useState(false);
   const [hasLoadedAppSettings, setHasLoadedAppSettings] = useState(false);
+  const ruleHistoryRef = useRef<RuleSnapshot[]>([]);
+  const ruleHistoryIndexRef = useRef(-1);
   const isIndexCancelling = Boolean(indexStatus?.is_running && indexStatus?.cancel_requested);
   const isIndexRunning = Boolean(indexStatus?.is_running && !indexStatus?.cancel_requested);
   const indexStatusLabel = isIndexCancelling ? "インデックス取得を中止中" : isIndexRunning ? "インデックス取得中" : "インデックス待機中";
@@ -486,6 +512,12 @@ function App() {
   const isSchedulerPage = pageView === "scheduler";
   const isLauncherPage = pageView === "launcher";
   const isSearchTargetsPage = pageView === "search-targets";
+  const isRuleManagementPage = pageView === "rule-management";
+  const excludeKeywordEntries = normalizedExcludeKeywordsDraft.split("\n").filter(Boolean);
+  const synonymGroupEntries = normalizedSynonymGroupsDraft.split("\n").filter(Boolean);
+  const filteredExcludeKeywordEntries = excludeKeywordEntries.filter((item) => item.toLowerCase().includes(excludeRuleFilterText.trim().toLowerCase()));
+  const filteredSynonymGroupEntries = synonymGroupEntries.filter((item) => item.toLowerCase().includes(synonymRuleFilterText.trim().toLowerCase()));
+  const excludeKeywordSet = new Set(excludeKeywordEntries.map((item) => item.toLowerCase()));
   const candidateSearchTargetPath = fullPath.trim();
   const fallbackCoveredByLocalTargets = isPathCoveredByTarget(candidateSearchTargetPath, searchTargets);
   const isLaunchPathAddable = Boolean(
@@ -948,6 +980,152 @@ function App() {
     setErrorMessage("");
     setNoticeMessage("");
     void refreshSchedulerState().catch(() => undefined);
+  }
+
+  /** 検索ルールの変更を履歴へ積み、Ctrl+Z / Ctrl+Shift+Z の対象にする。 */
+  function applyRuleChanges(nextExcludeKeywords: string, nextSynonymGroups: string): void {
+    const current: RuleSnapshot = {
+      excludeKeywords: normalizedExcludeKeywordsDraft,
+      synonymGroups: normalizedSynonymGroupsDraft,
+    };
+    const next: RuleSnapshot = {
+      excludeKeywords: normalizeExcludeKeywords(nextExcludeKeywords),
+      synonymGroups: normalizeSynonymGroups(nextSynonymGroups),
+    };
+    if (current.excludeKeywords === next.excludeKeywords && current.synonymGroups === next.synonymGroups) return;
+    if (ruleHistoryIndexRef.current < 0) {
+      ruleHistoryRef.current = [current];
+      ruleHistoryIndexRef.current = 0;
+    }
+    ruleHistoryRef.current = ruleHistoryRef.current.slice(0, ruleHistoryIndexRef.current + 1);
+    ruleHistoryRef.current.push(next);
+    ruleHistoryIndexRef.current += 1;
+    setExcludeKeywordsDraft(next.excludeKeywords);
+    setSynonymGroupsDraft(next.synonymGroups);
+  }
+
+  /** 最後の検索ルール変更を取り消す。 */
+  function handleUndoRuleChange(): void {
+    if (ruleHistoryIndexRef.current <= 0) return;
+    ruleHistoryIndexRef.current -= 1;
+    const snapshot = ruleHistoryRef.current[ruleHistoryIndexRef.current];
+    setExcludeKeywordsDraft(snapshot.excludeKeywords);
+    setSynonymGroupsDraft(snapshot.synonymGroups);
+    setNoticeMessage("検索ルールの変更を取り消しました。自動保存します。");
+  }
+
+  /** 取り消した検索ルール変更をやり直す。 */
+  function handleRedoRuleChange(): void {
+    if (ruleHistoryIndexRef.current >= ruleHistoryRef.current.length - 1) return;
+    ruleHistoryIndexRef.current += 1;
+    const snapshot = ruleHistoryRef.current[ruleHistoryIndexRef.current];
+    setExcludeKeywordsDraft(snapshot.excludeKeywords);
+    setSynonymGroupsDraft(snapshot.synonymGroups);
+    setNoticeMessage("検索ルールの変更をやり直しました。自動保存します。");
+  }
+
+  /** 同じ種類のルールをドラッグ先へ移動し、表示順も保存対象にする。 */
+  function handleMoveRuleItem(kind: RuleKind, sourceItem: string, targetItem: string): void {
+    if (sourceItem === targetItem) return;
+    const sourceEntries = kind === "exclude" ? excludeKeywordEntries : synonymGroupEntries;
+    const fromIndex = sourceEntries.indexOf(sourceItem);
+    const toIndex = sourceEntries.indexOf(targetItem);
+    if (fromIndex < 0 || toIndex < 0) return;
+    const nextEntries = [...sourceEntries];
+    const [moved] = nextEntries.splice(fromIndex, 1);
+    nextEntries.splice(toIndex, 0, moved);
+    if (kind === "exclude") {
+      applyRuleChanges(nextEntries.join("\n"), normalizedSynonymGroupsDraft);
+    } else {
+      applyRuleChanges(normalizedExcludeKeywordsDraft, nextEntries.join("\n"));
+    }
+  }
+
+  /** 右クリックメニューから、確認を経てルールを削除する。 */
+  function handleDeleteRuleItem(kind: RuleKind, item: string): void {
+    setRuleContextMenu(null);
+    if (!window.confirm("本当に削除しますか？")) return;
+    setSelectedRuleItem((current) => current?.kind === kind && current.item === item ? null : current);
+    if (kind === "exclude") {
+      applyRuleChanges(excludeKeywordEntries.filter((entry) => entry !== item).join("\n"), normalizedSynonymGroupsDraft);
+    } else {
+      applyRuleChanges(normalizedExcludeKeywordsDraft, synonymGroupEntries.filter((entry) => entry !== item).join("\n"));
+    }
+  }
+
+  /** 見出しの追加ボタンから、対象リスト専用の入力ポップアップを開く。 */
+  function handleOpenRuleAddModal(kind: RuleKind): void {
+    setActiveRuleKind(kind);
+    setRuleAddKind(kind);
+    setIsRuleAddModalOpen(true);
+  }
+
+  /** ポップアップの入力を追加し、成功時だけ閉じる。 */
+  function handleSubmitRuleAdd(): void {
+    const added = ruleAddKind === "exclude" ? handleAddExcludeKeyword() : handleAddSynonymGroup();
+    if (added) setIsRuleAddModalOpen(false);
+  }
+
+  /** 除外キーワードを重複なく下書きへ追加する。 */
+  function handleAddExcludeKeyword(): boolean {
+    const keyword = newExcludeKeyword.trim();
+    if (!keyword) return false;
+    if (excludeKeywordSet.has(keyword.toLowerCase())) {
+      setNoticeMessage(`「${keyword}」は除外リストに登録済みです。`);
+      return false;
+    }
+    applyRuleChanges([...excludeKeywordEntries, keyword].join("\n"), normalizedSynonymGroupsDraft);
+    setNewExcludeKeyword("");
+    setNoticeMessage(`「${keyword}」を追加しました。自動保存します。`);
+    return true;
+  }
+
+  /** 同義語グループを正規化して下書きへ追加し、語の重複や除外語との競合を知らせる。 */
+  function handleAddSynonymGroup(): boolean {
+    const group = normalizeSynonymGroups(newSynonymGroup);
+    if (!group) return false;
+    const tokens = group.split(",").map((item) => item.toLowerCase());
+    const registeredTokens = new Set(synonymGroupEntries.flatMap((item) => item.split(",").map((token) => token.toLowerCase())));
+    const duplicatedToken = tokens.find((item) => registeredTokens.has(item));
+    if (duplicatedToken) {
+      setNoticeMessage(`「${duplicatedToken}」は同義語内で重複して登録されています。`);
+      return false;
+    }
+    const excludedToken = tokens.find((item) => excludeKeywordSet.has(item));
+    if (excludedToken) {
+      setNoticeMessage(`「${excludedToken}」は除外リストに登録済みです。内容を確認してから追加してください。`);
+      return false;
+    }
+    applyRuleChanges(normalizedExcludeKeywordsDraft, [...synonymGroupEntries, group].join("\n"));
+    setNewSynonymGroup("");
+    setNoticeMessage("同義語グループを追加しました。自動保存します。");
+    return true;
+  }
+
+  /** ダブルクリックで開始した除外キーワードのインライン編集を確定する。 */
+  function handleUpdateExcludeKeyword(original: string): void {
+    const next = editingExcludeKeywordValue.trim();
+    setEditingExcludeKeyword(null);
+    if (!next || next === original) return;
+    if (excludeKeywordEntries.some((item) => item !== original && item.toLowerCase() === next.toLowerCase())) {
+      setNoticeMessage(`「${next}」は除外リストに登録済みです。`);
+      return;
+    }
+    applyRuleChanges(excludeKeywordEntries.map((item) => item === original ? next : item).join("\n"), normalizedSynonymGroupsDraft);
+  }
+
+  /** ダブルクリックで開始した同義語グループのインライン編集を確定する。 */
+  function handleUpdateSynonymGroup(original: string): void {
+    const next = normalizeSynonymGroups(editingSynonymGroupValue);
+    setEditingSynonymGroup(null);
+    if (!next || next === original) return;
+    const otherTokens = new Set(synonymGroupEntries.filter((item) => item !== original).flatMap((item) => item.split(",").map((token) => token.toLowerCase())));
+    const duplicate = next.split(",").map((item) => item.toLowerCase()).find((item) => otherTokens.has(item));
+    if (duplicate) {
+      setNoticeMessage(`「${duplicate}」は同義語内で重複して登録されています。`);
+      return;
+    }
+    applyRuleChanges(normalizedExcludeKeywordsDraft, synonymGroupEntries.map((item) => item === original ? next : item).join("\n"));
   }
 
   function handleAddSchedulerPath(path: string): void {
@@ -1762,6 +1940,66 @@ function App() {
     }
   }
 
+  /** 検索ルール画面での変更は短い待機後に自動保存する。 */
+  useEffect(() => {
+    if (!isRuleManagementPage || (!hasUnsavedExcludeKeywords && !hasUnsavedSynonymGroups)) return;
+    const timer = window.setTimeout(() => {
+      if (hasUnsavedExcludeKeywords) void handleSaveExcludeKeywords();
+      if (hasUnsavedSynonymGroups) void handleSaveSynonymGroups();
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [excludeKeywordsDraft, synonymGroupsDraft, isRuleManagementPage, hasUnsavedExcludeKeywords, hasUnsavedSynonymGroups]);
+
+  /** Ctrl+Z / Ctrl+Shift+Z（macOS は Command）で検索ルール履歴を操作する。 */
+  useEffect(() => {
+    if (!isRuleManagementPage) return;
+    const handleRuleHistoryShortcut = (event: KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
+      event.preventDefault();
+      if (event.shiftKey) {
+        handleRedoRuleChange();
+      } else {
+        handleUndoRuleChange();
+      }
+    };
+    window.addEventListener("keydown", handleRuleHistoryShortcut);
+    return () => window.removeEventListener("keydown", handleRuleHistoryShortcut);
+  }, [isRuleManagementPage, excludeKeywordsDraft, synonymGroupsDraft]);
+
+  /** 入力欄を操作していないときだけ、A キーで選択中カードの追加画面を開く。 */
+  useEffect(() => {
+    if (!isRuleManagementPage || isRuleAddModalOpen) return;
+    const handleRuleAddShortcut = (event: KeyboardEvent): void => {
+      if (event.ctrlKey || event.metaKey || event.altKey || event.key.toLowerCase() !== "a") return;
+      const target = event.target;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable)) return;
+      event.preventDefault();
+      handleOpenRuleAddModal(activeRuleKind);
+    };
+    window.addEventListener("keydown", handleRuleAddShortcut);
+    return () => window.removeEventListener("keydown", handleRuleAddShortcut);
+  }, [isRuleManagementPage, isRuleAddModalOpen, activeRuleKind]);
+
+  /** 選択中のルールは、入力中以外なら Delete キーでも確認削除できる。 */
+  useEffect(() => {
+    if (!isRuleManagementPage || !selectedRuleItem || isRuleAddModalOpen) return;
+    const handleRuleDeleteShortcut = (event: KeyboardEvent): void => {
+      if (event.key !== "Delete") return;
+      const target = event.target;
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLElement && target.isContentEditable)) return;
+      event.preventDefault();
+      handleDeleteRuleItem(selectedRuleItem.kind, selectedRuleItem.item);
+    };
+    window.addEventListener("keydown", handleRuleDeleteShortcut);
+    return () => window.removeEventListener("keydown", handleRuleDeleteShortcut);
+  }, [isRuleManagementPage, isRuleAddModalOpen, selectedRuleItem, excludeKeywordsDraft, synonymGroupsDraft]);
+
+  /** アプリ内の表示倍率をブラウザー倍率とは別に保存・反映する。 */
+  useEffect(() => {
+    document.body.style.zoom = String(uiZoom / 100);
+    localStorage.setItem("ui_zoom", String(uiZoom));
+  }, [uiZoom]);
+
   return (
     <div className="page-shell">
       <header className="top-nav">
@@ -1793,6 +2031,13 @@ function App() {
             type="button"
           >
             検索対象フォルダ
+          </button>
+          <button
+            className={`secondary-button page-tab ${pageView === "rule-management" ? "active" : ""}`}
+            onClick={() => void handleChangePage("rule-management")}
+            type="button"
+          >
+            検索ルール管理
           </button>
           <button
             className={`secondary-button page-tab ${pageView === "launcher" ? "active" : ""}`}
@@ -2246,6 +2491,144 @@ function App() {
               </div>
             </div>
           </section>
+        ) : isRuleManagementPage ? (
+          <section className="rule-management-panel" onClick={() => setRuleContextMenu(null)}>
+            <div className="section-header">
+              <div>
+                <h2>検索ルール管理</h2>
+                <div className="form-help">行全体をダブルクリックで編集。ドラッグで並べ替え、右クリックで削除できます。</div>
+              </div>
+              <div className="section-header-actions">
+                <button className="secondary-button" onClick={handleUndoRuleChange} type="button">元に戻す</button>
+                <button className="secondary-button" onClick={handleRedoRuleChange} type="button">やり直す</button>
+                <button className="secondary-button" onClick={() => void handleChangePage("search")} type="button">検索へ戻る</button>
+                <button className="menu-button" onClick={() => setIsMenuOpen((value) => !value)} type="button" aria-label="設定">☰</button>
+              </div>
+            </div>
+
+            <div className="rule-management-grid">
+              <div className={`rule-list-card ${activeRuleKind === "exclude" ? "active" : ""}`} onClick={() => setActiveRuleKind("exclude")}>
+                <div className="section-header">
+                  <h3>除外キーワード</h3>
+                  <div className="rule-card-header-actions"><span>{filteredExcludeKeywordEntries.length}件</span><button className="secondary-button" onClick={() => handleOpenRuleAddModal("exclude")} type="button">追加</button></div>
+                </div>
+                <input className="rule-card-search" value={excludeRuleFilterText} onChange={(event) => setExcludeRuleFilterText(event.target.value)} placeholder="除外キーワードを検索" aria-label="除外キーワードを検索" />
+                <div className="rule-list">
+                  {filteredExcludeKeywordEntries.map((item) => (
+                    <div
+                      className={`rule-list-item ${selectedRuleItem?.kind === "exclude" && selectedRuleItem.item === item ? "selected" : ""}`}
+                      draggable
+                      key={item}
+                      onDoubleClick={() => { if (editingExcludeKeyword !== item) { setEditingExcludeKeyword(item); setEditingExcludeKeywordValue(item); } }}
+                      onClick={(event) => { event.stopPropagation(); setActiveRuleKind("exclude"); setSelectedRuleItem({ kind: "exclude", item }); }}
+                      onContextMenuCapture={(event) => { event.preventDefault(); setRuleContextMenu({ kind: "exclude", item, x: event.clientX, y: event.clientY }); }}
+                      onDragStart={() => { setActiveRuleKind("exclude"); setSelectedRuleItem({ kind: "exclude", item }); setDraggedRule({ kind: "exclude", item }); }}
+                      onDragOver={(event) => event.preventDefault()}
+                      onDrop={() => { if (draggedRule?.kind === "exclude") handleMoveRuleItem("exclude", draggedRule.item, item); setDraggedRule(null); }}
+                    >
+                      {editingExcludeKeyword === item ? (
+                        <input
+                          autoFocus
+                          className="rule-inline-input"
+                          value={editingExcludeKeywordValue}
+                          onChange={(event) => setEditingExcludeKeywordValue(event.target.value)}
+                          onBlur={() => handleUpdateExcludeKeyword(item)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") event.currentTarget.blur();
+                          }}
+                        />
+                      ) : <code title="ダブルクリックで編集">{item}</code>}
+                      <button
+                        className="secondary-button"
+                        onClick={(event) => { event.stopPropagation(); handleDeleteRuleItem("exclude", item); }}
+                        type="button"
+                      >削除</button>
+                    </div>
+                  ))}
+                  {filteredExcludeKeywordEntries.length === 0 ? <div className="form-help">一致する除外キーワードはありません。</div> : null}
+                </div>
+                <div className={`settings-save-status ${hasUnsavedExcludeKeywords ? "dirty" : "saved"}`}>{isSavingExcludeKeywords ? "自動保存中..." : hasUnsavedExcludeKeywords ? "自動保存待ち" : "自動保存済み"}</div>
+              </div>
+
+              <div className={`rule-list-card ${activeRuleKind === "synonym" ? "active" : ""}`} onClick={() => setActiveRuleKind("synonym")}>
+                <div className="section-header">
+                  <h3>同義語リスト</h3>
+                  <div className="rule-card-header-actions"><span>{filteredSynonymGroupEntries.length}件</span><button className="secondary-button" onClick={() => handleOpenRuleAddModal("synonym")} type="button">追加</button></div>
+                </div>
+                <input className="rule-card-search" value={synonymRuleFilterText} onChange={(event) => setSynonymRuleFilterText(event.target.value)} placeholder="同義語を検索" aria-label="同義語を検索" />
+                <div className="rule-list">
+                  {filteredSynonymGroupEntries.map((item) => {
+                    const conflicts = item.split(",").filter((token) => excludeKeywordSet.has(token.toLowerCase()));
+                    return (
+                      <div
+                        className={`rule-list-item ${selectedRuleItem?.kind === "synonym" && selectedRuleItem.item === item ? "selected" : ""}`}
+                        draggable
+                        key={item}
+                        onDoubleClick={() => { if (editingSynonymGroup !== item) { setEditingSynonymGroup(item); setEditingSynonymGroupValue(item); } }}
+                        onClick={(event) => { event.stopPropagation(); setActiveRuleKind("synonym"); setSelectedRuleItem({ kind: "synonym", item }); }}
+                        onContextMenuCapture={(event) => { event.preventDefault(); setRuleContextMenu({ kind: "synonym", item, x: event.clientX, y: event.clientY }); }}
+                        onDragStart={() => { setActiveRuleKind("synonym"); setSelectedRuleItem({ kind: "synonym", item }); setDraggedRule({ kind: "synonym", item }); }}
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={() => { if (draggedRule?.kind === "synonym") handleMoveRuleItem("synonym", draggedRule.item, item); setDraggedRule(null); }}
+                      >
+                        <div>
+                          {editingSynonymGroup === item ? (
+                            <input
+                              autoFocus
+                              className="rule-inline-input"
+                              value={editingSynonymGroupValue}
+                              onChange={(event) => setEditingSynonymGroupValue(event.target.value)}
+                              onBlur={() => handleUpdateSynonymGroup(item)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") event.currentTarget.blur();
+                              }}
+                            />
+                          ) : <code title="ダブルクリックで編集">{item}</code>}
+                          {conflicts.length ? <div className="rule-conflict">除外リストに登録済み: {conflicts.join(", ")}</div> : null}
+                        </div>
+                        <button
+                          className="secondary-button"
+                          onClick={(event) => { event.stopPropagation(); handleDeleteRuleItem("synonym", item); }}
+                          type="button"
+                        >削除</button>
+                      </div>
+                    );
+                  })}
+                  {filteredSynonymGroupEntries.length === 0 ? <div className="form-help">一致する同義語グループはありません。</div> : null}
+                </div>
+                <div className={`settings-save-status ${hasUnsavedSynonymGroups ? "dirty" : "saved"}`}>{isSavingSynonymGroups ? "自動保存中..." : hasUnsavedSynonymGroups ? "自動保存待ち" : "自動保存済み"}</div>
+              </div>
+            </div>
+            {ruleContextMenu ? (
+              <div
+                className="rule-context-menu"
+                style={{ left: ruleContextMenu.x, top: ruleContextMenu.y }}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button type="button" onClick={() => handleDeleteRuleItem(ruleContextMenu.kind, ruleContextMenu.item)}>削除</button>
+              </div>
+            ) : null}
+            {isRuleAddModalOpen ? (
+              <div className="rule-add-modal-backdrop" role="presentation" onMouseDown={() => setIsRuleAddModalOpen(false)}>
+                <div className="rule-add-modal" role="dialog" aria-modal="true" aria-label={`${ruleAddKind === "exclude" ? "除外キーワード" : "同義語"}を追加`} onMouseDown={(event) => event.stopPropagation()}>
+                  <h3>{ruleAddKind === "exclude" ? "除外キーワードを追加" : "同義語を追加"}</h3>
+                  <input
+                    autoFocus
+                    value={ruleAddKind === "exclude" ? newExcludeKeyword : newSynonymGroup}
+                    onChange={(event) => ruleAddKind === "exclude" ? setNewExcludeKeyword(event.target.value) : setNewSynonymGroup(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.nativeEvent.isComposing) handleSubmitRuleAdd();
+                    }}
+                    placeholder={ruleAddKind === "exclude" ? "例: node_modules" : "例: スマートフォン,スマホ"}
+                  />
+                  <div className="rule-add-modal-actions">
+                    <button className="secondary-button" onClick={() => setIsRuleAddModalOpen(false)} type="button">キャンセル</button>
+                    <button className="secondary-button" onClick={handleSubmitRuleAdd} type="button">追加する</button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </section>
         ) : isLauncherPage ? (
           <section className="launcher-panel">
             <div className="indexed-targets-panel-header">
@@ -2345,6 +2728,15 @@ function App() {
                 ランチャー
               </button>
               <div className="form-help">デスクトップランチャーの起動・停止・再起動とログ確認を行います。</div>
+            </div>
+
+            <div className="zoom-settings">
+              <label className="form-help" htmlFor="ui-zoom">表示倍率 <strong>{uiZoom}%</strong></label>
+              <div className="zoom-settings-controls">
+                <input id="ui-zoom" type="range" min="75" max="125" step="5" value={uiZoom} onChange={(event) => setUiZoom(Number(event.target.value))} />
+                <button className="secondary-button" onClick={() => setUiZoom(100)} type="button">100%に戻す</button>
+              </div>
+              <div className="form-help">このアプリの表示だけを変更します。ブラウザーのズーム設定には影響しません。</div>
             </div>
 
             <div className="folder-form">
@@ -2516,35 +2908,6 @@ function App() {
                 ) : null}
               </div>
 
-              <label className="form-help" htmlFor="exclude-keywords">
-                除外キーワード
-              </label>
-              <textarea
-                id="exclude-keywords"
-                className="settings-textarea"
-                value={excludeKeywordsDraft}
-                onChange={(event) => setExcludeKeywordsDraft(event.target.value)}
-                placeholder=".git&#10;node_modules&#10;old"
-                rows={12}
-              />
-              <div className="settings-action-row">
-                <button
-                  className="secondary-button settings-save-button"
-                  onClick={() => void handleSaveExcludeKeywords()}
-                  type="button"
-                  disabled={!hasUnsavedExcludeKeywords || isSavingExcludeKeywords}
-                >
-                  {isSavingExcludeKeywords ? "保存中..." : "保存"}
-                </button>
-                <div className={`settings-save-status ${hasUnsavedExcludeKeywords ? "dirty" : "saved"}`}>
-                  {hasUnsavedExcludeKeywords ? "未保存の変更があります" : "保存済み"}
-                </div>
-              </div>
-              <div className="form-help">
-                1行1キーワードで入力します。`.git` や `node_modules`、`old`、`旧`、Python / React 開発で不要になりやすい
-                キャッシュやビルド成果物を既定で除外します。
-              </div>
-
               <label className="form-help" htmlFor="web-exclude-keywords">
                 Web除外キーワード
               </label>
@@ -2571,34 +2934,6 @@ function App() {
               </div>
               <div className="form-help">
                 WebページのURLに含まれる文字列を1行1キーワードで指定します。ローカルフォルダ用の除外キーワードとは独立しています。
-              </div>
-
-              <label className="form-help" htmlFor="synonym-groups">
-                同義語リスト
-              </label>
-              <textarea
-                id="synonym-groups"
-                className="settings-textarea"
-                value={synonymGroupsDraft}
-                onChange={(event) => setSynonymGroupsDraft(event.target.value)}
-                placeholder="スマートフォン,スマホ,モバイル&#10;ノートPC,ラップトップ"
-                rows={8}
-              />
-              <div className="settings-action-row">
-                <button
-                  className="secondary-button settings-save-button"
-                  onClick={() => void handleSaveSynonymGroups()}
-                  type="button"
-                  disabled={!hasUnsavedSynonymGroups || isSavingSynonymGroups}
-                >
-                  {isSavingSynonymGroups ? "保存中..." : "保存"}
-                </button>
-                <div className={`settings-save-status ${hasUnsavedSynonymGroups ? "dirty" : "saved"}`}>
-                  {hasUnsavedSynonymGroups ? "未保存の変更があります" : "保存済み"}
-                </div>
-              </div>
-              <div className="form-help">
-                1行を1グループとして、カンマ区切りで入力します。通常検索で同じ意味の表記ゆれを同一キーワードとして扱います。
               </div>
 
               <label className="form-help" htmlFor="obsidian-sidebar-explorer-data-path">
