@@ -44,6 +44,7 @@ class StubIndexService:
         self.deleted_target_ids: list[int] = []
         self.saved_exclude_keywords = ".git\nnode_modules"
         self.saved_web_exclude_keywords = "/tag/\n/login"
+        self.saved_web_fetch_mode = "http"
         self.saved_hidden_indexed_targets = "obsidian\nAgent_Skills"
         self.saved_synonym_groups = "スマートフォン,スマホ,モバイル"
         self.saved_obsidian_sidebar_explorer_data_path = ""
@@ -130,6 +131,7 @@ class StubIndexService:
                 self,
                 exclude_keywords: str,
                 web_exclude_keywords: str,
+                web_fetch_mode: str,
                 hidden_indexed_targets: str,
                 synonym_groups: str,
                 obsidian_sidebar_explorer_data_path: str,
@@ -140,6 +142,7 @@ class StubIndexService:
             ) -> None:
                 self.exclude_keywords = exclude_keywords
                 self.web_exclude_keywords = web_exclude_keywords
+                self.web_fetch_mode = web_fetch_mode
                 self.hidden_indexed_targets = hidden_indexed_targets
                 self.synonym_groups = synonym_groups
                 self.obsidian_sidebar_explorer_data_path = obsidian_sidebar_explorer_data_path
@@ -152,6 +155,7 @@ class StubIndexService:
                 return {
                     "exclude_keywords": self.exclude_keywords,
                     "web_exclude_keywords": self.web_exclude_keywords,
+                    "web_fetch_mode": self.web_fetch_mode,
                     "hidden_indexed_targets": self.hidden_indexed_targets,
                     "synonym_groups": self.synonym_groups,
                     "obsidian_sidebar_explorer_data_path": self.obsidian_sidebar_explorer_data_path,
@@ -164,6 +168,7 @@ class StubIndexService:
         return AppSettings(
             self.saved_exclude_keywords,
             self.saved_web_exclude_keywords,
+            self.saved_web_fetch_mode,
             self.saved_hidden_indexed_targets,
             self.saved_synonym_groups,
             self.saved_obsidian_sidebar_explorer_data_path,
@@ -178,6 +183,7 @@ class StubIndexService:
         *,
         exclude_keywords: str | None = None,
         web_exclude_keywords: str | None = None,
+        web_fetch_mode: str | None = None,
         hidden_indexed_targets: str | None = None,
         synonym_groups: str | None = None,
         obsidian_sidebar_explorer_data_path: str | None = None,
@@ -190,6 +196,8 @@ class StubIndexService:
             self.saved_exclude_keywords = exclude_keywords
         if web_exclude_keywords is not None:
             self.saved_web_exclude_keywords = web_exclude_keywords
+        if web_fetch_mode is not None:
+            self.saved_web_fetch_mode = web_fetch_mode
         if hidden_indexed_targets is not None:
             self.saved_hidden_indexed_targets = hidden_indexed_targets
         if synonym_groups is not None:
@@ -385,6 +393,7 @@ def test_get_app_settings_endpoint_returns_saved_settings() -> None:
 
     assert payload["exclude_keywords"] == ".git\nnode_modules"
     assert payload["web_exclude_keywords"] == "/tag/\n/login"
+    assert payload["web_fetch_mode"] == "http"
     assert payload["hidden_indexed_targets"] == "obsidian\nAgent_Skills"
     assert payload["synonym_groups"] == "スマートフォン,スマホ,モバイル"
     assert payload["gantt_parent"] == 3
@@ -403,6 +412,7 @@ def test_update_app_settings_endpoint_returns_updated_settings() -> None:
         AppSettingsUpdateRequest(
             exclude_keywords="dist\nbuild",
             web_exclude_keywords="/private\n/logout",
+            web_fetch_mode="edge",
             hidden_indexed_targets="obsidian\nAgent_Skills\nnotes",
             synonym_groups="スマートフォン,スマホ,モバイル\nノートPC,ラップトップ",
             gantt_parent=12,
@@ -415,9 +425,11 @@ def test_update_app_settings_endpoint_returns_updated_settings() -> None:
 
     assert payload["exclude_keywords"] == "dist\nbuild"
     assert payload["web_exclude_keywords"] == "/private\n/logout"
+    assert payload["web_fetch_mode"] == "edge"
     assert payload["hidden_indexed_targets"] == "obsidian\nAgent_Skills\nnotes"
     assert service.saved_exclude_keywords == "dist\nbuild"
     assert service.saved_web_exclude_keywords == "/private\n/logout"
+    assert service.saved_web_fetch_mode == "edge"
     assert service.saved_hidden_indexed_targets == "obsidian\nAgent_Skills\nnotes"
     assert payload["synonym_groups"] == "スマートフォン,スマホ,モバイル\nノートPC,ラップトップ"
     assert service.saved_synonym_groups == "スマートフォン,スマホ,モバイル\nノートPC,ラップトップ"

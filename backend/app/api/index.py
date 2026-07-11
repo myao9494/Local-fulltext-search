@@ -135,6 +135,7 @@ def update_app_settings(
     return service.update_app_settings(
         exclude_keywords=payload.exclude_keywords,
         web_exclude_keywords=payload.web_exclude_keywords,
+        web_fetch_mode=payload.web_fetch_mode,
         hidden_indexed_targets=payload.hidden_indexed_targets,
         synonym_groups=payload.synonym_groups,
         obsidian_sidebar_explorer_data_path=payload.obsidian_sidebar_explorer_data_path,

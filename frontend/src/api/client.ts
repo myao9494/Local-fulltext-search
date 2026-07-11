@@ -97,6 +97,7 @@ export async function restartLauncher(): Promise<LauncherStatus> {
 export async function updateAppSettings(payload: {
   exclude_keywords?: string;
   web_exclude_keywords?: string;
+  web_fetch_mode?: "http" | "edge" | "chrome";
   hidden_indexed_targets?: string;
   synonym_groups?: string;
   obsidian_sidebar_explorer_data_path?: string;

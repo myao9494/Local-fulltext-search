@@ -58,6 +58,7 @@ from app.models.indexing import (
     SynonymListResponse,
 )
 from app.services.cjk_bigram import build_cjk_bigram_index_content
+from app.services.web_browser_fetcher import BrowserWebFetcher
 from app.services.path_service import (
     AbsolutePathRequiredError,
     get_descendant_path_range,
@@ -525,6 +526,7 @@ class IndexService:
         return AppSettingsResponse(
             exclude_keywords=self._read_persisted_exclude_keywords(),
             web_exclude_keywords=self._read_persisted_web_exclude_keywords(),
+            web_fetch_mode=self._read_persisted_web_fetch_mode(),
             hidden_indexed_targets=self._read_persisted_hidden_indexed_targets(),
             synonym_groups=self._read_persisted_synonym_groups(),
             obsidian_sidebar_explorer_data_path=self._read_persisted_obsidian_sidebar_explorer_data_path(),
@@ -550,6 +552,7 @@ class IndexService:
         *,
         exclude_keywords: str | None = None,
         web_exclude_keywords: str | None = None,
+        web_fetch_mode: str | None = None,
         hidden_indexed_targets: str | None = None,
         synonym_groups: str | None = None,
         obsidian_sidebar_explorer_data_path: str | None = None,
@@ -569,6 +572,11 @@ class IndexService:
             self._normalize_exclude_keywords(web_exclude_keywords)
             if web_exclude_keywords is not None
             else current.web_exclude_keywords
+        )
+        normalized_web_fetch_mode = (
+            self._normalize_web_fetch_mode(web_fetch_mode)
+            if web_fetch_mode is not None
+            else current.web_fetch_mode
         )
         normalized_hidden_indexed_targets = (
             self._normalize_hidden_indexed_targets(hidden_indexed_targets)
@@ -616,6 +624,7 @@ class IndexService:
             )
         self._write_persisted_exclude_keywords(normalized_exclude_keywords)
         self._write_persisted_web_exclude_keywords(normalized_web_exclude_keywords)
+        self._write_persisted_web_fetch_mode(normalized_web_fetch_mode)
         self._write_persisted_hidden_indexed_targets(normalized_hidden_indexed_targets)
         self._write_persisted_synonym_groups(normalized_synonym_groups)
         self._write_persisted_obsidian_sidebar_explorer_data_path(normalized_obsidian_sidebar_explorer_data_path)
@@ -626,6 +635,7 @@ class IndexService:
         return AppSettingsResponse(
             exclude_keywords=normalized_exclude_keywords,
             web_exclude_keywords=normalized_web_exclude_keywords,
+            web_fetch_mode=normalized_web_fetch_mode,
             hidden_indexed_targets=normalized_hidden_indexed_targets,
             synonym_groups=normalized_synonym_groups,
             obsidian_sidebar_explorer_data_path=normalized_obsidian_sidebar_explorer_data_path,
@@ -717,6 +727,39 @@ class IndexService:
         path = settings.web_exclude_keywords_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(self._normalize_exclude_keywords(value), encoding="utf-8")
+
+    def _normalize_web_fetch_mode(self, value: str) -> str:
+        """
+        Web取得方式は通常HTTP・Edge・Chromeだけを許可する。
+        """
+        normalized = value.strip().lower()
+        if normalized not in {"http", "edge", "chrome"}:
+            raise ValueError("web_fetch_mode must be http, edge, or chrome.")
+        return normalized
+
+    def _read_persisted_web_fetch_mode(self) -> str:
+        """
+        未設定環境では従来互換の通常HTTPを使う。
+        """
+        ensure_data_dir()
+        path = settings.web_fetch_mode_path
+        if not path.exists():
+            self._write_persisted_web_fetch_mode("http")
+            return "http"
+        try:
+            return self._normalize_web_fetch_mode(path.read_text(encoding="utf-8"))
+        except ValueError:
+            self._write_persisted_web_fetch_mode("http")
+            return "http"
+
+    def _write_persisted_web_fetch_mode(self, value: str) -> None:
+        """
+        Web取得方式を端末共有設定へ保存する。
+        """
+        ensure_data_dir()
+        path = settings.web_fetch_mode_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(self._normalize_web_fetch_mode(value), encoding="utf-8")
 
     def _read_persisted_synonym_groups(self) -> str:
         """
@@ -1521,7 +1564,43 @@ class IndexService:
         cleanup_root_url: str,
     ) -> dict[str, object]:
         """
-        ベース URL 配下の HTML ページをクロールし、本文を files/file_segments へ登録する。
+        保存設定に応じて通常HTTPまたは正式版Edge/ChromeでWebページを取得する。
+        """
+        fetch_mode = self.get_app_settings().web_fetch_mode
+        if fetch_mode == "http":
+            return self._crawl_web_target(
+                target,
+                exclude_keywords,
+                controller,
+                index_depth=index_depth,
+                cleanup_root_url=cleanup_root_url,
+                fetch_page=self._fetch_web_page,
+            )
+
+        channel = "msedge" if fetch_mode == "edge" else "chrome"
+        profile_dir = settings.web_browser_profiles_dir / fetch_mode
+        with BrowserWebFetcher(channel=channel, profile_dir=profile_dir) as browser_fetcher:
+            return self._crawl_web_target(
+                target,
+                exclude_keywords,
+                controller,
+                index_depth=index_depth,
+                cleanup_root_url=cleanup_root_url,
+                fetch_page=browser_fetcher.fetch,
+            )
+
+    def _crawl_web_target(
+        self,
+        target: dict[str, object],
+        exclude_keywords: str,
+        controller: IndexRunController,
+        *,
+        index_depth: int,
+        cleanup_root_url: str,
+        fetch_page,
+    ) -> dict[str, object]:
+        """
+        指定された取得関数でベースURL配下を巡回し、本文を検索DBへ登録する。
         """
         base_url = self._normalize_web_url(str(target["full_path"]))
         keywords = self._parse_exclude_keywords(exclude_keywords)
@@ -1529,7 +1608,7 @@ class IndexService:
         failed_paths: set[str] = set()
         preloaded_pages: dict[str, tuple[str, ExtractedWebPage]] = {}
         try:
-            base_html = self._fetch_web_page(base_url)
+            base_html = fetch_page(base_url)
             base_extracted = self._extract_web_page(base_html)
             preloaded_pages[base_url] = (base_html, base_extracted)
         except Exception as error:
@@ -1559,7 +1638,7 @@ class IndexService:
                 if current_url in preloaded_pages:
                     html, extracted = preloaded_pages[current_url]
                 else:
-                    html = self._fetch_web_page(current_url)
+                    html = fetch_page(current_url)
                     extracted = self._extract_web_page(html)
                 title = extracted.title or self._resolve_web_file_name(current_url)
                 content = extracted.content

@@ -20,6 +20,7 @@ class Settings(BaseModel):
     database_name: str = os.getenv("SEARCH_APP_DB_NAME", "search.db")
     exclude_keywords_name: str = os.getenv("SEARCH_APP_EXCLUDE_KEYWORDS_NAME", "exclude_keywords.txt")
     web_exclude_keywords_name: str = os.getenv("SEARCH_APP_WEB_EXCLUDE_KEYWORDS_NAME", "web_exclude_keywords.txt")
+    web_fetch_mode_name: str = os.getenv("SEARCH_APP_WEB_FETCH_MODE_NAME", "web_fetch_mode.txt")
     hidden_indexed_targets_name: str = os.getenv(
         "SEARCH_APP_HIDDEN_INDEXED_TARGETS_NAME", "hidden_indexed_targets.txt"
     )
@@ -57,6 +58,7 @@ class Settings(BaseModel):
         "database_name",
         "exclude_keywords_name",
         "web_exclude_keywords_name",
+        "web_fetch_mode_name",
         "hidden_indexed_targets_name",
         "synonym_groups_name",
         "obsidian_sidebar_explorer_data_path_name",
@@ -87,6 +89,20 @@ class Settings(BaseModel):
     @property
     def web_exclude_keywords_path(self) -> Path:
         return (self.data_dir / self.web_exclude_keywords_name).resolve()
+
+    @property
+    def web_fetch_mode_path(self) -> Path:
+        """
+        Web取得方式は端末固有のプレーンテキスト設定として保存する。
+        """
+        return (self.data_dir / self.web_fetch_mode_name).resolve()
+
+    @property
+    def web_browser_profiles_dir(self) -> Path:
+        """
+        普段使いのブラウザプロファイルと分離した自動取得専用領域を返す。
+        """
+        return (self.data_dir / "web-browser-profiles").resolve()
 
     @property
     def hidden_indexed_targets_path(self) -> Path:

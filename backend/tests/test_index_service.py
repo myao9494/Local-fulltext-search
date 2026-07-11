@@ -110,6 +110,61 @@ def test_web_search_target_indexes_linked_pages_under_base_url(tmp_path: Path) -
     assert {row["source_type"] for row in rows} == {"web"}
 
 
+def test_web_search_target_uses_installed_edge_mode(tmp_path: Path, monkeypatch) -> None:
+    """
+    Edge取得設定では通常HTTPを使わず、Playwrightのmsedge取得結果を巡回する。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    service.update_app_settings(web_fetch_mode="edge")
+
+    fetched_urls: list[str] = []
+
+    class FakeBrowserFetcher:
+        def __init__(self, *, channel: str, profile_dir: Path) -> None:
+            assert channel == "msedge"
+            assert profile_dir == settings.web_browser_profiles_dir / "edge"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def fetch(self, url: str) -> str:
+            fetched_urls.append(url)
+            if url.endswith("/docs/"):
+                return "<html><title>社内トップ</title><body>alpha <a href='guide'>案内</a></body></html>"
+            return "<html><title>社内案内</title><body>beta</body></html>"
+
+    monkeypatch.setattr("app.services.index_service.BrowserWebFetcher", FakeBrowserFetcher)
+    service.add_search_target(folder_path="https://intranet.example/docs/", index_depth=1)
+
+    rows = connection.execute(
+        "SELECT file_name FROM files WHERE source_type = 'web' ORDER BY file_name"
+    ).fetchall()
+    assert [row["file_name"] for row in rows] == ["社内トップ", "社内案内"]
+    assert fetched_urls == [
+        "https://intranet.example/docs/",
+        "https://intranet.example/docs/guide",
+    ]
+
+
+def test_web_fetch_mode_is_persisted_as_shared_setting(tmp_path: Path, monkeypatch) -> None:
+    """
+    Edge/Chrome選択は再起動後も同じ端末設定として読み込める。
+    """
+    connection = _create_connection(tmp_path)
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    service = IndexService(connection=connection)
+
+    saved = service.update_app_settings(web_fetch_mode="edge")
+
+    assert saved.web_fetch_mode == "edge"
+    assert IndexService(connection=connection).get_app_settings().web_fetch_mode == "edge"
+
+
 def test_web_search_target_can_reindex_exact_page_url(tmp_path: Path) -> None:
     """
     ベース URL が HTML ファイルそのものでも、再インデックス時に既存レコードを更新できる。
@@ -1137,6 +1192,32 @@ def test_list_indexed_targets_ignores_web_page_records(tmp_path: Path) -> None:
     assert targets == []
 
 
+def test_delete_indexed_targets_removes_exact_selected_web_page(tmp_path: Path) -> None:
+    """
+    Web ページの削除は URL をローカルパスへ変換せず、選択した 1 ページだけを消す。
+    """
+    connection = _create_connection(tmp_path)
+    service = IndexService(connection=connection)
+    indexed_at = datetime(2026, 5, 5, tzinfo=UTC).isoformat()
+    urls = ["https://example.test/docs/a", "https://example.test/docs/b"]
+    for url in urls:
+        connection.execute(
+            """
+            INSERT INTO files(
+                full_path, normalized_path, file_name, file_ext,
+                created_at, mtime, size, indexed_at, last_error, source_type
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'web')
+            """,
+            (url, url, url.rsplit("/", 1)[-1], ".html", 0, 0, 1, indexed_at),
+        )
+    connection.commit()
+
+    response = service.delete_indexed_targets([urls[0]])
+
+    assert response.deleted_count == 1
+    assert [item.full_path for item in service.list_indexed_targets(source_type="web").items] == [urls[1]]
+
+
 def test_delete_indexed_folders_removes_selected_folder_indexes_and_marks_targets_stale(tmp_path: Path) -> None:
     """
     選択したフォルダ配下の files・segments を削除し、重なる targets は再取得対象へ戻す。
@@ -1626,4 +1707,3 @@ def test_relative_directory_depth_handling_slashes_and_cases() -> None:
     assert service._relative_directory_depth("/Users/mine/work/", "/Users/mine/work") == 0
     # 全く同じパス（期待値: 0）
     assert service._relative_directory_depth("/Users/mine/work", "/Users/mine/work") == 0
-

@@ -4,6 +4,7 @@
 from datetime import datetime
 
 from pydantic import BaseModel
+from typing import Literal
 
 DEFAULT_EXCLUDE_KEYWORDS = "\n".join(
     [
@@ -166,6 +167,7 @@ class AppSettingsResponse(BaseModel):
 
     exclude_keywords: str
     web_exclude_keywords: str = ""
+    web_fetch_mode: Literal["http", "edge", "chrome"] = "http"
     hidden_indexed_targets: str
     synonym_groups: str
     obsidian_sidebar_explorer_data_path: str
@@ -182,6 +184,7 @@ class AppSettingsUpdateRequest(BaseModel):
 
     exclude_keywords: str | None = None
     web_exclude_keywords: str | None = None
+    web_fetch_mode: Literal["http", "edge", "chrome"] | None = None
     hidden_indexed_targets: str | None = None
     synonym_groups: str | None = None
     obsidian_sidebar_explorer_data_path: str | None = None

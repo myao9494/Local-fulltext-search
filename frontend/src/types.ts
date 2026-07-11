@@ -82,6 +82,7 @@ export type SearchTargetCoverage = {
 export type AppSettings = {
   exclude_keywords: string;
   web_exclude_keywords: string;
+  web_fetch_mode: "http" | "edge" | "chrome";
   hidden_indexed_targets: string;
   synonym_groups: string;
   obsidian_sidebar_explorer_data_path: string;

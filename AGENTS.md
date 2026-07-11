@@ -91,6 +91,7 @@
 - **データ統合**: `files` テーブルに `source_type` 列（`local` or `web`）を追加。Webページのパス（URL）を `normalized_path` とし、本文を `file_segments` 経由で FTS5 へ登録する。
 - **検索の切り替え・オプトイン**: GUI上に「ローカル検索」と「ウェブページ検索」を切り替えるトグル/タブを設置。検索APIでは `source_type` パラメータ（デフォルト: `local`）によって挙動を制御し、パラメータのないAPI呼び出し（デスクトップランチャー等）ではWebページ検索を完全に除外することで影響範囲を極小化する。
 - **キーワードジャンプ**: 検索結果をクリックすると、URLの末尾に URL Text Fragments (`#:~:text=...`) を付与して開き、目的の箇所へ自動ハイライトジャンプする。
+- **認証・JavaScript描画**: Web取得方式は通常HTTP（既定）・Microsoft Edge・Google Chromeから選択する。Edge/ChromeモードはPython版Playwrightで端末にインストール済みの正式版ブラウザを画面あり・アプリ専用永続プロファイルで起動し、Windows統合認証やJavaScript描画後のDOMを利用する。ブラウザ拡張機能およびPlaywrightブラウザの追加ダウンロードは不要とする。
 - **詳細は `docs/web_page_search_spec.md` 参照。**
 
 ## 同義語管理

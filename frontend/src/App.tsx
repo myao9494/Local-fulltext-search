@@ -362,6 +362,8 @@ function App() {
   const [excludeKeywordsDraft, setExcludeKeywordsDraft] = useState(DEFAULT_EXCLUDE_KEYWORDS);
   const [savedWebExcludeKeywords, setSavedWebExcludeKeywords] = useState("");
   const [webExcludeKeywordsDraft, setWebExcludeKeywordsDraft] = useState("");
+  const [webFetchMode, setWebFetchMode] = useState<"http" | "edge" | "chrome">("http");
+  const [isSavingWebFetchMode, setIsSavingWebFetchMode] = useState(false);
   const [savedHiddenIndexedTargets, setSavedHiddenIndexedTargets] = useState("");
   const [savedSynonymGroups, setSavedSynonymGroups] = useState(DEFAULT_SYNONYM_GROUPS);
   const [synonymGroupsDraft, setSynonymGroupsDraft] = useState(DEFAULT_SYNONYM_GROUPS);
@@ -546,12 +548,13 @@ function App() {
   /**
    * インデックス済みフォルダ一覧を取得し、消えた選択状態は自動で外す。
    */
-  async function refreshIndexedTargets(sourceType: SearchSource = "local"): Promise<void> {
+  async function refreshIndexedTargets(sourceType: SearchSource = "local"): Promise<IndexedTarget[]> {
     setIsLoadingTargets(true);
     try {
       const response = await fetchIndexedTargets(sourceType);
       setIndexedTargets(response.items);
       setSelectedTargetPaths((current) => current.filter((path) => response.items.some((item) => item.full_path === path)));
+      return response.items;
     } finally {
       setIsLoadingTargets(false);
     }
@@ -588,6 +591,7 @@ function App() {
       setExcludeKeywordsDraft(normalizedExcludeKeywords);
       setSavedWebExcludeKeywords(normalizedWebExcludeKeywords);
       setWebExcludeKeywordsDraft(normalizedWebExcludeKeywords);
+      setWebFetchMode(appSettings.web_fetch_mode ?? "http");
       setSavedHiddenIndexedTargets(normalizedHiddenIndexedTargets);
       setHideKeyword(normalizedHiddenIndexedTargets);
       setSavedSynonymGroups(normalizedSynonymGroups);
@@ -1444,6 +1448,27 @@ function App() {
   }
 
   /**
+   * Web取得方式を保存し、次回クロールから正式版Edge/Chromeを選択可能にする。
+   */
+  async function handleChangeWebFetchMode(nextMode: "http" | "edge" | "chrome"): Promise<void> {
+    const previousMode = webFetchMode;
+    setWebFetchMode(nextMode);
+    try {
+      setIsSavingWebFetchMode(true);
+      const savedSettings = await updateAppSettings({ web_fetch_mode: nextMode });
+      setWebFetchMode(savedSettings.web_fetch_mode);
+      setErrorMessage("");
+      setNoticeMessage("Web取得方式を保存しました。次回のWebインデックス作成から反映されます。");
+    } catch (error) {
+      setWebFetchMode(previousMode);
+      setNoticeMessage("");
+      setErrorMessage(error instanceof Error ? error.message : "Web取得方式の保存に失敗しました。");
+    } finally {
+      setIsSavingWebFetchMode(false);
+    }
+  }
+
+  /**
    * 同義語リストは明示的な保存ボタンでだけ確定し、通常検索の表記ゆれ対応へ反映する。
    */
   async function handleSaveSynonymGroups(): Promise<void> {
@@ -1854,6 +1879,13 @@ function App() {
       return;
     }
 
+    const currentStatus = await refreshIndexStatus().catch(() => null);
+    if (currentStatus?.is_running) {
+      setErrorMessage("");
+      setNoticeMessage("インデックス取得中のため、削除は完了後に実行できます。ページ上部の進行表示で完了を確認してください。");
+      return;
+    }
+
     const confirmed = window.confirm(
       isIndexedWebTargetsPage
         ? "選択したWebページのインデックスを削除します。\n対象URLの検索インデックスと失敗履歴が消えます。続行しますか？"
@@ -1864,18 +1896,29 @@ function App() {
     }
 
     try {
+      const pathsToDelete = [...selectedTargetPaths];
       setIsDeletingTargets(true);
       setErrorMessage("");
-      setNoticeMessage("");
-      const response = await deleteIndexedTargets(selectedTargetPaths);
+      setNoticeMessage(`${pathsToDelete.length}件のインデックスを削除しています。完了後に一覧へ反映されたか確認します。`);
+      const response = await deleteIndexedTargets(pathsToDelete);
+      const refreshedTargets = await refreshIndexedTargets(isIndexedWebTargetsPage ? "web" : "local");
+      await refreshIndexStatus().catch(() => undefined);
+      const remainingPaths = pathsToDelete.filter((path) => refreshedTargets.some((item) => item.full_path === path));
+      if (remainingPaths.length > 0) {
+        throw new Error(`削除後の一覧確認で${remainingPaths.length}件が残っています。再読込して確認してください。`);
+      }
       setResults([]);
       setSelectedTargetPaths([]);
-      await refreshIndexedTargets(isIndexedWebTargetsPage ? "web" : "local");
-      await refreshIndexStatus().catch(() => undefined);
-      setNoticeMessage(`${response.deleted_count}件のインデックス済み${isIndexedWebTargetsPage ? "Webページ" : "フォルダ"}を削除しました。`);
+      setNoticeMessage(`${response.deleted_count}件のインデックス済み${isIndexedWebTargetsPage ? "Webページ" : "フォルダ"}を削除し、一覧への反映を確認しました。`);
     } catch (error) {
-      setNoticeMessage("");
-      setErrorMessage(error instanceof Error ? error.message : "インデックス済みフォルダの削除に失敗しました。");
+      const message = error instanceof Error ? error.message : "インデックス済みフォルダの削除に失敗しました。";
+      if (message.includes("Indexing is already running.")) {
+        setErrorMessage("");
+        setNoticeMessage("インデックス取得中のため、削除は完了後に実行できます。ページ上部の進行表示で完了を確認してください。");
+      } else {
+        setNoticeMessage("");
+        setErrorMessage(message);
+      }
     } finally {
       setIsDeletingTargets(false);
     }
@@ -2223,13 +2266,26 @@ function App() {
                         className="secondary-button danger indexed-targets-primary-action"
                         onClick={() => void handleDeleteIndexedTargets()}
                         type="button"
-                        disabled={selectedTargetPaths.length === 0 || isDeletingTargets}
+                        disabled={selectedTargetPaths.length === 0 || isDeletingTargets || Boolean(indexStatus?.is_running)}
                       >
                         {isDeletingTargets ? "削除中..." : isIndexedWebTargetsPage ? "選択したWebページのインデックスを削除" : "選択したフォルダのインデックスを削除"}
                       </button>
                     )}
                   </div>
                 </div>
+              {!isSearchTargetsPage && (isDeletingTargets || indexStatus?.is_running) ? (
+                <div className="indexed-targets-operation-status" role="status" aria-live="polite">
+                  <div>
+                    <strong>{isDeletingTargets ? "削除処理中" : isIndexCancelling ? "インデックス取得を中止中" : "インデックス取得中"}</strong>
+                    <span>
+                      {isDeletingTargets
+                        ? "削除完了後、一覧に残っていないことを自動確認します。"
+                        : `現在の取得対象: ${indexStatus?.total_files ?? 0}件。完了するまで削除は実行できません。`}
+                    </span>
+                  </div>
+                  <div className="indexed-targets-progress-bar" aria-hidden="true"><span /></div>
+                </div>
+              ) : null}
                 {!isSearchTargetsPage ? (
                   <div className="indexed-targets-search-group indexed-targets-hide-group">
                     <textarea
@@ -2911,6 +2967,23 @@ function App() {
               <label className="form-help" htmlFor="web-exclude-keywords">
                 Web除外キーワード
               </label>
+              <label className="form-help" htmlFor="web-fetch-mode">
+                Webページ取得方式
+              </label>
+              <select
+                id="web-fetch-mode"
+                className="settings-select"
+                value={webFetchMode}
+                disabled={isSavingWebFetchMode}
+                onChange={(event) => void handleChangeWebFetchMode(event.target.value as "http" | "edge" | "chrome")}
+              >
+                <option value="http">通常HTTP（高速・認証なし）</option>
+                <option value="edge">Microsoft Edge（会社環境向け）</option>
+                <option value="chrome">Google Chrome</option>
+              </select>
+              <div className="form-help">
+                Edge/Chromeはインストール済みの正式版ブラウザを画面ありで起動し、専用プロファイルへ認証状態を保持します。拡張機能やブラウザ本体の追加ダウンロードは不要です。
+              </div>
               <textarea
                 id="web-exclude-keywords"
                 className="settings-textarea"
