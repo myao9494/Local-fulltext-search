@@ -19,7 +19,15 @@ public partial class MainWindow : Window
     private bool _memoActive;
     private bool _hasActivated;
     internal bool AllowClose { get; set; }
-    internal LauncherWindowState CaptureState() => new(QueryBox.Text, MemoTitle.Text, MemoBody.Text, _memoActive, GanttCheck.IsChecked == true);
+    /// <summary>再表示時にも検索語と拡張子フィルタを維持するための画面状態を返す。</summary>
+    internal LauncherWindowState CaptureState() => new(
+        QueryBox.Text,
+        ExtensionBox.Text,
+        MemoTitle.Text,
+        MemoBody.Text,
+        _memoActive,
+        GanttCheck.IsChecked == true
+    );
 
     internal MainWindow(Action hide, LauncherWindowState state, string hotkeyDisplayName)
     {
@@ -30,6 +38,7 @@ public partial class MainWindow : Window
         Deactivated += (_, _) => { if (_hasActivated) _hide(); };
         Closing += (_, e) => { if (!AllowClose) { e.Cancel = true; _hide(); } };
         QueryBox.Text = state.Query;
+        ExtensionBox.Text = state.ExtensionFilter;
         MemoTitle.Text = state.MemoTitle;
         MemoBody.Text = state.MemoBody;
         GanttCheck.IsChecked = state.IncludeGantt;
@@ -74,7 +83,6 @@ public partial class MainWindow : Window
             Results.ItemsSource = response.Items;
             Results.SelectedIndex = response.Items.Count > 0 ? 0 : -1;
             Status.Text = $"{response.Total} 件　Enterで開く　Tabでganttメモ";
-            QueryBox.Focus();
         }
         catch (OperationCanceledException) { }
         catch (Exception error) { Status.Text = $"検索に失敗しました: {error.Message}"; }

@@ -95,6 +95,7 @@
 ### Windows WPF ランチャー
 - **フォルダ**: `launcher/windows/`。Windows x64 / .NET 8 WPFで、外部NuGet依存なし。
 - **配布**: self-containedフォルダ版を第一候補とし、self-contained single-file版も発行する。会社PC側のSDK・ランタイム・インストーラーは不要。
+- **Git配布**: 会社PCでビルドしないため、`launcher/windows/publish/folder` と `launcher/windows/publish/single-file` の発行成果物（EXE、.NETランタイム、同梱アセット）は C# ソース変更と同じコミットでGitへ追加・pushする。`bin/`・`obj/`、Python仮想環境、依存キャッシュは追跡しない。
 - **ホットキー**: Windows標準APIによる `Shift` の2回押下（400ms以内、間に他キーを挟まない）で表示・非表示を切り替える。入力は遮断せず、`RegisterHotKey` は使用しない。
 - **仮想デスクトップ**: 非表示時に検索ウィンドウを破棄し、次回表示時にHWNDを再生成して、呼び出した仮想デスクトップへ表示する。
 - **フォールバック**: 発行済みEXEがない場合だけ既存Python/Flet版を起動する。

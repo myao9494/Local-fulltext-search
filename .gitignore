@@ -13,4 +13,3 @@ __pycache__/
 launcher/.offline_cache/
 launcher/windows/**/bin/
 launcher/windows/**/obj/
-launcher/windows/publish/

@@ -1,4 +1,5 @@
 using System.Net;
+using System.IO;
 using System.Text.RegularExpressions;
 
 namespace LocalSearchLauncher;
@@ -46,6 +47,7 @@ internal sealed record GanttTaskRequest(
 
 internal sealed record LauncherWindowState(
     string Query = "",
+    string ExtensionFilter = "",
     string MemoTitle = "",
     string MemoBody = "",
     bool MemoActive = false,

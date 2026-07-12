@@ -17,8 +17,11 @@ var gantt = new SearchItem(-9, "file", "gantt", "", "task", "gantt://tasks/9", "
 Assert(gantt.IsGantt && !gantt.IsLocal && gantt.HasGanttLink, "gantt結果を判定する");
 Assert(gantt.PlainSnippet == "<b>memo</b>", "HTMLエンティティを復元する");
 
-var state = new LauncherWindowState("query", "title", "body", true, true);
-Assert(state.MemoActive && state.IncludeGantt && state.MemoTitle == "title", "ウィンドウ再生成用の入力状態を保持する");
+var state = new LauncherWindowState("query", ".md .py", "title", "body", true, true);
+Assert(
+    state.MemoActive && state.IncludeGantt && state.MemoTitle == "title" && state.ExtensionFilter == ".md .py",
+    "ウィンドウ再生成用に拡張子フィルタを含む入力状態を保持する"
+);
 
 Environment.SetEnvironmentVariable("LAUNCHER_WEB_BASE_URL", "http://127.0.0.1:8123/");
 Assert(LauncherUrls.OpenHubBase() == "http://127.0.0.1:8123", "結果openは設定済みの外部Openハブを使う");

@@ -21,18 +21,10 @@ public partial class App : Application
 
         try
         {
-            try
-            {
-                using var api = new LauncherApiClient();
-                _hotkeyMode = api.GetLauncherHotkeyAsync().GetAwaiter().GetResult();
-            }
-            catch
-            {
-                // API 起動直後でも従来の Windows + Alt でランチャーを使えるようにする。
-                _hotkeyMode = "command_option";
-            }
-            if (_hotkeyMode == "double_shift") { _doubleShift = new DoubleShiftHook(ToggleWindow); _doubleShift.Start(); }
-            else { _modifierChord = new ModifierChordHook(ToggleWindow); _modifierChord.Start(); }
+            // start_windows.bat の自動起動時はAPIが待受を始める前なので、
+            // 先に従来どおりShift 2回を有効にしてから保存済み設定を非同期で反映する。
+            ApplyHotkeyMode("double_shift");
+            _ = RestoreHotkeyModeAsync();
         }
         catch (Exception error)
         {
@@ -42,17 +34,66 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// 非表示後のウィンドウは破棄し、次回ホットキー時の仮想デスクトップ上でHWNDを作り直す。
+    /// キーボードフックを止めないようUIスレッドへ非同期で渡し、
+    /// 非表示後のウィンドウは破棄して次回ホットキー時の仮想デスクトップ上でHWNDを作り直す。
     /// </summary>
     private void ToggleWindow()
     {
-        Dispatcher.Invoke(() =>
+        if (!Dispatcher.CheckAccess())
         {
-            if (_window is { IsVisible: true }) { HideAndDisposeWindow(); return; }
-            HideAndDisposeWindow();
-            _window = new MainWindow(HideAndDisposeWindow, _windowState, _hotkeyMode == "double_shift" ? "Shift × 2" : "Windows + Alt");
-            _window.ShowAndActivate();
-        });
+            Dispatcher.BeginInvoke(ToggleWindow);
+            return;
+        }
+
+        if (_window is { IsVisible: true }) { HideAndDisposeWindow(); return; }
+        HideAndDisposeWindow();
+        _window = new MainWindow(HideAndDisposeWindow, _windowState, _hotkeyMode == "double_shift" ? "Shift × 2" : "Windows + Alt");
+        _window.ShowAndActivate();
+    }
+
+    /// <summary>APIの起動完了後に保存済みのホットキー方式を反映する。</summary>
+    private async Task RestoreHotkeyModeAsync()
+    {
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                using var api = new LauncherApiClient();
+                var mode = await api.GetLauncherHotkeyAsync();
+                await Dispatcher.InvokeAsync(() => ApplyHotkeyMode(mode));
+                return;
+            }
+            catch when (attempt < 4)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(300));
+            }
+            catch
+            {
+                // API未起動時も、起動直後に設定したShift 2回で操作を継続できる。
+            }
+        }
+    }
+
+    /// <summary>現在のフックを切り替え、設定されたホットキー方式だけを監視する。</summary>
+    private void ApplyHotkeyMode(string mode)
+    {
+        var normalized = mode == "command_option" ? "command_option" : "double_shift";
+        if (_hotkeyMode == normalized && (_doubleShift is not null || _modifierChord is not null)) return;
+        _doubleShift?.Dispose();
+        _modifierChord?.Dispose();
+        _doubleShift = null;
+        _modifierChord = null;
+        _hotkeyMode = normalized;
+        if (_hotkeyMode == "double_shift")
+        {
+            _doubleShift = new DoubleShiftHook(ToggleWindow);
+            _doubleShift.Start();
+        }
+        else
+        {
+            _modifierChord = new ModifierChordHook(ToggleWindow);
+            _modifierChord.Start();
+        }
     }
 
     private void HideAndDisposeWindow()
