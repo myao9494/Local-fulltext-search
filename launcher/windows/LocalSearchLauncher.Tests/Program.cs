@@ -17,6 +17,16 @@ var gantt = new SearchItem(-9, "file", "gantt", "", "task", "gantt://tasks/9", "
 Assert(gantt.IsGantt && !gantt.IsLocal && gantt.HasGanttLink, "gantt結果を判定する");
 Assert(gantt.PlainSnippet == "<b>memo</b>", "HTMLエンティティを復元する");
 
+var web = new SearchItem(10, "file", "web", "", "Web page", "https://example.test/page", ".html", "snippet", null);
+Assert(web.IsWeb && !web.IsLocal && !web.IsGantt, "web結果をローカルファイルと区別する");
+
+var (indexedEndpoint, indexedPayload) = LauncherSearchRequestBuilder.Build("alpha", 8, false, ".md");
+Assert(indexedEndpoint == "api/search/indexed", "通常検索は既存DB専用APIを使う");
+Assert(indexedPayload is IndexedLauncherSearchRequest { SourceType: "local_web" }, "通常検索はlocalとwebを横断する");
+var (ganttEndpoint, ganttPayload) = LauncherSearchRequestBuilder.Build("alpha", 8, true, "");
+Assert(ganttEndpoint == "api/search", "gantt追加検索は統合APIを使う");
+Assert(ganttPayload is LauncherSearchRequest { SourceType: "local_web", SkipRefresh: true }, "gantt追加時もlocal/web横断かつDB更新なしにする");
+
 var state = new LauncherWindowState("query", ".md .py", "title", "body", true, true);
 Assert(
     state.MemoActive && state.IncludeGantt && state.MemoTitle == "title" && state.ExtensionFilter == ".md .py",

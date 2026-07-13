@@ -1956,6 +1956,46 @@ def test_search_existing_index_accepts_empty_folder_path_for_launcher_global_sea
     assert ensure_calls == []
 
 
+def test_search_existing_index_can_search_local_and_web_without_refresh(tmp_path: Path) -> None:
+    """
+    WPF ランチャーは既存 DB の local / web を一度に検索し、インデックス更新を行わない。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    ensure_calls: list[dict[str, object]] = []
+    service.index_service.ensure_fresh_target = lambda **kwargs: ensure_calls.append(kwargs)
+
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="local.md",
+        full_path=str(tmp_path / "local.md"),
+        created_at=datetime(2026, 4, 10, tzinfo=UTC),
+        mtime=datetime(2026, 4, 10, tzinfo=UTC),
+        body="alpha shared result",
+        click_count=0,
+    )
+    _insert_indexed_markdown(
+        connection=connection,
+        file_name="Web page",
+        full_path="https://example.test/docs/page",
+        created_at=datetime(2026, 4, 11, tzinfo=UTC),
+        mtime=datetime(2026, 4, 11, tzinfo=UTC),
+        body="alpha shared result",
+        click_count=0,
+        source_type="web",
+    )
+
+    from app.models.search import IndexedSearchRequest
+
+    result = service.search_existing_index(
+        IndexedSearchRequest(q="alpha", folder_path="", source_type="local_web")
+    )
+
+    assert result.total == 2
+    assert {item.source_type for item in result.items} == {"local", "web"}
+    assert ensure_calls == []
+
+
 def test_search_without_full_path_limits_scope_to_enabled_search_targets(tmp_path: Path) -> None:
     """
     検索フォルダ未指定時は、全 DB ではなく有効な検索対象フォルダ配下だけを検索する。

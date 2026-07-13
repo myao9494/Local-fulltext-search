@@ -199,3 +199,12 @@ def test_indexed_search_request_accepts_empty_folder_path_for_global_index_searc
     )
 
     assert params.folder_path == ""
+
+
+def test_indexed_search_request_accepts_local_and_web_source() -> None:
+    """
+    既存DB専用検索はWPFランチャー向けにlocalとwebの同時対象を受け付ける。
+    """
+    params = IndexedSearchRequest(q="alpha", folder_path="", source_type="local_web")
+
+    assert params.source_type == "local_web"

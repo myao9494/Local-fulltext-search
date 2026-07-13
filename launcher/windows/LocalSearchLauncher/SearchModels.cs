@@ -14,7 +14,8 @@ internal sealed record SearchItem(
     /// <summary>HTML断片をランチャー表示用のプレーンテキストへ変換する。</summary>
     public string PlainSnippet => WebUtility.HtmlDecode(Regex.Replace(Snippet ?? "", "<[^>]+>", ""));
     public bool IsGantt => SourceType == "gantt";
-    public bool IsLocal => !IsGantt;
+    public bool IsLocal => SourceType == "local";
+    public bool IsWeb => SourceType == "web";
     public bool HasGanttLink => !string.IsNullOrWhiteSpace(GanttLink);
     public string IconPath => $"Assets/catppuccin/{CatppuccinIconName()}.png";
 
@@ -52,6 +53,43 @@ internal sealed record LauncherWindowState(
     string MemoBody = "",
     bool MemoActive = false,
     bool IncludeGantt = false);
+
+/// <summary>既存DBだけをlocal / web横断で検索するリクエスト。</summary>
+internal sealed record IndexedLauncherSearchRequest(
+    string Q,
+    string FolderPath,
+    int Limit,
+    int Offset,
+    string Types,
+    string SourceType = "local_web");
+
+/// <summary>gantt追加時もDB更新を行わずlocal / webを横断するリクエスト。</summary>
+internal sealed record LauncherSearchRequest(
+    string Q,
+    string FullPath,
+    bool SearchAllEnabled,
+    bool SkipRefresh,
+    string SourceType,
+    int RefreshWindowMinutes,
+    string SearchTarget,
+    string SortBy,
+    string SortOrder,
+    int Limit,
+    int Offset,
+    bool IncludeSnippets,
+    bool IncludeGanttTasks,
+    string Types);
+
+/// <summary>WPF検索のエンドポイントとペイロードを一貫して組み立てる。</summary>
+internal static class LauncherSearchRequestBuilder
+{
+    public static (string Endpoint, object Payload) Build(string query, int limit, bool includeGanttTasks, string types) =>
+        includeGanttTasks
+            ? ("api/search", new LauncherSearchRequest(
+                query, "", true, true, "local_web", 0, "all", "default", "desc",
+                limit, 0, true, true, types))
+            : ("api/search/indexed", new IndexedLauncherSearchRequest(query, "", limit, 0, types));
+}
 
 /// <summary>Open/UIハブの設定値を全WPF画面で一貫して組み立てる。</summary>
 internal static class LauncherUrls

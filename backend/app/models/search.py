@@ -67,7 +67,7 @@ class SearchQueryParams(BaseModel):
     full_path: str = ""
     search_all_enabled: bool = False
     skip_refresh: bool = False
-    source_type: Literal["local", "web", "gantt"] = "local"
+    source_type: Literal["local", "web", "gantt", "local_web"] = "local"
     index_depth: Optional[int] = Field(default=None, ge=0, le=99999)
     refresh_window_minutes: int = Field(default=60, ge=0, le=1440)
     regex_enabled: bool = False
@@ -122,6 +122,7 @@ class IndexedSearchRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=1000)
     offset: int = Field(default=0, ge=0)
     types: str | None = None
+    source_type: Literal["local", "web", "local_web"] = "local"
 
     @field_validator("folder_path")
     @classmethod

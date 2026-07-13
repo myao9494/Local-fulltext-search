@@ -138,7 +138,7 @@ Windowsでは `launcher/windows/` のWPF版を優先する。ホットキーはS
 配布物はself-containedフォルダ版を標準、single-file版を携帯版とする。発行方法は
 `launcher/windows/README.md` を参照する。
 
-WPF版はmacOSネイティブ版の操作仕様に合わせ、拡張子フィルタ、gantt検索、名前・メモ・送信・キャンセル、共有parent取得、結果のパスコピー・保存場所・フォルダ・ganttリンク、GUIボタン、上下キー循環選択を提供する。`Tab` / `Shift + Tab` は「検索欄 → 拡張子欄 → タスク名 → メモ → 送信 → 検索欄」を循環し、送信から検索欄へ移る際は検索画面を表示する。`.py`、`.bat`、`.exe`、`.lnk` は8001を経由せず、親フォルダを current directory として直接起動する。Windowsの性能仕様に従い、gantt未選択時は `/api/search/indexed`、gantt選択時は `/api/search` を使用する。
+WPF版はmacOSネイティブ版の操作仕様に合わせ、拡張子フィルタ、gantt検索、名前・メモ・送信・キャンセル、共有parent取得、結果のパスコピー・保存場所・フォルダ・ganttリンク、GUIボタン、上下キー循環選択を提供する。上下矢印で選択した直後の `Return` / `Enter` で選択結果を開く。`Tab` / `Shift + Tab` は「検索欄 → 拡張子欄 → タスク名 → メモ → 送信 → 検索欄」を循環し、送信から検索欄へ移る際は検索画面を表示する。`.py`、`.bat`、`.exe`、`.lnk` は8001を経由せず、親フォルダを current directory として直接起動する。検索結果は横スクロールを使わず、長いパス・抜粋・操作ボタンを折り返す。Windowsの性能仕様に従い、通常時は `/api/search/indexed`、gantt選択時は `skip_refresh=true` の `/api/search` を使用し、いずれも既存DB内の `local` と `web` を横断してインデックス更新なしで検索する。
 
 検索UIのHWNDは表示する仮想デスクトップに合わせて再生成するが、検索文字列はアプリプロセス側に退避して復元し、再表示時に全選択する。WPF初期版の背景は半透明パネルであり、Windows DWM/Acrylicによる背景ブラーは未実装とする。
 

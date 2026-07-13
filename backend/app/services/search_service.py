@@ -503,6 +503,7 @@ class SearchService:
             limit=params.limit,
             offset=params.offset,
             types=params.types,
+            source_type=params.source_type,
         )
         return self._execute_search(
             params=search_params,
@@ -1695,7 +1696,10 @@ class SearchService:
         """
         filters: list[str] = []
         normalized_source_type = "web" if source_type == "web" else "local"
-        filters.append(f"files.source_type = '{normalized_source_type}'")
+        if source_type == "local_web":
+            filters.append("files.source_type IN ('local', 'web')")
+        else:
+            filters.append(f"files.source_type = '{normalized_source_type}'")
         values: list[object] = []
         date_column = "files.created_at" if date_field == "created" else "files.mtime"
 

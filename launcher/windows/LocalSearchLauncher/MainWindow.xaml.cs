@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private int _ganttParent = ReadNonNegativeInt("LAUNCHER_GANTT_PARENT", 0);
     private bool _memoActive;
     private bool _hasActivated;
+    private bool _arrowNavigated;
     internal bool AllowClose { get; set; }
     /// <summary>再表示時にも検索語と拡張子フィルタを維持するための画面状態を返す。</summary>
     internal LauncherWindowState CaptureState() => new(
@@ -66,7 +67,7 @@ public partial class MainWindow : Window
     }
 
     private void QueryBox_TextChanged(object sender, TextChangedEventArgs e)
-    { _debounce.Stop(); _debounce.Start(); }
+    { _arrowNavigated = false; _debounce.Stop(); _debounce.Start(); }
 
     private async Task SearchAsync()
     {
@@ -107,7 +108,7 @@ public partial class MainWindow : Window
         }
         if (!_memoActive && e.Key is Key.Down or Key.Up)
         { e.Handled = true; MoveSelection(e.Key == Key.Down ? 1 : -1); return; }
-        if (!_memoActive && e.Key == Key.Enter && (QueryBox.IsKeyboardFocusWithin || Results.IsKeyboardFocusWithin))
+        if (!_memoActive && e.Key == Key.Return && _arrowNavigated)
         { e.Handled = true; _ = OpenSelectedAsync(); }
     }
 
@@ -117,6 +118,7 @@ public partial class MainWindow : Window
         var current = Results.SelectedIndex < 0 ? 0 : Results.SelectedIndex;
         Results.SelectedIndex = (current + delta + Results.Items.Count) % Results.Items.Count;
         Results.ScrollIntoView(Results.SelectedItem);
+        _arrowNavigated = true;
     }
 
     private async Task OpenSelectedAsync()
@@ -225,7 +227,9 @@ public partial class MainWindow : Window
     }
     private void MemoCancel_Click(object sender, RoutedEventArgs e) => SwitchView(false);
 
-    private string PrimaryUrl(SearchItem item) => item.ResultKind == "folder" ? $"{WebBase()}/?path={Uri.EscapeDataString(item.FullPath)}" : $"{WebBase()}/api/fullpath?path={Uri.EscapeDataString(item.FullPath)}";
+    private string PrimaryUrl(SearchItem item) => item.IsWeb
+        ? item.FullPath
+        : item.ResultKind == "folder" ? $"{WebBase()}/?path={Uri.EscapeDataString(item.FullPath)}" : $"{WebBase()}/api/fullpath?path={Uri.EscapeDataString(item.FullPath)}";
     private string FolderUrl(SearchItem item) => $"{WebBase()}/?path={Uri.EscapeDataString(item.ResultKind == "folder" ? item.FullPath : ParentPath(item.FullPath))}";
     private static string ParentPath(string path) => Path.GetDirectoryName(path) ?? path;
     private static string WebBase() => LauncherUrls.OpenHubBase();

@@ -23,10 +23,7 @@ internal sealed class LauncherApiClient : IDisposable
 
     public async Task<SearchResponse> SearchAsync(string query, int limit, bool includeGanttTasks, string types, CancellationToken token)
     {
-        var endpoint = includeGanttTasks ? "api/search" : "api/search/indexed";
-        object payload = includeGanttTasks
-            ? new { q = query, full_path = "", search_all_enabled = true, skip_refresh = true, source_type = "local", refresh_window_minutes = 0, search_target = "all", sort_by = "default", sort_order = "desc", limit, offset = 0, include_snippets = true, include_gantt_tasks = true, types }
-            : new { q = query, folder_path = "", limit, offset = 0, types };
+        var (endpoint, payload) = LauncherSearchRequestBuilder.Build(query, limit, includeGanttTasks, types);
         using var response = await _http.PostAsJsonAsync(endpoint, payload, _json, token);
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<SearchResponse>(_json, token) ?? new SearchResponse(0, [], false);
