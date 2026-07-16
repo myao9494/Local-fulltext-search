@@ -91,6 +91,13 @@ internal static class LauncherSearchRequestBuilder
             : ("api/search/indexed", new IndexedLauncherSearchRequest(query, "", limit, 0, types));
 }
 
+/// <summary>検索画面でReturnによる結果起動が可能かを判定する。</summary>
+internal static class LauncherResultSelection
+{
+    public static bool CanOpenWithReturn(bool hasSelectedResult, bool memoActive) =>
+        hasSelectedResult && !memoActive;
+}
+
 /// <summary>Open/UIハブの設定値を全WPF画面で一貫して組み立てる。</summary>
 internal static class LauncherUrls
 {

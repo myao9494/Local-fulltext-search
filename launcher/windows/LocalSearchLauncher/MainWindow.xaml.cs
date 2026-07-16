@@ -18,7 +18,6 @@ public partial class MainWindow : Window
     private int _ganttParent = ReadNonNegativeInt("LAUNCHER_GANTT_PARENT", 0);
     private bool _memoActive;
     private bool _hasActivated;
-    private bool _arrowNavigated;
     internal bool AllowClose { get; set; }
     /// <summary>再表示時にも検索語と拡張子フィルタを維持するための画面状態を返す。</summary>
     internal LauncherWindowState CaptureState() => new(
@@ -58,16 +57,23 @@ public partial class MainWindow : Window
         SetForegroundWindow(handle);
         Activate();
         FocusActiveView();
+        // WPFが描画・前面化を完了した後にも再指定し、直後の文字入力を検索欄で受け取る。
+        Dispatcher.BeginInvoke(new Action(FocusActiveView), DispatcherPriority.ApplicationIdle);
     }
 
     private void FocusActiveView()
     {
-        if (_memoActive) { MemoTitle.Focus(); MemoTitle.SelectAll(); }
-        else { QueryBox.Focus(); QueryBox.SelectAll(); }
+        if (_memoActive) { Keyboard.Focus(MemoTitle); MemoTitle.SelectAll(); }
+        else { Keyboard.Focus(QueryBox); QueryBox.SelectAll(); }
     }
 
     private void QueryBox_TextChanged(object sender, TextChangedEventArgs e)
-    { _arrowNavigated = false; _debounce.Stop(); _debounce.Start(); }
+    {
+        // 前回の検索結果を新しい検索語で誤って開かないよう選択を解除する。
+        Results.SelectedIndex = -1;
+        _debounce.Stop();
+        _debounce.Start();
+    }
 
     private async Task SearchAsync()
     {
@@ -108,7 +114,7 @@ public partial class MainWindow : Window
         }
         if (!_memoActive && e.Key is Key.Down or Key.Up)
         { e.Handled = true; MoveSelection(e.Key == Key.Down ? 1 : -1); return; }
-        if (!_memoActive && e.Key == Key.Return && _arrowNavigated)
+        if (e.Key == Key.Return && LauncherResultSelection.CanOpenWithReturn(Results.SelectedItem is not null, _memoActive))
         { e.Handled = true; _ = OpenSelectedAsync(); }
     }
 
@@ -118,7 +124,6 @@ public partial class MainWindow : Window
         var current = Results.SelectedIndex < 0 ? 0 : Results.SelectedIndex;
         Results.SelectedIndex = (current + delta + Results.Items.Count) % Results.Items.Count;
         Results.ScrollIntoView(Results.SelectedItem);
-        _arrowNavigated = true;
     }
 
     private async Task OpenSelectedAsync()

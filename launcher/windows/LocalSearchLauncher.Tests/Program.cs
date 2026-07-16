@@ -27,6 +27,10 @@ var (ganttEndpoint, ganttPayload) = LauncherSearchRequestBuilder.Build("alpha", 
 Assert(ganttEndpoint == "api/search", "gantt追加検索は統合APIを使う");
 Assert(ganttPayload is LauncherSearchRequest { SourceType: "local_web", SkipRefresh: true }, "gantt追加時もlocal/web横断かつDB更新なしにする");
 
+Assert(LauncherResultSelection.CanOpenWithReturn(hasSelectedResult: true, memoActive: false), "検索画面で先頭結果が選択されていればReturnだけで開く");
+Assert(!LauncherResultSelection.CanOpenWithReturn(hasSelectedResult: false, memoActive: false), "検索結果がないときReturnでは開かない");
+Assert(!LauncherResultSelection.CanOpenWithReturn(hasSelectedResult: true, memoActive: true), "ganttメモ画面のReturnでは検索結果を開かない");
+
 var state = new LauncherWindowState("query", ".md .py", "title", "body", true, true);
 Assert(
     state.MemoActive && state.IncludeGantt && state.MemoTitle == "title" && state.ExtensionFilter == ".md .py",
