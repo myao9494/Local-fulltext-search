@@ -81,7 +81,7 @@ class LauncherApiClient:
                 "full_path": "",
                 "search_all_enabled": False,  # 登録済みフォルダを順次更新して検索するトリガー
                 "skip_refresh": False,        # 更新を許可
-                "refresh_window_minutes": 60,
+                "refresh_window_minutes": 0,
                 "search_target": "all",
                 "sort_by": "default",
                 "sort_order": "desc",

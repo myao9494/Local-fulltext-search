@@ -66,6 +66,15 @@ def test_search_query_params_accepts_empty_full_path_for_global_search() -> None
     assert params.full_path == ""
 
 
+def test_search_query_params_defaults_refresh_window_to_zero_minutes() -> None:
+    """
+    更新間隔を省略した検索は、検索ごとに差分更新する既定の 0 分を使う。
+    """
+    params = SearchQueryParams(q="alpha")
+
+    assert params.refresh_window_minutes == 0
+
+
 def test_search_query_params_accepts_search_all_flag_with_absolute_full_path() -> None:
     """
     全 DB 検索フラグ有効時は、復帰用の full_path を保持しても受け付ける。

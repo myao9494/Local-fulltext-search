@@ -81,7 +81,7 @@ def test_search_posts_mac_defaults(monkeypatch) -> None:
         "full_path": "",
         "search_all_enabled": False,
         "skip_refresh": False,
-        "refresh_window_minutes": 60,
+        "refresh_window_minutes": 0,
         "search_target": "all",
         "sort_by": "default",
         "sort_order": "desc",

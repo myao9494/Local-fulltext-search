@@ -28,7 +28,7 @@ def search(
     skip_refresh: bool = Query(default=False),
     source_type: str = Query(default="local"),
     index_depth: int | None = Query(default=None, ge=0, le=99999),
-    refresh_window_minutes: int = Query(default=60, ge=0, le=1440),
+    refresh_window_minutes: int = Query(default=0, ge=0, le=1440),
     regex_enabled: bool = Query(default=False),
     search_target: str = Query(default="all"),
     index_types: str | None = None,

@@ -2100,6 +2100,40 @@ def test_search_without_full_path_reindexes_enabled_search_targets(tmp_path: Pat
     assert sorted(item.file_name for item in result.items) == ["after.md", "before.md"]
 
 
+def test_local_search_without_path_removes_renamed_file_when_refresh_window_is_zero(tmp_path: Path) -> None:
+    """
+    更新間隔 0 分のローカル検索は、差分を反映し、リネーム前のパスを返さない。
+    """
+    connection = _create_connection(tmp_path)
+    service = SearchService(connection=connection)
+    target = tmp_path / "docs"
+    target.mkdir()
+    old_file = target / "before-rename.md"
+    old_file.write_text("alpha", encoding="utf-8")
+
+    service.index_service.ensure_fresh_target(
+        full_path=str(target),
+        refresh_window_minutes=60,
+        index_depth=5,
+    )
+    service.index_service.set_search_target_enabled(folder_path=str(target), is_enabled=True)
+    old_file.rename(target / "after-rename.md")
+
+    result = service.search(
+        SearchQueryParams(
+            q="alpha",
+            full_path="",
+            search_all_enabled=False,
+            index_depth=5,
+            # 0 分は検索のたびに差分インデックスを実行する。
+            refresh_window_minutes=0,
+        )
+    )
+
+    assert result.total == 1
+    assert [item.file_name for item in result.items] == ["after-rename.md"]
+
+
 def test_search_without_full_path_reindexes_registered_targets_when_all_targets_are_off(tmp_path: Path) -> None:
     """
     フォルダ未指定かつ全検索対象が OFF のときは、登録済み検索対象を再インデックスしてから検索する。

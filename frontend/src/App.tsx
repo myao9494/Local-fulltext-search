@@ -357,7 +357,7 @@ function App() {
     const saved = Number(localStorage.getItem("ui_zoom") ?? "100");
     return Number.isFinite(saved) ? Math.min(125, Math.max(75, saved)) : 100;
   });
-  const [refreshWindowMinutes, setRefreshWindowMinutes] = useState(() => localStorage.getItem("refresh_window_minutes") ?? "60");
+  const [refreshWindowMinutes, setRefreshWindowMinutes] = useState(() => localStorage.getItem("refresh_window_minutes") ?? "0");
   const [savedExcludeKeywords, setSavedExcludeKeywords] = useState(DEFAULT_EXCLUDE_KEYWORDS);
   const [excludeKeywordsDraft, setExcludeKeywordsDraft] = useState(DEFAULT_EXCLUDE_KEYWORDS);
   const [savedWebExcludeKeywords, setSavedWebExcludeKeywords] = useState("");
@@ -2844,7 +2844,7 @@ function App() {
                 min={0}
               />
               <div className="form-help">
-                同じフルパスと階層数の組み合わせで、この分数以内に更新済みなら再走査しません。既定は 60 分です。
+                同じフルパスと階層数の組み合わせで、この分数以内に更新済みなら再走査しません。0 を指定すると検索のたびに差分を更新します。既定は 0 分です。
               </div>
 
               <div className="extension-panel">

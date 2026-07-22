@@ -69,7 +69,7 @@ class SearchQueryParams(BaseModel):
     skip_refresh: bool = False
     source_type: Literal["local", "web", "gantt", "local_web"] = "local"
     index_depth: Optional[int] = Field(default=None, ge=0, le=99999)
-    refresh_window_minutes: int = Field(default=60, ge=0, le=1440)
+    refresh_window_minutes: int = Field(default=0, ge=0, le=1440)
     regex_enabled: bool = False
     search_target: Literal["all", "body", "filename", "folder", "filename_and_folder"] = "all"
     index_types: str | None = None
